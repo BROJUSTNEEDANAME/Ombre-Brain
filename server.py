@@ -69,7 +69,7 @@ import_engine = ImportEngine(config, bucket_mgr, dehydrator, embedding_engine)  
 mcp = FastMCP(
     "Ombre Brain",
     host="0.0.0.0",
-    port=8000,
+    port=int(os.environ.get("PORT", 8000)),
 )
 
 
