@@ -98,6 +98,87 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
     return turns
 
 
+_ROLE_PREFIXES = ("human:", "user:", "你:", "我:", "assistant:", "claude:", "ai:", "gpt:", "bot:", "deepseek:")
+
+
+def _has_role_markers(text: str) -> bool:
+    """Detect if text contains conversation role markers."""
+    for line in text.split("\n"):
+        s = line.strip().lower()
+        if s.startswith(_ROLE_PREFIXES):
+            return True
+    return False
+
+
+def _split_summary_sections(text: str) -> list[dict]:
+    """
+    Split a pre-summarized markdown into one item per section.
+    Each item: {name, content}. Used when the file is already a memory list,
+    not a conversation transcript — bypass LLM extraction.
+    """
+    lines = text.split("\n")
+    items: list[dict] = []
+    current_name = ""
+    current_buf: list[str] = []
+
+    def flush():
+        body = "\n".join(current_buf).strip()
+        if body or current_name:
+            items.append({"name": current_name.strip()[:20], "content": body})
+
+    # Strategy 1: split by ## / ### headings
+    has_heading = any(l.lstrip().startswith(("## ", "### ", "# ")) for l in lines)
+    if has_heading:
+        for line in lines:
+            ls = line.lstrip()
+            if ls.startswith(("## ", "### ", "# ")):
+                if current_buf or current_name:
+                    flush()
+                current_name = ls.lstrip("# ").strip()
+                current_buf = []
+            else:
+                current_buf.append(line)
+        flush()
+    else:
+        # Strategy 2: split by --- separators
+        if "\n---" in text or "\n***" in text:
+            blocks = []
+            buf: list[str] = []
+            for line in lines:
+                if line.strip() in ("---", "***", "___"):
+                    if buf:
+                        blocks.append("\n".join(buf).strip())
+                        buf = []
+                else:
+                    buf.append(line)
+            if buf:
+                blocks.append("\n".join(buf).strip())
+            for blk in blocks:
+                if blk:
+                    first_line = blk.split("\n", 1)[0].strip("# *-").strip()
+                    items.append({"name": first_line[:20], "content": blk})
+        else:
+            # Strategy 3: split by top-level bullets (- / * / 1.)
+            buf = []
+            for line in lines:
+                ls = line.lstrip()
+                is_bullet_start = (
+                    line.startswith(("- ", "* "))
+                    or (ls and ls[0].isdigit() and ls[1:3] in (". ", ") "))
+                )
+                if is_bullet_start and buf:
+                    items.append({"name": "", "content": "\n".join(buf).strip()})
+                    buf = []
+                buf.append(line)
+            if buf:
+                tail = "\n".join(buf).strip()
+                if tail:
+                    items.append({"name": "", "content": tail})
+
+    # Filter empties and very short noise
+    return [it for it in items if len(it["content"]) >= 5]
+
+
 def _parse_markdown(text: str) -> list[dict]:
     """Parse Markdown/plain text → [{role, content, timestamp}, ...]"""
     # Try to detect conversation patterns
@@ -438,6 +519,29 @@ class ImportEngine:
                 else:
                     logger.warning("Source file changed, starting fresh import")
 
+            # --- Summary-direct mode: pre-summarized md with no role markers ---
+            # --- 摘要直导：已总结的 md，按段落直接落桶，跳过 LLM 提取 ---
+            ext = Path(filename).suffix.lower() if filename else ""
+            is_textlike = ext in (".md", ".txt", "") and not raw_content.strip().startswith(("{", "["))
+            if is_textlike and not _has_role_markers(raw_content):
+                sections = _split_summary_sections(raw_content)
+                if sections:
+                    self._chunks = [
+                        {
+                            "content": s["content"],
+                            "timestamp_start": "",
+                            "timestamp_end": "",
+                            "turn_count": 1,
+                            "summary_item": True,
+                            "summary_name": s["name"],
+                        }
+                        for s in sections
+                    ]
+                    self.state.reset(filename, source_hash, len(self._chunks))
+                    self.state.save()
+                    logger.info(f"Starting summary-direct import: {len(sections)} sections")
+                    return await self._process_chunks(preserve_raw)
+
             # Fresh import
             turns = detect_and_parse(raw_content, filename)
             if not turns:
@@ -497,6 +601,30 @@ class ImportEngine:
         """Extract memories from a single chunk and store them."""
         content = chunk["content"]
         if not content.strip():
+            return
+
+        # --- Summary-direct path: store section as-is, no LLM extraction ---
+        if chunk.get("summary_item"):
+            try:
+                bucket_id = await self.bucket_mgr.create(
+                    content=content,
+                    tags=[],
+                    importance=5,
+                    domain=["未分类"],
+                    valence=0.5,
+                    arousal=0.3,
+                    name=chunk.get("summary_name") or None,
+                )
+                if self.embedding_engine:
+                    try:
+                        await self.embedding_engine.generate_and_store(bucket_id, content)
+                    except Exception:
+                        pass
+                if preserve_raw:
+                    self.state.data["memories_raw"] += 1
+                self.state.data["memories_created"] += 1
+            except Exception as e:
+                logger.warning(f"Failed to store summary section '{chunk.get('summary_name', '?')}': {e}")
             return
 
         # --- LLM extraction ---
