@@ -603,26 +603,25 @@ class ImportEngine:
         if not content.strip():
             return
 
-        # --- Summary-direct path: store section as-is, no LLM extraction ---
+        # --- Summary-direct path: store section as memory, with merge dedup ---
         if chunk.get("summary_item"):
             try:
-                bucket_id = await self.bucket_mgr.create(
-                    content=content,
-                    tags=[],
-                    importance=5,
-                    domain=["未分类"],
-                    valence=0.5,
-                    arousal=0.3,
-                    name=chunk.get("summary_name") or None,
-                )
-                if self.embedding_engine:
-                    try:
-                        await self.embedding_engine.generate_and_store(bucket_id, content)
-                    except Exception:
-                        pass
-                if preserve_raw:
-                    self.state.data["memories_raw"] += 1
-                self.state.data["memories_created"] += 1
+                item = {
+                    "content": content,
+                    "name": chunk.get("summary_name") or "",
+                    "tags": [],
+                    "importance": 5,
+                    "domain": ["未分类"],
+                    "valence": 0.5,
+                    "arousal": 0.3,
+                }
+                is_merged = await self._merge_or_create_item(item)
+                if is_merged:
+                    self.state.data["memories_merged"] += 1
+                else:
+                    self.state.data["memories_created"] += 1
+                    if preserve_raw:
+                        self.state.data["memories_raw"] += 1
             except Exception as e:
                 logger.warning(f"Failed to store summary section '{chunk.get('summary_name', '?')}': {e}")
             return
