@@ -4,6 +4,10 @@
 
 A long-term emotional memory system for Claude. Tags memories using Russell's valence/arousal coordinates, stores them as Obsidian-compatible Markdown, connects via MCP, with forgetting curve and vector semantic search.
 
+> **🔗 项目主页 / Project home**
+> GitHub 主仓库 / Main GitHub repository：
+> **https://github.com/P0luz/Ombre-Brain**
+>
 > **⚠️ 备用链接 / Backup link**
 > Gitea 备用地址（GitHub 访问有问题时用）：
 > **https://git.p0lar1s.uk/P0lar1s/Ombre_Brain**
