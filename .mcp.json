@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ombre-brain": {
+      "command": ".venv/bin/python",
+      "args": ["server.py"],
+      "env": {
+        "OMBRE_TRANSPORT": "stdio",
+        "OMBRE_API_KEY": "${OMBRE_API_KEY:-}"
+      }
+    }
+  }
+}
