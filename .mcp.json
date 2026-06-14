@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "ombre-brain": {
-      "command": ".venv/bin/python",
-      "args": ["server.py"],
-      "env": {
-        "OMBRE_TRANSPORT": "stdio",
-        "OMBRE_API_KEY": "${OMBRE_API_KEY:-}"
-      }
+      "type": "http",
+      "url": "${OMBRE_MCP_URL:-https://ombre-brain-6e05.onrender.com/mcp}"
     }
   }
 }
