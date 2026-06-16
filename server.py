@@ -803,8 +803,8 @@ async def trace(
 # 工具 5：pulse — 脉搏，系统状态 + 记忆列表
 # =============================================================
 @mcp.tool()
-async def pulse(include_archive: bool = False, verbose: bool = False) -> str:
-    """系统状态+记忆桶列表。include_archive=True含归档。verbose=True在每个桶后附正文前50字预览+embedding覆盖情况(排查检索漏召),不用逐个read。"""
+async def pulse(include_archive: bool = False, verbose: bool = False, pinned_only: bool = False) -> str:
+    """系统状态+记忆桶列表。include_archive=True含归档。verbose=True在每个桶后附正文前50字预览+embedding覆盖情况(排查检索漏召),不用逐个read。pinned_only=True只列钉选桶(查重/核对核心准则时用,省得从一堆桶里翻)。"""
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -824,6 +824,13 @@ async def pulse(include_archive: bool = False, verbose: bool = False) -> str:
         buckets = await bucket_mgr.list_all(include_archive=include_archive)
     except Exception as e:
         return status + f"\n列出记忆桶失败: {e}"
+
+    # --- pinned_only: keep only pinned/protected buckets ---
+    # --- pinned_only：只保留钉选/保护桶 ---
+    if pinned_only:
+        buckets = [b for b in buckets if b["metadata"].get("pinned") or b["metadata"].get("protected")]
+        if not buckets:
+            return status + "\n没有钉选桶。"
 
     if not buckets:
         return status + "\n记忆库为空。"
@@ -887,7 +894,8 @@ async def pulse(include_archive: bool = False, verbose: bool = False) -> str:
             line += f"\n    内容: {preview}"
         lines.append(line)
 
-    return status + "\n" + coverage + "=== 记忆列表 ===\n" + "\n".join(lines)
+    list_header = "=== 钉选桶列表 ===" if pinned_only else "=== 记忆列表 ==="
+    return status + "\n" + coverage + list_header + "\n" + "\n".join(lines)
 
 
 # =============================================================
@@ -906,11 +914,24 @@ MAX_READ_BUCKETS = 10
 
 
 @mcp.tool()
-async def read(bucket_ids: str, max_tokens: int = 8000) -> str:
-    """按ID精确读取桶的完整内容。bucket_ids逗号分隔,一次最多10个。和breath互补:不知道ID用breath(浮现/检索),已知ID用read,常配合pulse(先pulse拿ID再read)。max_tokens控制返回上限,超出则截断。仅在查重/核实具体桶内容/用户要求时用,别遍历全库浪费token。"""
+async def read(bucket_ids: str = "", max_tokens: int = 8000, pinned: bool = False) -> str:
+    """按ID精确读取桶的完整内容。bucket_ids逗号分隔,一次最多10个。pinned=True直接读所有钉选桶(不用先拿ID;钉选多时按上限截断,可配合pulse(pinned_only=True)分批)。和breath互补:不知道ID用breath(浮现/检索),已知ID用read,常配合pulse。max_tokens控制返回上限,超出则截断。仅在查重/核实具体桶内容/用户要求时用,别遍历全库浪费token。"""
     # --- Parse & dedupe IDs, preserving order / 解析去重，保持顺序 ---
     ids = []
     seen = set()
+
+    # --- pinned=True: prepend all pinned/protected bucket ids ---
+    # --- pinned=True：先收集所有钉选桶的 ID ---
+    if pinned:
+        try:
+            all_buckets = await bucket_mgr.list_all(include_archive=False)
+            for b in all_buckets:
+                if (b["metadata"].get("pinned") or b["metadata"].get("protected")) and b["id"] not in seen:
+                    seen.add(b["id"])
+                    ids.append(b["id"])
+        except Exception as e:
+            logger.warning(f"read: failed to list pinned buckets / 列钉选桶失败: {e}")
+
     for raw in bucket_ids.split(","):
         bid = raw.strip()
         if bid and bid not in seen:
@@ -918,7 +939,9 @@ async def read(bucket_ids: str, max_tokens: int = 8000) -> str:
             ids.append(bid)
 
     if not ids:
-        return "请提供至少一个 bucket_id（多个用逗号分隔）。可先用 pulse 查看所有桶的 ID。"
+        if pinned:
+            return "没有钉选桶。"
+        return "请提供至少一个 bucket_id（多个用逗号分隔），或用 pinned=True 读所有钉选桶。可先用 pulse 查看所有桶的 ID。"
 
     # --- Cap bucket count / 限制单次读取数量 ---
     capped_note = ""

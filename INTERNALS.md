@@ -80,8 +80,8 @@
 | `hold` | content, tags, importance, pinned, feel, source_bucket, valence, arousal | 存储记忆 |
 | `grow` | content | 日记拆分归档 |
 | `trace` | bucket_id, name, domain, valence, arousal, importance, tags, resolved, pinned, digested, content, delete | 修改元数据/内容/删除；返回修改后完整内容 |
-| `pulse` | include_archive, verbose | 系统状态；verbose 附正文预览 + embedding 覆盖率 |
-| `read` | bucket_ids, max_tokens | 按 ID 精确读取桶完整内容（批量，上限 10） |
+| `pulse` | include_archive, verbose, pinned_only | 系统状态；verbose 附正文预览 + embedding 覆盖率；pinned_only 只列钉选桶 |
+| `read` | bucket_ids, max_tokens, pinned | 按 ID 精确读取桶完整内容（批量，上限 10）；pinned=True 读所有钉选桶 |
 | `dream` | （无） | 做梦自省 |
 
 **工具详细行为**

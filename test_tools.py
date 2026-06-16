@@ -118,6 +118,12 @@ async def main():
             # not-found path / 未找到分支
             r2 = await read(bucket_ids="does_not_exist_xyz")
             assert "未找到" in r2
+            # pinned=True path: must not error (may be empty) / 钉选直读分支
+            r3 = await read(pinned=True)
+            assert isinstance(r3, str) and r3
+            # pulse pinned_only must not error / pulse 只列钉选
+            r4 = await pulse(pinned_only=True)
+            assert "Ombre Brain" in r4
             print("  [OK]")
             passed += 1
         except Exception as e:

@@ -320,8 +320,8 @@ breath(query="今天很累")
 | `hold` | 存储单条记忆，自动打标+合并相似桶+生成 embedding。`feel=True` 写模型自己的感受 / Store a single memory with auto-tagging, merging, and embedding. `feel=True` for model's own reflections |
 | `grow` | 日记归档，自动拆分长内容为多个记忆桶，每个桶自动生成 embedding / Diary digest, auto-split into multiple buckets with embeddings |
 | `trace` | 修改元数据、标记已解决、删除；修改后返回当前完整内容 / Modify metadata, mark resolved, delete; returns updated content |
-| `pulse` | 系统状态 + 所有记忆桶列表；`verbose=True` 附正文预览 + embedding 覆盖率 / System status + bucket listing; `verbose=True` adds content previews + embedding coverage |
-| `read` | 按 bucket_id 精确读取一个/多个桶的完整内容（逗号分隔，一次最多 10 个，`max_tokens` 截断）。与 breath 互补：已知 ID 用 read，不知道 ID 用 breath / Read full bucket content(s) by ID — precise counterpart to breath's fuzzy search |
+| `pulse` | 系统状态 + 所有记忆桶列表；`verbose=True` 附正文预览 + embedding 覆盖率；`pinned_only=True` 只列钉选桶 / System status + bucket listing; `verbose=True` adds previews + embedding coverage; `pinned_only=True` lists pinned only |
+| `read` | 按 bucket_id 精确读取一个/多个桶的完整内容（逗号分隔，一次最多 10 个，`max_tokens` 截断）；`pinned=True` 直接读所有钉选桶。与 breath 互补：已知 ID 用 read，不知道 ID 用 breath / Read full bucket content(s) by ID, or all pinned via `pinned=True` — precise counterpart to breath's fuzzy search |
 | `dream` | 对话开头自省消化——读最近记忆，有沉淀写 feel，能放下就 resolve / Self-reflection at conversation start |
 
 ## 安装 / Setup
