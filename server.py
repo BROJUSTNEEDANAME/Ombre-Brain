@@ -1616,6 +1616,74 @@ async def api_import_review(request):
 
 
 # --- Entry point / 启动入口 ---
+async def auto_backfill_embeddings():
+    """
+    Background task: generate embeddings for buckets that don't have one yet.
+    后台任务：为还没有向量的桶补生成 embedding。
+
+    Idempotent — only fills missing vectors, so it's safe to run on every
+    startup. Off by default; enable with env OMBRE_AUTO_BACKFILL=1.
+    幂等——只补缺失的向量，每次启动跑都安全。默认关闭，OMBRE_AUTO_BACKFILL=1 开启。
+    """
+    if os.environ.get("OMBRE_AUTO_BACKFILL", "").lower() not in ("1", "true", "yes"):
+        return
+
+    # Use a fresh EmbeddingEngine so its async HTTP client binds to THIS loop
+    # (this coroutine runs in its own background thread/loop, not uvicorn's).
+    # 用独立的 EmbeddingEngine，让异步客户端绑定到本线程的事件循环。
+    from embedding_engine import EmbeddingEngine
+    engine = EmbeddingEngine(config)
+    if not engine.enabled:
+        logger.info("Auto-backfill skipped: embedding disabled / 自动补全跳过：embedding 未启用")
+        return
+
+    await asyncio.sleep(15)  # let the server finish starting before hammering the API
+
+    try:
+        have = engine.embedded_ids()
+        all_buckets = await bucket_mgr.list_all(include_archive=True)
+        missing = [b for b in all_buckets if b["id"] not in have]
+    except Exception as e:
+        logger.warning(f"Auto-backfill listing failed / 自动补全列桶失败: {e}")
+        return
+
+    if not missing:
+        logger.info("Auto-backfill: all buckets already embedded / 所有桶已有向量")
+        return
+
+    try:
+        delay = float(os.environ.get("OMBRE_BACKFILL_DELAY", "1.0"))
+    except ValueError:
+        delay = 1.0
+
+    logger.info(f"Auto-backfill starting: {len(missing)} buckets missing embeddings / 开始补全 {len(missing)} 个缺向量的桶")
+    ok = 0
+    consecutive_fail = 0
+    for b in missing:
+        try:
+            success = await engine.generate_and_store(b["id"], strip_wikilinks(b.get("content", "") or ""))
+        except Exception as e:
+            success = False
+            logger.warning(f"Auto-backfill embed failed for {b['id']} / 补全失败: {e}")
+        if success:
+            ok += 1
+            consecutive_fail = 0
+        else:
+            consecutive_fail += 1
+            if consecutive_fail >= 5:
+                # Circuit breaker: provider clearly isn't producing embeddings.
+                # 熔断：连续失败说明 embedding 提供方有问题，停下来别空转。
+                logger.warning(
+                    "Auto-backfill aborted after 5 consecutive failures — check "
+                    "OMBRE_EMBED_API_KEY / OMBRE_EMBED_BASE_URL / OMBRE_EMBED_MODEL "
+                    "/ 连续5次失败已中止，请检查 embedding 配置"
+                )
+                break
+        await asyncio.sleep(delay)
+
+    logger.info(f"Auto-backfill done: {ok}/{len(missing)} embedded / 补全完成：{ok}/{len(missing)}")
+
+
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
     logger.info(f"Ombre Brain starting | transport: {transport}")
@@ -1659,6 +1727,22 @@ if __name__ == "__main__":
             expose_headers=["*"],
         )
         logger.info("CORS middleware enabled for remote transport / 已启用 CORS 中间件")
+
+        # --- Optional auto-backfill of missing embeddings (background thread) ---
+        # Own thread + own event loop (like keepalive), so its embedding client
+        # binds to that loop. No-op unless OMBRE_AUTO_BACKFILL is set.
+        # --- 可选：后台线程补全缺失向量（自带事件循环，像 keepalive 那样）---
+        if os.environ.get("OMBRE_AUTO_BACKFILL", "").lower() in ("1", "true", "yes"):
+            def _start_backfill():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(auto_backfill_embeddings())
+                except Exception as e:
+                    logger.warning(f"Auto-backfill thread crashed / 自动补全线程异常: {e}")
+
+            threading.Thread(target=_start_backfill, daemon=True).start()
+
         uvicorn.run(_app, host="0.0.0.0", port=8000)
     else:
         mcp.run(transport=transport)

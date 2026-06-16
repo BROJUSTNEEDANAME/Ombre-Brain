@@ -167,8 +167,12 @@
 
 | 变量名 | 用途 | 必填 | 默认值 / 示例 |
 |---|---|---|---|
-| `OMBRE_API_KEY` | 脱水/打标/嵌入的 LLM API 密钥，覆盖 `config.yaml` 的 `dehydration.api_key` | 否（无则 API 功能降级到本地） | `""` |
-| `OMBRE_BASE_URL` | API base URL，覆盖 `config.yaml` 的 `dehydration.base_url` | 否 | `""` |
+| `OMBRE_API_KEY` | 脱水/打标的 LLM API 密钥，覆盖 `config.yaml` 的 `dehydration.api_key` | 否（无则 API 功能降级到本地） | `""` |
+| `OMBRE_BASE_URL` | 脱水 API base URL，覆盖 `dehydration.base_url` | 否 | `""` |
+| `OMBRE_EMBED_API_KEY` | **向量化独立 API 密钥**，覆盖 `embedding.api_key`；缺省回退到 `dehydration.api_key` | 否 | `""` |
+| `OMBRE_EMBED_BASE_URL` | 向量化独立 base URL，覆盖 `embedding.base_url`；缺省回退脱水 base_url。脱水 API（如 DeepSeek）无向量接口时用它指向 Gemini/SiliconFlow 等 | 否 | `""` |
+| `OMBRE_EMBED_MODEL` | 向量化模型名，覆盖 `embedding.model` | 否 | `"gemini-embedding-001"` |
+| `OMBRE_AUTO_BACKFILL` | 设为 `1`/`true`/`yes` 时，启动后台线程给缺向量的存量桶补生成 embedding（幂等，熔断保护，可调 `OMBRE_BACKFILL_DELAY` 秒） | 否 | 未设置（不补全） |
 | `OMBRE_TRANSPORT` | 传输模式：`stdio` / `sse` / `streamable-http` | 否 | `""` → 回退到 config 或 `"stdio"` |
 | `OMBRE_BUCKETS_DIR` | 记忆桶存储目录路径 | 否 | `""` → 回退到 config 或 `./buckets` |
 | `OMBRE_HOOK_URL` | SessionStart 钩子调用的服务器 URL | 否 | `"http://localhost:8000"` |
