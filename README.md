@@ -4,6 +4,10 @@
 
 A long-term emotional memory system for Claude. Tags memories using Russell's valence/arousal coordinates, stores them as Obsidian-compatible Markdown, connects via MCP, with forgetting curve and vector semantic search.
 
+> **🔗 项目主页 / Project home**
+> GitHub 主仓库 / Main GitHub repository：
+> **https://github.com/P0luz/Ombre-Brain**
+>
 > **⚠️ 备用链接 / Backup link**
 > Gitea 备用地址（GitHub 访问有问题时用）：
 > **https://git.p0lar1s.uk/P0lar1s/Ombre_Brain**
@@ -308,15 +312,16 @@ breath(query="今天很累")
     返回 ≤20 条结果
 ```
 
-6 个 MCP 工具 / 6 MCP tools:
+7 个 MCP 工具 / 7 MCP tools:
 
 | 工具 Tool | 作用 Purpose |
 |-----------|-------------|
 | `breath` | 浮现或检索记忆。无参数=推送未解决记忆；有参数=关键词+向量语义双通道检索。支持 domain/valence/arousal 过滤 / Surface or search memories. No args = surface unresolved; with query = keyword + vector dual-channel search. Supports domain/valence/arousal filters |
 | `hold` | 存储单条记忆，自动打标+合并相似桶+生成 embedding。`feel=True` 写模型自己的感受 / Store a single memory with auto-tagging, merging, and embedding. `feel=True` for model's own reflections |
 | `grow` | 日记归档，自动拆分长内容为多个记忆桶，每个桶自动生成 embedding / Diary digest, auto-split into multiple buckets with embeddings |
-| `trace` | 修改元数据、标记已解决、删除 / Modify metadata, mark resolved, delete |
-| `pulse` | 系统状态 + 所有记忆桶列表 / System status + bucket listing |
+| `trace` | 修改元数据、标记已解决、删除；修改后返回当前完整内容 / Modify metadata, mark resolved, delete; returns updated content |
+| `pulse` | 系统状态 + 所有记忆桶列表；`verbose=True` 附正文预览 + embedding 覆盖率；`pinned_only=True` 只列钉选桶 / System status + bucket listing; `verbose=True` adds previews + embedding coverage; `pinned_only=True` lists pinned only |
+| `read` | 按 bucket_id 精确读取一个/多个桶的完整内容（逗号分隔，一次最多 10 个，`max_tokens` 截断）；`pinned=True` 直接读所有钉选桶。与 breath 互补：已知 ID 用 read，不知道 ID 用 breath / Read full bucket content(s) by ID, or all pinned via `pinned=True` — precise counterpart to breath's fuzzy search |
 | `dream` | 对话开头自省消化——读最近记忆，有沉淀写 feel，能放下就 resolve / Self-reflection at conversation start |
 
 ## 安装 / Setup
@@ -541,7 +546,7 @@ Feel is not an event log — it's **what the model carries away**: a feeling, an
 | `migrate_to_domains.py` | 迁移平铺文件到域子目录 / Migrate flat files to domain subdirs |
 | `reclassify_domains.py` | 基于关键词重分类 / Reclassify by keywords |
 | `reclassify_api.py` | 用 API 重打标未分类桶 / Re-tag uncategorized buckets via API |
-| `test_tools.py` | MCP 工具集成测试（8 项） / MCP tool integration tests (8 tests) |
+| `test_tools.py` | MCP 工具集成测试（9 项） / MCP tool integration tests (9 tests) |
 | `test_smoke.py` | 冒烟测试 / Smoke test |
 
 ## 部署 / Deploy

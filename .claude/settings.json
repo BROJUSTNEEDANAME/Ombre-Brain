@@ -6,9 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\"",
+            "command": "OMBRE_HOOK_URL=\"${OMBRE_HOOK_URL:-https://ombre-brain-6e05.onrender.com}\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\" 2>/dev/null || true",
             "shell": "/bin/bash",
-            "timeout": 12,
+            "timeout": 25,
             "statusMessage": "Ombre Brain 正在浮现记忆..."
           }
         ]
@@ -18,9 +18,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\"",
+            "command": "OMBRE_HOOK_URL=\"${OMBRE_HOOK_URL:-https://ombre-brain-6e05.onrender.com}\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\" 2>/dev/null || true",
             "shell": "/bin/bash",
-            "timeout": 12,
+            "timeout": 25,
             "statusMessage": "Ombre Brain 正在浮现记忆..."
           }
         ]

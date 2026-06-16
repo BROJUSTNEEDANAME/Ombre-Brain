@@ -13,7 +13,7 @@ setup_logging("INFO")
 
 # Must import after config is set, since server.py does module-level init
 # 必须在配置好后导入，因为 server.py 有模块级初始化
-from server import breath, hold, trace, pulse, grow
+from server import breath, hold, trace, pulse, grow, read
 
 
 async def main():
@@ -21,7 +21,7 @@ async def main():
     failed = 0
 
     # ===== pulse =====
-    print("=== [1/6] pulse ===")
+    print("=== [1/7] pulse ===")
     try:
         r = await pulse()
         assert "Ombre Brain" in r
@@ -34,7 +34,7 @@ async def main():
     print()
 
     # ===== hold =====
-    print("=== [2/6] hold ===")
+    print("=== [2/7] hold ===")
     try:
         r = await hold(content="P酱最喜欢的编程语言是 Python，喜欢用 FastAPI 写后端", tags="编程,偏好", importance=8)
         print(f"  {r.splitlines()[0]}")
@@ -47,7 +47,7 @@ async def main():
     print()
 
     # ===== hold (merge test / 合并测试) =====
-    print("=== [2b/6] hold (合并测试) ===")
+    print("=== [2b/7] hold (合并测试) ===")
     try:
         r = await hold(content="P酱也喜欢用 Python 写爬虫和数据分析", tags="编程", importance=6)
         print(f"  {r.splitlines()[0]}")
@@ -59,7 +59,7 @@ async def main():
     print()
 
     # ===== breath =====
-    print("=== [3/6] breath ===")
+    print("=== [3/7] breath ===")
     try:
         r = await breath(query="Python 编程", max_results=3)
         print(f"  结果前80字: {r[:80]}...")
@@ -72,7 +72,7 @@ async def main():
     print()
 
     # ===== breath (emotion resonance / 情感共鸣) =====
-    print("=== [3b/6] breath (情感共鸣检索) ===")
+    print("=== [3b/7] breath (情感共鸣检索) ===")
     try:
         r = await breath(query="编程", domain="编程", valence=0.8, arousal=0.5)
         print(f"  结果前80字: {r[:80]}...")
@@ -92,7 +92,7 @@ async def main():
         bucket_id = all_buckets[0]["id"]
 
     # ===== trace =====
-    print("=== [4/6] trace ===")
+    print("=== [4/7] trace ===")
     if bucket_id:
         try:
             r = await trace(bucket_id=bucket_id, domain="编程,创作", importance=9)
@@ -107,8 +107,34 @@ async def main():
         print("  [SKIP] 没有可编辑的桶")
     print()
 
+    # ===== read =====
+    print("=== [4b/7] read (按 ID 精确读取) ===")
+    if bucket_id:
+        try:
+            r = await read(bucket_ids=bucket_id)
+            print(f"  结果前80字: {r[:80]}...")
+            assert f"bucket_id:{bucket_id}" in r
+            assert "未找到" not in r
+            # not-found path / 未找到分支
+            r2 = await read(bucket_ids="does_not_exist_xyz")
+            assert "未找到" in r2
+            # pinned=True path: must not error (may be empty) / 钉选直读分支
+            r3 = await read(pinned=True)
+            assert isinstance(r3, str) and r3
+            # pulse pinned_only must not error / pulse 只列钉选
+            r4 = await pulse(pinned_only=True)
+            assert "Ombre Brain" in r4
+            print("  [OK]")
+            passed += 1
+        except Exception as e:
+            print(f"  [FAIL] {e}")
+            failed += 1
+    else:
+        print("  [SKIP] 没有可读取的桶")
+    print()
+
     # ===== grow =====
-    print("=== [5/6] grow ===")
+    print("=== [5/7] grow ===")
     try:
         diary = (
             "今天早上复习了线性代数，搞懂了特征值分解。"
@@ -130,7 +156,7 @@ async def main():
     print()
 
     # ===== cleanup via trace(delete=True) / 清理测试数据 =====
-    print("=== [6/6] cleanup (清理全部测试数据) ===")
+    print("=== [7/7] cleanup (清理全部测试数据) ===")
     try:
         all_buckets = await bm.list_all()
         for b in all_buckets:

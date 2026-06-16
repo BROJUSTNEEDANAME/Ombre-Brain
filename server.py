@@ -10,8 +10,8 @@
 # 核心职责：
 #   - Initialize config, bucket manager, dehydrator, decay engine
 #     初始化配置、记忆桶管理器、脱水器、衰减引擎
-#   - Expose 5 MCP tools:
-#     暴露 5 个 MCP 工具：
+#   - Expose 7 MCP tools:
+#     暴露 7 个 MCP 工具：
 #       breath — Surface unresolved memories or search by keyword
 #                浮现未解决记忆 或 按关键词检索
 #       hold   — Store a single memory
@@ -22,6 +22,10 @@
 #                修改元数据 / resolved 标记 / 删除
 #       pulse  — System status + bucket listing
 #                系统状态 + 所有桶列表
+#       read   — Read full bucket content(s) by ID
+#                按 ID 精确读取桶的完整内容
+#       dream  — Digest recent memories for self-reflection
+#                消化最近记忆，自省
 #
 # Startup:
 # 启动方式：
@@ -414,9 +418,14 @@ async def breath(
         logger.error(f"Search failed / 检索失败: {e}")
         return "检索过程出错，请稍后重试。"
 
-    # --- Exclude pinned/protected from search results (they surface in surfacing mode) ---
-    # --- 搜索模式排除钉选桶（它们在浮现模式中始终可见）---
-    matches = [b for b in matches if not (b["metadata"].get("pinned") or b["metadata"].get("protected"))]
+    # --- Keyword search KEEPS pinned/protected buckets reachable ---
+    # By design, pinned buckets are "always reachable by keyword" — only the
+    # no-query surfacing list lists them separately as 核心准则. Excluding them
+    # here would make breath(query=...) unable to recall any pinned memory,
+    # which is exactly the "提到忘了 → 捞钉选" path we rely on.
+    # --- 关键词检索保留钉选桶：按设计「钉选桶关键词检索始终可达」，
+    #     只有无 query 的浮现列表才把它们单列为核心准则。若在此排除，
+    #     breath(query=...) 将永远捞不回任何钉选记忆。---
 
     # --- Vector similarity channel: find semantically related buckets ---
     # --- 向量相似度通道：找到语义相关的桶 ---
@@ -426,7 +435,7 @@ async def breath(
         for bucket_id, sim_score in vector_results:
             if bucket_id not in matched_ids and sim_score > 0.5:
                 bucket = await bucket_mgr.get(bucket_id)
-                if bucket and not (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")):
+                if bucket:
                     bucket["score"] = round(sim_score * 100, 2)
                     bucket["vector_match"] = True
                     matches.append(bucket)
@@ -452,10 +461,11 @@ async def breath(
             if token_used + summary_tokens > max_tokens:
                 break
             await bucket_mgr.touch(bucket["id"])
+            pin_mark = "📌 " if (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")) else ""
             if bucket.get("vector_match"):
-                summary = f"[语义关联] [bucket_id:{bucket['id']}] {summary}"
+                summary = f"{pin_mark}[语义关联] [bucket_id:{bucket['id']}] {summary}"
             else:
-                summary = f"[bucket_id:{bucket['id']}] {summary}"
+                summary = f"{pin_mark}[bucket_id:{bucket['id']}] {summary}"
             results.append(summary)
             token_used += summary_tokens
         except Exception as e:
@@ -773,7 +783,19 @@ async def trace(
             changed += " → 已隐藏，保留但不再浮现"
         else:
             changed += " → 已取消隐藏，重新参与浮现"
-    return f"已修改记忆桶 {bucket_id}: {changed}"
+
+    # --- Return the updated content too, saving a follow-up read call ---
+    # --- 顺带返回修改后的完整内容，省一次 read ---
+    result = f"已修改记忆桶 {bucket_id}: {changed}"
+    try:
+        updated = await bucket_mgr.get(bucket_id)
+        if updated:
+            body = strip_wikilinks(updated.get("content", "") or "").strip()
+            if body:
+                result += f"\n--- 当前内容 ---\n{body}"
+    except Exception as e:
+        logger.warning(f"trace: re-read after update failed / 修改后回读失败: {e}")
+    return result
 
 
 # =============================================================
@@ -781,8 +803,8 @@ async def trace(
 # 工具 5：pulse — 脉搏，系统状态 + 记忆列表
 # =============================================================
 @mcp.tool()
-async def pulse(include_archive: bool = False) -> str:
-    """系统状态+记忆桶列表。include_archive=True含归档。"""
+async def pulse(include_archive: bool = False, verbose: bool = False, pinned_only: bool = False) -> str:
+    """系统状态+记忆桶列表。include_archive=True含归档。verbose=True在每个桶后附正文前50字预览+embedding覆盖情况(排查检索漏召),不用逐个read。pinned_only=True只列钉选桶(查重/核对核心准则时用,省得从一堆桶里翻)。"""
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -803,8 +825,31 @@ async def pulse(include_archive: bool = False) -> str:
     except Exception as e:
         return status + f"\n列出记忆桶失败: {e}"
 
+    # --- pinned_only: keep only pinned/protected buckets ---
+    # --- pinned_only：只保留钉选/保护桶 ---
+    if pinned_only:
+        buckets = [b for b in buckets if b["metadata"].get("pinned") or b["metadata"].get("protected")]
+        if not buckets:
+            return status + "\n没有钉选桶。"
+
     if not buckets:
         return status + "\n记忆库为空。"
+
+    # --- Embedding coverage (helps diagnose low search hit-rate) ---
+    # --- Embedding 覆盖率（排查检索命中率低的原因）---
+    embedded = embedding_engine.embedded_ids() if embedding_engine.enabled else set()
+    coverage = ""
+    if embedding_engine.enabled:
+        total_n = len(buckets)
+        have_n = sum(1 for b in buckets if b["id"] in embedded)
+        pinned_list = [b for b in buckets if b["metadata"].get("pinned") or b["metadata"].get("protected")]
+        pinned_have = sum(1 for b in pinned_list if b["id"] in embedded)
+        coverage = f"Embedding 覆盖: {have_n}/{total_n} 桶有向量"
+        if pinned_list:
+            coverage += f"（钉选 {pinned_have}/{len(pinned_list)}）"
+        if have_n < total_n:
+            coverage += " — 缺向量的桶语义检索会漏召，可跑 backfill_embeddings.py 补全"
+        coverage += "\n"
 
     lines = []
     for b in buckets:
@@ -829,7 +874,7 @@ async def pulse(include_archive: bool = False) -> str:
         val = meta.get("valence", 0.5)
         aro = meta.get("arousal", 0.3)
         resolved_tag = " [已解决]" if meta.get("resolved", False) else ""
-        lines.append(
+        line = (
             f"{icon} [{meta.get('name', b['id'])}]{resolved_tag} "
             f"bucket_id:{b['id']} "
             f"主题:{domains} "
@@ -838,8 +883,132 @@ async def pulse(include_archive: bool = False) -> str:
             f"权重:{score:.2f} "
             f"标签:{','.join(meta.get('tags', []))}"
         )
+        # --- verbose: content preview + embedding flag ---
+        # --- verbose：正文预览 + 向量状态 ---
+        if verbose:
+            if embedding_engine.enabled:
+                line += " 🔗" if b["id"] in embedded else " ⚠️无向量"
+            preview = strip_wikilinks(b.get("content", "") or "").strip().replace("\n", " ")
+            if len(preview) > 50:
+                preview = preview[:50] + "…"
+            line += f"\n    内容: {preview}"
+        lines.append(line)
 
-    return status + "\n=== 记忆列表 ===\n" + "\n".join(lines)
+    list_header = "=== 钉选桶列表 ===" if pinned_only else "=== 记忆列表 ==="
+    return status + "\n" + coverage + list_header + "\n" + "\n".join(lines)
+
+
+# =============================================================
+# Tool: read — Read full bucket content(s) by ID
+# 工具：read — 按 ID 精确读取桶的完整内容
+#
+# Precise counterpart to breath. breath is fuzzy (surface / keyword /
+# vector search — used when you DON'T know the ID); read is exact (you
+# DO know the ID, typically from pulse). Supports batch read, capped at
+# MAX_READ_BUCKETS, with a token budget to avoid runaway context usage.
+# 与 breath 互补：breath 是模糊读取（不知道 ID 时浮现/检索），read 是
+# 精确读取（已知 ID，通常来自 pulse）。支持批量、有数量上限和 token 预算，
+# 避免一次拉太多撑爆上下文。
+# =============================================================
+MAX_READ_BUCKETS = 10
+
+
+@mcp.tool()
+async def read(bucket_ids: str = "", max_tokens: int = 8000, pinned: bool = False) -> str:
+    """按ID精确读取桶的完整内容。bucket_ids逗号分隔,一次最多10个。pinned=True直接读所有钉选桶(不用先拿ID;钉选多时按上限截断,可配合pulse(pinned_only=True)分批)。和breath互补:不知道ID用breath(浮现/检索),已知ID用read,常配合pulse。max_tokens控制返回上限,超出则截断。仅在查重/核实具体桶内容/用户要求时用,别遍历全库浪费token。"""
+    # --- Parse & dedupe IDs, preserving order / 解析去重，保持顺序 ---
+    ids = []
+    seen = set()
+
+    # --- pinned=True: prepend all pinned/protected bucket ids ---
+    # --- pinned=True：先收集所有钉选桶的 ID ---
+    if pinned:
+        try:
+            all_buckets = await bucket_mgr.list_all(include_archive=False)
+            for b in all_buckets:
+                if (b["metadata"].get("pinned") or b["metadata"].get("protected")) and b["id"] not in seen:
+                    seen.add(b["id"])
+                    ids.append(b["id"])
+        except Exception as e:
+            logger.warning(f"read: failed to list pinned buckets / 列钉选桶失败: {e}")
+
+    for raw in bucket_ids.split(","):
+        bid = raw.strip()
+        if bid and bid not in seen:
+            seen.add(bid)
+            ids.append(bid)
+
+    if not ids:
+        if pinned:
+            return "没有钉选桶。"
+        return "请提供至少一个 bucket_id（多个用逗号分隔），或用 pinned=True 读所有钉选桶。可先用 pulse 查看所有桶的 ID。"
+
+    # --- Cap bucket count / 限制单次读取数量 ---
+    capped_note = ""
+    if len(ids) > MAX_READ_BUCKETS:
+        capped_note = f"一次最多读取 {MAX_READ_BUCKETS} 个，已忽略多余的 {len(ids) - MAX_READ_BUCKETS} 个。"
+        ids = ids[:MAX_READ_BUCKETS]
+
+    parts = []
+    not_found = []
+    token_used = 0
+    truncated = False
+
+    for bid in ids:
+        try:
+            bucket = await bucket_mgr.get(bid)
+        except Exception as e:
+            logger.warning(f"read: get({bid}) failed / 读取失败: {e}")
+            bucket = None
+
+        if not bucket:
+            not_found.append(bid)
+            continue
+
+        meta = bucket.get("metadata", {})
+        flags = []
+        if meta.get("pinned") or meta.get("protected"):
+            flags.append("📌钉选")
+        if meta.get("resolved", False):
+            flags.append("已解决")
+        flag_str = (" " + " ".join(flags)) if flags else ""
+        header = (
+            f"=== [{meta.get('name', bid)}]{flag_str} ===\n"
+            f"bucket_id:{bid} "
+            f"主题:{','.join(meta.get('domain', []))} "
+            f"重要:{meta.get('importance', '?')} "
+            f"标签:{','.join(meta.get('tags', []))}"
+        )
+        body = strip_wikilinks(bucket.get("content", "") or "")
+        block = f"{header}\n{body}"
+        block_tokens = count_tokens_approx(block)
+
+        # --- Token budget: truncate this bucket's body if it would overflow ---
+        # --- token 预算：本桶会超出则截断正文 ---
+        if token_used + block_tokens > max_tokens:
+            remaining = max_tokens - token_used - count_tokens_approx(header) - 20
+            if remaining > 0:
+                keep_chars = max(0, int(remaining / 1.5))  # 中文约 1.5 token/字，保守截断
+                body = body[:keep_chars].rstrip() + "\n…（内容超出 token 上限，已截断）"
+                parts.append(f"{header}\n{body}")
+            truncated = True
+            break
+
+        parts.append(block)
+        token_used += block_tokens
+
+    # --- Assemble output / 拼装输出 ---
+    out = []
+    if parts:
+        out.append("\n\n---\n\n".join(parts))
+    if not_found:
+        out.append(f"未找到这些桶: {', '.join(not_found)}")
+    if truncated:
+        out.append("（已达 token 上限，部分内容被截断或省略；可调大 max_tokens 或分批读取）")
+    if capped_note:
+        out.append(capped_note)
+
+    return "\n\n".join(out) if out else "未找到任何桶。"
 
 
 # =============================================================

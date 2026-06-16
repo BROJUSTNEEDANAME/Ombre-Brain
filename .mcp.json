@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ombre-brain": {
+      "type": "http",
+      "url": "${OMBRE_MCP_URL:-https://ombre-brain-6e05.onrender.com/mcp}"
+    }
+  }
+}
