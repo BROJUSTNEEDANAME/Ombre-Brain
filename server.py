@@ -418,9 +418,14 @@ async def breath(
         logger.error(f"Search failed / 检索失败: {e}")
         return "检索过程出错，请稍后重试。"
 
-    # --- Exclude pinned/protected from search results (they surface in surfacing mode) ---
-    # --- 搜索模式排除钉选桶（它们在浮现模式中始终可见）---
-    matches = [b for b in matches if not (b["metadata"].get("pinned") or b["metadata"].get("protected"))]
+    # --- Keyword search KEEPS pinned/protected buckets reachable ---
+    # By design, pinned buckets are "always reachable by keyword" — only the
+    # no-query surfacing list lists them separately as 核心准则. Excluding them
+    # here would make breath(query=...) unable to recall any pinned memory,
+    # which is exactly the "提到忘了 → 捞钉选" path we rely on.
+    # --- 关键词检索保留钉选桶：按设计「钉选桶关键词检索始终可达」，
+    #     只有无 query 的浮现列表才把它们单列为核心准则。若在此排除，
+    #     breath(query=...) 将永远捞不回任何钉选记忆。---
 
     # --- Vector similarity channel: find semantically related buckets ---
     # --- 向量相似度通道：找到语义相关的桶 ---
@@ -430,7 +435,7 @@ async def breath(
         for bucket_id, sim_score in vector_results:
             if bucket_id not in matched_ids and sim_score > 0.5:
                 bucket = await bucket_mgr.get(bucket_id)
-                if bucket and not (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")):
+                if bucket:
                     bucket["score"] = round(sim_score * 100, 2)
                     bucket["vector_match"] = True
                     matches.append(bucket)
@@ -456,10 +461,11 @@ async def breath(
             if token_used + summary_tokens > max_tokens:
                 break
             await bucket_mgr.touch(bucket["id"])
+            pin_mark = "📌 " if (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")) else ""
             if bucket.get("vector_match"):
-                summary = f"[语义关联] [bucket_id:{bucket['id']}] {summary}"
+                summary = f"{pin_mark}[语义关联] [bucket_id:{bucket['id']}] {summary}"
             else:
-                summary = f"[bucket_id:{bucket['id']}] {summary}"
+                summary = f"{pin_mark}[bucket_id:{bucket['id']}] {summary}"
             results.append(summary)
             token_used += summary_tokens
         except Exception as e:
@@ -777,7 +783,19 @@ async def trace(
             changed += " → 已隐藏，保留但不再浮现"
         else:
             changed += " → 已取消隐藏，重新参与浮现"
-    return f"已修改记忆桶 {bucket_id}: {changed}"
+
+    # --- Return the updated content too, saving a follow-up read call ---
+    # --- 顺带返回修改后的完整内容，省一次 read ---
+    result = f"已修改记忆桶 {bucket_id}: {changed}"
+    try:
+        updated = await bucket_mgr.get(bucket_id)
+        if updated:
+            body = strip_wikilinks(updated.get("content", "") or "").strip()
+            if body:
+                result += f"\n--- 当前内容 ---\n{body}"
+    except Exception as e:
+        logger.warning(f"trace: re-read after update failed / 修改后回读失败: {e}")
+    return result
 
 
 # =============================================================
@@ -785,8 +803,8 @@ async def trace(
 # 工具 5：pulse — 脉搏，系统状态 + 记忆列表
 # =============================================================
 @mcp.tool()
-async def pulse(include_archive: bool = False) -> str:
-    """系统状态+记忆桶列表。include_archive=True含归档。"""
+async def pulse(include_archive: bool = False, verbose: bool = False) -> str:
+    """系统状态+记忆桶列表。include_archive=True含归档。verbose=True在每个桶后附正文前50字预览+embedding覆盖情况(排查检索漏召),不用逐个read。"""
     try:
         stats = await bucket_mgr.get_stats()
     except Exception as e:
@@ -809,6 +827,22 @@ async def pulse(include_archive: bool = False) -> str:
 
     if not buckets:
         return status + "\n记忆库为空。"
+
+    # --- Embedding coverage (helps diagnose low search hit-rate) ---
+    # --- Embedding 覆盖率（排查检索命中率低的原因）---
+    embedded = embedding_engine.embedded_ids() if embedding_engine.enabled else set()
+    coverage = ""
+    if embedding_engine.enabled:
+        total_n = len(buckets)
+        have_n = sum(1 for b in buckets if b["id"] in embedded)
+        pinned_list = [b for b in buckets if b["metadata"].get("pinned") or b["metadata"].get("protected")]
+        pinned_have = sum(1 for b in pinned_list if b["id"] in embedded)
+        coverage = f"Embedding 覆盖: {have_n}/{total_n} 桶有向量"
+        if pinned_list:
+            coverage += f"（钉选 {pinned_have}/{len(pinned_list)}）"
+        if have_n < total_n:
+            coverage += " — 缺向量的桶语义检索会漏召，可跑 backfill_embeddings.py 补全"
+        coverage += "\n"
 
     lines = []
     for b in buckets:
@@ -833,7 +867,7 @@ async def pulse(include_archive: bool = False) -> str:
         val = meta.get("valence", 0.5)
         aro = meta.get("arousal", 0.3)
         resolved_tag = " [已解决]" if meta.get("resolved", False) else ""
-        lines.append(
+        line = (
             f"{icon} [{meta.get('name', b['id'])}]{resolved_tag} "
             f"bucket_id:{b['id']} "
             f"主题:{domains} "
@@ -842,8 +876,18 @@ async def pulse(include_archive: bool = False) -> str:
             f"权重:{score:.2f} "
             f"标签:{','.join(meta.get('tags', []))}"
         )
+        # --- verbose: content preview + embedding flag ---
+        # --- verbose：正文预览 + 向量状态 ---
+        if verbose:
+            if embedding_engine.enabled:
+                line += " 🔗" if b["id"] in embedded else " ⚠️无向量"
+            preview = strip_wikilinks(b.get("content", "") or "").strip().replace("\n", " ")
+            if len(preview) > 50:
+                preview = preview[:50] + "…"
+            line += f"\n    内容: {preview}"
+        lines.append(line)
 
-    return status + "\n=== 记忆列表 ===\n" + "\n".join(lines)
+    return status + "\n" + coverage + "=== 记忆列表 ===\n" + "\n".join(lines)
 
 
 # =============================================================

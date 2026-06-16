@@ -116,6 +116,20 @@ class EmbeddingEngine:
         conn.commit()
         conn.close()
 
+    def embedded_ids(self) -> set:
+        """
+        Return the set of bucket_ids that currently have a stored embedding.
+        返回当前已存有向量的桶 ID 集合。用于排查 embedding 覆盖率。
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            rows = conn.execute("SELECT bucket_id FROM embeddings").fetchall()
+            conn.close()
+            return {r[0] for r in rows}
+        except Exception as e:
+            logger.warning(f"Failed to read embedded ids / 读取 embedding 覆盖失败: {e}")
+            return set()
+
     def delete_embedding(self, bucket_id: str):
         """Remove embedding when bucket is deleted."""
         conn = sqlite3.connect(self.db_path)

@@ -79,8 +79,8 @@
 | `breath` | query, max_tokens, domain, valence, arousal, max_results | 检索/浮现记忆 |
 | `hold` | content, tags, importance, pinned, feel, source_bucket, valence, arousal | 存储记忆 |
 | `grow` | content | 日记拆分归档 |
-| `trace` | bucket_id, name, domain, valence, arousal, importance, tags, resolved, pinned, digested, content, delete | 修改元数据/内容/删除 |
-| `pulse` | include_archive | 系统状态 |
+| `trace` | bucket_id, name, domain, valence, arousal, importance, tags, resolved, pinned, digested, content, delete | 修改元数据/内容/删除；返回修改后完整内容 |
+| `pulse` | include_archive, verbose | 系统状态；verbose 附正文预览 + embedding 覆盖率 |
 | `read` | bucket_ids, max_tokens | 按 ID 精确读取桶完整内容（批量，上限 10） |
 | `dream` | （无） | 做梦自省 |
 
@@ -88,7 +88,7 @@
 
 **`breath`** — 两种模式：
 - **浮现模式**（无 query）：无参调用，按衰减引擎活跃度排序返回 top 记忆，permanent/pinned 始终浮现
-- **检索模式**（有 query）：关键词 + 向量双通道搜索，四维评分（topic×4 + emotion×2 + time×2.5 + importance×1），阈值过滤
+- **检索模式**（有 query）：关键词 + 向量双通道搜索，四维评分（topic×4 + emotion×2 + time×2.5 + importance×1），阈值过滤。**钉选桶（pinned）在检索模式中可被命中**（命中时标 📌），实现「关键词检索始终可达」——只有无 query 的浮现列表才把钉选单列为核心准则
 - **Feel 检索**（`domain="feel"`）：特殊通道，按创建时间倒序返回所有 feel 类型桶，不走评分逻辑
 - 若指定 valence，对匹配桶的 valence 微调 ±0.1（情感记忆重构）
 
