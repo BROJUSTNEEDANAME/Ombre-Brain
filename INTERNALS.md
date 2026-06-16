@@ -88,7 +88,7 @@
 
 **`breath`** — 两种模式：
 - **浮现模式**（无 query）：无参调用，按衰减引擎活跃度排序返回 top 记忆，permanent/pinned 始终浮现
-- **检索模式**（有 query）：关键词 + 向量双通道搜索，四维评分（topic×4 + emotion×2 + time×2.5 + importance×1），阈值过滤。**钉选桶（pinned）在检索模式中可被命中**（命中时标 📌），实现「关键词检索始终可达」——只有无 query 的浮现列表才把钉选单列为核心准则
+- **检索模式**（有 query）：关键词 + 向量双通道搜索，四维评分（topic×4 + emotion×2 + time×2.5 + importance×1），阈值过滤。**钉选桶（pinned）在检索模式中可被命中**（命中时标 📌），实现「关键词检索始终可达」——只有无 query 的浮现列表才把钉选单列为核心准则。钉选桶即使综合分低于 `fuzzy_threshold`，只要 name/tag/domain 有强文本命中（`_has_strong_text_match`，partial_ratio≥80）也会放行，**不依赖 embedding**，避免老桶因缺向量被漏召
 - **Feel 检索**（`domain="feel"`）：特殊通道，按创建时间倒序返回所有 feel 类型桶，不走评分逻辑
 - 若指定 valence，对匹配桶的 valence 微调 ±0.1（情感记忆重构）
 

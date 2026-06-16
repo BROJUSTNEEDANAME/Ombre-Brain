@@ -513,6 +513,17 @@ class BucketManager:
                 if normalized >= self.fuzzy_threshold:
                     bucket["score"] = round(normalized, 2)
                     scored.append(bucket)
+                elif (meta.get("pinned") or meta.get("protected")) and self._has_strong_text_match(query, meta):
+                    # Pinned/protected buckets stay reachable by pure keyword
+                    # even below the general threshold — but only when there's a
+                    # genuine name/tag/domain hit, so they don't flood every
+                    # query just from their locked importance=10. This honors the
+                    # documented「钉选桶关键词检索始终可达」contract WITHOUT relying
+                    # on embeddings (which may be missing).
+                    # 钉选桶纯关键词即可被捞出（不依赖向量）：仅在 name/tag/domain
+                    # 有真实命中时放行，避免每条查询都被高 importance 顶上来。
+                    bucket["score"] = round(max(normalized, self.fuzzy_threshold), 2)
+                    scored.append(bucket)
             except Exception as e:
                 logger.warning(
                     f"Scoring failed for bucket {bucket.get('id', '?')} / "
@@ -522,6 +533,15 @@ class BucketManager:
 
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:limit]
+
+    # ---------------------------------------------------------
+    # Strong textual hit on a bucket's name / tags / domain.
+    # Used to keep pinned buckets reachable by pure keyword search.
+    # 桶的 name/tag/domain 上是否有强文本命中——用于让钉选桶纯关键词可达。
+    # ---------------------------------------------------------
+    def _has_strong_text_match(self, query: str, meta: dict, cutoff: int = 80) -> bool:
+        fields = [meta.get("name", "")] + list(meta.get("tags", [])) + list(meta.get("domain", []))
+        return any(f and fuzz.partial_ratio(query, f) >= cutoff for f in fields)
 
     # ---------------------------------------------------------
     # Topic relevance sub-score:
