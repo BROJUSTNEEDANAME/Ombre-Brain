@@ -30,6 +30,6 @@
 
 ## 完整使用指南 / Full guide
 
-工具细节（`breath` / `hold` / `grow` / `trace` / `pulse` / `dream` / feel / pinned / 权重池机制）见：
+工具细节（`breath` / `hold` / `grow` / `trace` / `pulse` / `read` / `dream` / feel / pinned / 权重池机制）见：
 
 @CLAUDE_PROMPT.md

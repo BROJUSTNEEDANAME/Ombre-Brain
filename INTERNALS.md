@@ -72,7 +72,7 @@
 
 ### 技术能力
 
-**6 个 MCP 工具**
+**7 个 MCP 工具**
 
 | 工具 | 关键参数 | 功能 |
 |---|---|---|
@@ -81,6 +81,7 @@
 | `grow` | content | 日记拆分归档 |
 | `trace` | bucket_id, name, domain, valence, arousal, importance, tags, resolved, pinned, digested, content, delete | 修改元数据/内容/删除 |
 | `pulse` | include_archive | 系统状态 |
+| `read` | bucket_ids, max_tokens | 按 ID 精确读取桶完整内容（批量，上限 10） |
 | `dream` | （无） | 做梦自省 |
 
 **工具详细行为**
@@ -181,7 +182,7 @@
 
 ```
                     ┌──────────────┐
-                    │  server.py   │  MCP 主入口，6 个工具 + Dashboard + Hook
+                    │  server.py   │  MCP 主入口，7 个工具 + Dashboard + Hook
                     └──────┬───────┘
            ┌───────────────┼───────────────┬────────────────┐
            ▼               ▼               ▼                ▼

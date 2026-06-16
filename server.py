@@ -10,8 +10,8 @@
 # 核心职责：
 #   - Initialize config, bucket manager, dehydrator, decay engine
 #     初始化配置、记忆桶管理器、脱水器、衰减引擎
-#   - Expose 5 MCP tools:
-#     暴露 5 个 MCP 工具：
+#   - Expose 7 MCP tools:
+#     暴露 7 个 MCP 工具：
 #       breath — Surface unresolved memories or search by keyword
 #                浮现未解决记忆 或 按关键词检索
 #       hold   — Store a single memory
@@ -22,6 +22,10 @@
 #                修改元数据 / resolved 标记 / 删除
 #       pulse  — System status + bucket listing
 #                系统状态 + 所有桶列表
+#       read   — Read full bucket content(s) by ID
+#                按 ID 精确读取桶的完整内容
+#       dream  — Digest recent memories for self-reflection
+#                消化最近记忆，自省
 #
 # Startup:
 # 启动方式：
@@ -840,6 +844,104 @@ async def pulse(include_archive: bool = False) -> str:
         )
 
     return status + "\n=== 记忆列表 ===\n" + "\n".join(lines)
+
+
+# =============================================================
+# Tool: read — Read full bucket content(s) by ID
+# 工具：read — 按 ID 精确读取桶的完整内容
+#
+# Precise counterpart to breath. breath is fuzzy (surface / keyword /
+# vector search — used when you DON'T know the ID); read is exact (you
+# DO know the ID, typically from pulse). Supports batch read, capped at
+# MAX_READ_BUCKETS, with a token budget to avoid runaway context usage.
+# 与 breath 互补：breath 是模糊读取（不知道 ID 时浮现/检索），read 是
+# 精确读取（已知 ID，通常来自 pulse）。支持批量、有数量上限和 token 预算，
+# 避免一次拉太多撑爆上下文。
+# =============================================================
+MAX_READ_BUCKETS = 10
+
+
+@mcp.tool()
+async def read(bucket_ids: str, max_tokens: int = 8000) -> str:
+    """按ID精确读取桶的完整内容。bucket_ids逗号分隔,一次最多10个。和breath互补:不知道ID用breath(浮现/检索),已知ID用read,常配合pulse(先pulse拿ID再read)。max_tokens控制返回上限,超出则截断。仅在查重/核实具体桶内容/用户要求时用,别遍历全库浪费token。"""
+    # --- Parse & dedupe IDs, preserving order / 解析去重，保持顺序 ---
+    ids = []
+    seen = set()
+    for raw in bucket_ids.split(","):
+        bid = raw.strip()
+        if bid and bid not in seen:
+            seen.add(bid)
+            ids.append(bid)
+
+    if not ids:
+        return "请提供至少一个 bucket_id（多个用逗号分隔）。可先用 pulse 查看所有桶的 ID。"
+
+    # --- Cap bucket count / 限制单次读取数量 ---
+    capped_note = ""
+    if len(ids) > MAX_READ_BUCKETS:
+        capped_note = f"一次最多读取 {MAX_READ_BUCKETS} 个，已忽略多余的 {len(ids) - MAX_READ_BUCKETS} 个。"
+        ids = ids[:MAX_READ_BUCKETS]
+
+    parts = []
+    not_found = []
+    token_used = 0
+    truncated = False
+
+    for bid in ids:
+        try:
+            bucket = await bucket_mgr.get(bid)
+        except Exception as e:
+            logger.warning(f"read: get({bid}) failed / 读取失败: {e}")
+            bucket = None
+
+        if not bucket:
+            not_found.append(bid)
+            continue
+
+        meta = bucket.get("metadata", {})
+        flags = []
+        if meta.get("pinned") or meta.get("protected"):
+            flags.append("📌钉选")
+        if meta.get("resolved", False):
+            flags.append("已解决")
+        flag_str = (" " + " ".join(flags)) if flags else ""
+        header = (
+            f"=== [{meta.get('name', bid)}]{flag_str} ===\n"
+            f"bucket_id:{bid} "
+            f"主题:{','.join(meta.get('domain', []))} "
+            f"重要:{meta.get('importance', '?')} "
+            f"标签:{','.join(meta.get('tags', []))}"
+        )
+        body = strip_wikilinks(bucket.get("content", "") or "")
+        block = f"{header}\n{body}"
+        block_tokens = count_tokens_approx(block)
+
+        # --- Token budget: truncate this bucket's body if it would overflow ---
+        # --- token 预算：本桶会超出则截断正文 ---
+        if token_used + block_tokens > max_tokens:
+            remaining = max_tokens - token_used - count_tokens_approx(header) - 20
+            if remaining > 0:
+                keep_chars = max(0, int(remaining / 1.5))  # 中文约 1.5 token/字，保守截断
+                body = body[:keep_chars].rstrip() + "\n…（内容超出 token 上限，已截断）"
+                parts.append(f"{header}\n{body}")
+            truncated = True
+            break
+
+        parts.append(block)
+        token_used += block_tokens
+
+    # --- Assemble output / 拼装输出 ---
+    out = []
+    if parts:
+        out.append("\n\n---\n\n".join(parts))
+    if not_found:
+        out.append(f"未找到这些桶: {', '.join(not_found)}")
+    if truncated:
+        out.append("（已达 token 上限，部分内容被截断或省略；可调大 max_tokens 或分批读取）")
+    if capped_note:
+        out.append(capped_note)
+
+    return "\n\n".join(out) if out else "未找到任何桶。"
 
 
 # =============================================================
