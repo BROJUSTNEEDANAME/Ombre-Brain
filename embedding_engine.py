@@ -34,8 +34,13 @@ class EmbeddingEngine:
         dehy_cfg = config.get("dehydration", {})
         embed_cfg = config.get("embedding", {})
 
-        self.api_key = dehy_cfg.get("api_key", "")
-        self.base_url = dehy_cfg.get("base_url", "https://generativelanguage.googleapis.com/v1beta/openai/")
+        # Embedding can use its OWN provider (key/base_url); fall back to the
+        # dehydration provider for backward compatibility. This lets a chat
+        # provider without embeddings (e.g. DeepSeek) keep doing dehydration
+        # while a separate vector-capable provider handles embeddings.
+        # embedding 可用独立的 key/base_url；缺省回退到脱水配置，保持兼容。
+        self.api_key = embed_cfg.get("api_key") or dehy_cfg.get("api_key", "")
+        self.base_url = embed_cfg.get("base_url") or dehy_cfg.get("base_url", "https://generativelanguage.googleapis.com/v1beta/openai/")
         self.model = embed_cfg.get("model", "gemini-embedding-001")
         self.enabled = bool(self.api_key) and embed_cfg.get("enabled", True)
 

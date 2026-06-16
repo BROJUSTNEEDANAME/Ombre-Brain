@@ -90,6 +90,23 @@ def load_config(config_path: str = None) -> dict:
     if env_base_url:
         config.setdefault("dehydration", {})["base_url"] = env_base_url
 
+    # --- Embedding provider can be configured INDEPENDENTLY of dehydration ---
+    # Many chat/dehydration APIs (e.g. DeepSeek) don't offer an embedding
+    # endpoint, so allow pointing embeddings at a separate vector-capable
+    # provider without changing the dehydration provider.
+    # --- embedding 可独立于脱水配置（很多脱水 API 不提供向量接口）---
+    env_embed_key = os.environ.get("OMBRE_EMBED_API_KEY", "")
+    if env_embed_key:
+        config.setdefault("embedding", {})["api_key"] = env_embed_key
+
+    env_embed_url = os.environ.get("OMBRE_EMBED_BASE_URL", "")
+    if env_embed_url:
+        config.setdefault("embedding", {})["base_url"] = env_embed_url
+
+    env_embed_model = os.environ.get("OMBRE_EMBED_MODEL", "")
+    if env_embed_model:
+        config.setdefault("embedding", {})["model"] = env_embed_model
+
     env_transport = os.environ.get("OMBRE_TRANSPORT", "")
     if env_transport:
         config["transport"] = env_transport
