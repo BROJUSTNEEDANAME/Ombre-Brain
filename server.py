@@ -652,8 +652,30 @@ async def grow(content: str) -> str:
     try:
         items = await dehydrator.digest(content)
     except Exception as e:
-        logger.error(f"Diary digest failed / 日记整理失败: {e}")
-        return f"日记整理失败: {e}"
+        # API unavailable/failed → DON'T lose the entry. Fall back to storing
+        # the whole thing as a single memory (degraded: no LLM splitting).
+        # API 挂了也绝不丢数据：整段作为一条记忆存下来（降级，不拆分）。
+        logger.warning(f"Diary digest failed, falling back to single-bucket store / 日记整理失败，降级整段存储: {e}")
+        try:
+            analysis = await dehydrator.analyze(content)
+        except Exception:
+            analysis = {"domain": ["未分类"], "valence": 0.5, "arousal": 0.3, "tags": [], "suggested_name": ""}
+        try:
+            imp = analysis.get("importance", 5)
+            result_name, is_merged = await _merge_or_create(
+                content=content.strip(),
+                tags=analysis.get("tags", []),
+                importance=imp if isinstance(imp, int) else 5,
+                domain=analysis.get("domain", ["未分类"]),
+                valence=analysis.get("valence", 0.5),
+                arousal=analysis.get("arousal", 0.3),
+                name=analysis.get("suggested_name", ""),
+            )
+            action = "合并" if is_merged else "新建"
+            return f"⚠️ 整理 API 不可用，未拆分，已把整段存为一条记忆：{action} → {result_name}"
+        except Exception as e2:
+            logger.error(f"Fallback single-bucket store failed / 降级整段存储也失败: {e2}")
+            return f"日记整理失败，且降级存储也失败：{e2}"
 
     if not items:
         return "内容为空或整理失败。"

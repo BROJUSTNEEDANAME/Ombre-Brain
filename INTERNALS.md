@@ -169,6 +169,7 @@
 |---|---|---|---|
 | `OMBRE_API_KEY` | 脱水/打标的 LLM API 密钥，覆盖 `config.yaml` 的 `dehydration.api_key` | 否（无则 API 功能降级到本地） | `""` |
 | `OMBRE_BASE_URL` | 脱水 API base URL，覆盖 `dehydration.base_url` | 否 | `""` |
+| `OMBRE_MODEL` | 脱水/打标模型名，覆盖 `dehydration.model`（base_url 改了通常也要改这个，否则模型名与新服务商不匹配） | 否 | `"deepseek-chat"` |
 | `OMBRE_EMBED_API_KEY` | **向量化独立 API 密钥**，覆盖 `embedding.api_key`；缺省回退到 `dehydration.api_key` | 否 | `""` |
 | `OMBRE_EMBED_BASE_URL` | 向量化独立 base URL，覆盖 `embedding.base_url`；缺省回退脱水 base_url。脱水 API（如 DeepSeek）无向量接口时用它指向 Gemini/SiliconFlow 等 | 否 | `""` |
 | `OMBRE_EMBED_MODEL` | 向量化模型名，覆盖 `embedding.model` | 否 | `"gemini-embedding-001"` |
