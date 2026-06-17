@@ -439,6 +439,7 @@ All parameters in `config.yaml` (copy from `config.example.yaml`). Key ones:
 Sensitive config via env vars:
 - `OMBRE_API_KEY` — LLM API 密钥（脱水/打标）/ LLM API key (dehydration)
 - `OMBRE_BASE_URL` — 脱水 API 地址 / dehydration API endpoint
+- `OMBRE_MODEL` — 脱水/打标模型名（改了 base_url 通常也要一起改）/ dehydration model name (set alongside base_url)
 - `OMBRE_TRANSPORT` — 覆盖传输方式 / transport
 - `OMBRE_BUCKETS_DIR` — 覆盖存储路径 / storage path
 - `OMBRE_EMBED_API_KEY` / `OMBRE_EMBED_BASE_URL` / `OMBRE_EMBED_MODEL` — **向量化（embedding）独立配置**。脱水 API 不提供向量接口时（如 DeepSeek），用这组指向一个支持向量的服务（如 Google AI Studio / SiliconFlow）；不设则复用脱水配置 / Configure embeddings independently of dehydration (many chat APIs have no embedding endpoint); falls back to dehydration config if unset
