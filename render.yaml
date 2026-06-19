@@ -19,3 +19,23 @@ services:
       name: ombre-buckets
       mountPath: /opt/render/project/src/buckets
       sizeGB: 1
+
+  # Telegram bot —— 把 Nikto 接到手机上，秒回，挂同一颗大脑
+  - type: worker
+    name: ombre-telegram-bot
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements-telegram.txt
+    startCommand: python telegram_bot.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false          # 找 @BotFather 要
+      - key: ANTHROPIC_API_KEY
+        sync: false          # Claude API key
+      - key: ALLOWED_CHAT_IDS
+        sync: false          # 你自己的 Telegram chat id（逗号分隔，强烈建议设）
+      - key: OMBRE_BOT_MODEL
+        value: claude-opus-4-6
+      - key: OMBRE_MCP_URL
+        value: https://ombre-brain-6e05.onrender.com/mcp

@@ -1,0 +1,10 @@
+# ============================================================
+# Ombre Brain Telegram Bot 依赖
+# 安装: pip install -r requirements-telegram.txt
+# ============================================================
+
+# Telegram bot 框架（异步）
+python-telegram-bot>=21.0
+
+# Claude API 客户端（MCP connector）
+anthropic>=0.49.0
