@@ -29,6 +29,7 @@ Ombre Brain，breath / hold / dream 全都能用，记忆持续累积。
     python telegram_bot.py
 """
 
+import base64
 import logging
 import os
 
@@ -198,10 +199,60 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
 
 
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """收图片：下载 → base64 → 作为 vision 内容发给 Claude（Opus 4.6 支持看图）。"""
+    chat_id = update.effective_chat.id
+    if not ALLOWED_CHAT_IDS:
+        await update.message.reply_text(
+            f"还没锁定使用者。你的 chat id 是 {chat_id}，"
+            "把它填进 ALLOWED_CHAT_IDS 再来聊。"
+        )
+        return
+    if chat_id not in ALLOWED_CHAT_IDS:
+        logger.warning("未授权的 chat_id 尝试访问: %s", chat_id)
+        return
+
+    photo = update.message.photo[-1]  # 取最大尺寸那张
+    tg_file = await context.bot.get_file(photo.file_id)
+    raw = await tg_file.download_as_bytearray()
+    b64 = base64.standard_b64encode(bytes(raw)).decode("utf-8")
+    caption = (update.message.caption or "").strip()
+
+    history = histories.setdefault(chat_id, [])
+    image_msg = {
+        "role": "user",
+        "content": [
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+            },
+            {"type": "text", "text": caption or "（闪闪发来一张图片，看看。）"},
+        ],
+    }
+
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    try:
+        reply = await _ask_claude(history + [image_msg])
+    except Exception:  # noqa: BLE001
+        logger.exception("图片消息处理失败")
+        await update.message.reply_text("（图片我没接住，再发一次。）")
+        return
+
+    # 历史里只留文字占位，不存 base64（省 token）
+    history.append({"role": "user", "content": f"[图片] {caption}".strip()})
+    history.append({"role": "assistant", "content": reply})
+    if len(history) > MAX_HISTORY_MESSAGES:
+        del history[: len(history) - MAX_HISTORY_MESSAGES]
+
+    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
+        await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
+
+
 def main() -> None:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
+    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
