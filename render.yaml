@@ -5,7 +5,7 @@ services:
     region: oregon
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    startCommand: python run_all.py
     envVars:
       - key: OMBRE_TRANSPORT
         value: streamable-http
@@ -15,27 +15,18 @@ services:
         sync: false          # e.g. https://api.deepseek.com/v1 or https://api.siliconflow.cn/v1
       - key: OMBRE_BUCKETS_DIR
         value: /opt/render/project/src/buckets
-    disk:
-      name: ombre-buckets
-      mountPath: /opt/render/project/src/buckets
-      sizeGB: 1
-
-  # Telegram bot —— 把 Nikto 接到手机上，秒回，挂同一颗大脑
-  - type: worker
-    name: ombre-telegram-bot
-    env: python
-    region: oregon
-    plan: starter
-    buildCommand: pip install -r requirements-telegram.txt
-    startCommand: python telegram_bot.py
-    envVars:
+      # --- Telegram bot（与大脑同一个服务里一起跑，run_all.py 拉起）---
       - key: TELEGRAM_BOT_TOKEN
-        sync: false          # 找 @BotFather 要
+        sync: false          # @BotFather 给的 bot token
       - key: ANTHROPIC_API_KEY
-        sync: false          # Claude API key
+        sync: false          # Claude API key（连 Opus 4.6）
       - key: ALLOWED_CHAT_IDS
-        sync: false          # 你自己的 Telegram chat id（逗号分隔，强烈建议设）
+        sync: false          # 你的 Telegram chat id；部署后给 bot 发 /id 拿到再填
       - key: OMBRE_BOT_MODEL
         value: claude-opus-4-6
       - key: OMBRE_MCP_URL
         value: https://ombre-brain-6e05.onrender.com/mcp
+    disk:
+      name: ombre-buckets
+      mountPath: /opt/render/project/src/buckets
+      sizeGB: 1
