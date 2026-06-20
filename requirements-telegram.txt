@@ -3,8 +3,8 @@
 # 安装: pip install -r requirements-telegram.txt
 # ============================================================
 
-# Telegram bot 框架（异步）
-python-telegram-bot>=21.0
+# Telegram bot 框架（异步，[job-queue] 用于定时主动找她）
+python-telegram-bot[job-queue]>=21.0
 
 # Claude API 客户端（MCP connector）
 anthropic>=0.49.0

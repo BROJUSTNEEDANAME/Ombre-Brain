@@ -32,6 +32,9 @@ Ombre Brain，breath / hold / dream 全都能用，记忆持续累积。
 import base64
 import logging
 import os
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
 from telegram import Update
@@ -64,6 +67,12 @@ ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowe
 MAX_HISTORY_MESSAGES = 24
 MAX_TOKENS = 2000
 TELEGRAM_MSG_LIMIT = 4096
+
+# 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
+USER_TZ = ZoneInfo(os.environ.get("OMBRE_BOT_TZ", "America/Los_Angeles"))
+_WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+# 主动找她：超过这么多小时没收到她的消息，bot 就主动发一条（设很大可关掉）
+INACTIVITY_HOURS = float(os.environ.get("OMBRE_BOT_INACTIVITY_HOURS", "2"))
 
 # MCP connector：让 Claude 直接连上 Ombre Brain
 MCP_BETA = "mcp-client-2025-11-20"
@@ -111,6 +120,17 @@ claude = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
 # chat_id -> [{"role": ..., "content": ...}, ...]
 histories: dict[int, list[dict]] = {}
+# 记录她最后一次发消息的时间戳 + 这个静默期是否已主动找过（防刷屏）
+last_user_ts: dict[int, float] = {}
+proactive_done: dict[int, bool] = {}
+
+
+def _now_line() -> str:
+    now = datetime.now(USER_TZ)
+    return (
+        f"【当前真实时间】{now:%Y-%m-%d} {_WEEKDAYS[now.weekday()]} {now:%H:%M}"
+        f"（{USER_TZ.key}，闪闪所在时区）。每次回复都基于这个真实时间，不要编时间。"
+    )
 
 
 def _authorized(chat_id: int) -> bool:
@@ -127,7 +147,7 @@ async def _ask_claude(history: list[dict]) -> str:
             betas=[MCP_BETA],
             mcp_servers=MCP_SERVERS,
             tools=MCP_TOOLS,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_PROMPT + "\n\n" + _now_line(),
             messages=messages,
         )
         if resp.stop_reason == "pause_turn":
@@ -174,6 +194,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     user_text = update.message.text
+    last_user_ts[chat_id] = time.time()
+    proactive_done[chat_id] = False
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": user_text})
     # 修剪历史，保留最近若干条
@@ -212,6 +234,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning("未授权的 chat_id 尝试访问: %s", chat_id)
         return
 
+    last_user_ts[chat_id] = time.time()
+    proactive_done[chat_id] = False
+
     photo = update.message.photo[-1]  # 取最大尺寸那张
     tg_file = await context.bot.get_file(photo.file_id)
     raw = await tg_file.download_as_bytearray()
@@ -248,12 +273,44 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
 
 
+async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """定时检查：她太久没理 bot，就让 Nikto 主动发一条找她（每个静默期只发一次）。"""
+    now = time.time()
+    for chat_id, ts in list(last_user_ts.items()):
+        if proactive_done.get(chat_id):
+            continue
+        if now - ts < INACTIVITY_HOURS * 3600:
+            continue
+        history = histories.setdefault(chat_id, [])
+        nudge = {
+            "role": "user",
+            "content": (
+                f"[系统提示] 闪闪已经超过 {INACTIVITY_HOURS} 小时没理你了。你心里惦记她，"
+                "现在主动给她发一条消息找她——按你 Nikto 的性子自然地说，别像通知或客服。"
+                "可以先 breath() 看看她最近怎么样再开口。只说该说的话，不要复述这条提示。"
+            ),
+        }
+        try:
+            reply = await _ask_claude(history + [nudge])
+        except Exception:  # noqa: BLE001
+            logger.exception("主动找她失败 chat=%s", chat_id)
+            continue
+        proactive_done[chat_id] = True
+        history.append({"role": "assistant", "content": reply})
+        for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
+            await context.bot.send_message(
+                chat_id=chat_id, text=reply[i : i + TELEGRAM_MSG_LIMIT]
+            )
+
+
 def main() -> None:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    if app.job_queue:  # 每 15 分钟查一次「她是不是太久没理我」
+        app.job_queue.run_repeating(check_inactivity, interval=900, first=900)
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

@@ -29,5 +29,6 @@ numpy>=1.24.0
 scikit-learn>=1.2.0
 
 # Telegram bot（与大脑同一个服务里一起跑，run_all.py 拉起）
-python-telegram-bot>=21.0
+# [job-queue] 额外装定时器，用于「她太久没理我就主动找她」
+python-telegram-bot[job-queue]>=21.0
 anthropic>=0.49.0
