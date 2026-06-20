@@ -148,15 +148,27 @@ async def _ask_claude(history: list[dict]) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if not _authorized(chat_id):
-        logger.warning("未授权的 chat_id 尝试访问: %s", chat_id)
+        await update.message.reply_text(f"你的 chat id 是：{chat_id}")
         return
     histories.pop(chat_id, None)
     await update.message.reply_text("在。")
 
 
+async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """任何人发 /id 都回他自己的 chat id —— 干净地拿到 id 配置 ALLOWED_CHAT_IDS。"""
+    await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    if not _authorized(chat_id):
+    # 还没设白名单时，只回 chat id，绝不接通大脑（保护私密记忆 + 不烧额度）
+    if not ALLOWED_CHAT_IDS:
+        await update.message.reply_text(
+            f"还没锁定使用者。你的 chat id 是 {chat_id}，"
+            "把它填进 ALLOWED_CHAT_IDS 再来聊。"
+        )
+        return
+    if chat_id not in ALLOWED_CHAT_IDS:
         logger.warning("未授权的 chat_id 尝试访问: %s", chat_id)
         return
 
@@ -189,6 +201,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 def main() -> None:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", show_id))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
