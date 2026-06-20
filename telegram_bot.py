@@ -38,6 +38,7 @@ from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -74,6 +75,12 @@ USER_TZ = ZoneInfo(os.environ.get("OMBRE_BOT_TZ", "America/Los_Angeles"))
 _WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 # 主动找她：超过这么多小时没收到她的消息，bot 就主动发一条（设很大可关掉）
 INACTIVITY_HOURS = float(os.environ.get("OMBRE_BOT_INACTIVITY_HOURS", "2"))
+
+# 语音：OpenAI 一把钥匙搞定「听」(Whisper) 和「说」(TTS)；没配 OPENAI_API_KEY 就自动关
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+TTS_VOICE = os.environ.get("OMBRE_BOT_VOICE", "onyx")  # onyx：低沉男声，配 Nikto
+TTS_MODEL = os.environ.get("OMBRE_BOT_TTS_MODEL", "tts-1")
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # MCP connector：让 Claude 直接连上 Ombre Brain
 MCP_BETA = "mcp-client-2025-11-20"
@@ -129,6 +136,38 @@ histories: dict[int, list[dict]] = {}
 # 记录她最后一次发消息的时间戳 + 这个静默期是否已主动找过（防刷屏）
 last_user_ts: dict[int, float] = {}
 proactive_done: dict[int, bool] = {}
+voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语音回
+
+
+async def _transcribe(audio_bytes: bytes) -> str:
+    resp = await openai_client.audio.transcriptions.create(
+        model="whisper-1", file=("voice.ogg", audio_bytes, "audio/ogg")
+    )
+    return (resp.text or "").strip()
+
+
+async def _tts(text: str) -> bytes:
+    chunks = b""
+    async with openai_client.audio.speech.with_streaming_response.create(
+        model=TTS_MODEL, voice=TTS_VOICE, input=text[:4000], response_format="opus"
+    ) as resp:
+        async for chunk in resp.iter_bytes():
+            chunks += chunk
+    return chunks
+
+
+async def _send_reply(context, chat_id: int, reply: str, force_voice: bool = False) -> None:
+    """统一发送：需要语音就发语音（失败退回文字），否则发文字。"""
+    want_voice = openai_client is not None and (force_voice or voice_mode.get(chat_id))
+    if want_voice:
+        try:
+            audio = await _tts(reply)
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+            return
+        except Exception:  # noqa: BLE001
+            logger.exception("TTS 失败，退回文字")
+    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
+        await context.bot.send_message(chat_id=chat_id, text=reply[i : i + TELEGRAM_MSG_LIMIT])
 
 
 def _now_line() -> str:
@@ -151,6 +190,7 @@ def _save_state() -> None:
                     "histories": {str(k): v for k, v in histories.items()},
                     "last_user_ts": {str(k): v for k, v in last_user_ts.items()},
                     "proactive_done": {str(k): v for k, v in proactive_done.items()},
+                    "voice_mode": {str(k): v for k, v in voice_mode.items()},
                 },
                 f,
                 ensure_ascii=False,
@@ -168,6 +208,7 @@ def _load_state() -> None:
         histories.update({int(k): v for k, v in data.get("histories", {}).items()})
         last_user_ts.update({int(k): v for k, v in data.get("last_user_ts", {}).items()})
         proactive_done.update({int(k): v for k, v in data.get("proactive_done", {}).items()})
+        voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
         logger.exception("载入对话状态失败")
@@ -256,10 +297,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     history.append({"role": "assistant", "content": reply})
     _save_state()
-
-    # Telegram 单条消息上限 4096，超了就切
-    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
+    await _send_reply(context, chat_id, reply)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -310,9 +348,69 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
     _save_state()
+    await _send_reply(context, chat_id, reply)
 
-    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """收语音：Whisper 转文字 → 当普通消息处理 → 语音回。"""
+    chat_id = update.effective_chat.id
+    if not ALLOWED_CHAT_IDS:
+        await update.message.reply_text(
+            f"还没锁定使用者。你的 chat id 是 {chat_id}，把它填进 ALLOWED_CHAT_IDS 再来聊。"
+        )
+        return
+    if chat_id not in ALLOWED_CHAT_IDS:
+        return
+    if openai_client is None:
+        await update.message.reply_text(
+            "（语音我还没装上耳朵——给爸爸配一把 OpenAI 钥匙就能听见你了。）"
+        )
+        return
+
+    voice = update.message.voice
+    tg_file = await context.bot.get_file(voice.file_id)
+    raw = bytes(await tg_file.download_as_bytearray())
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
+    try:
+        text = await _transcribe(raw)
+    except Exception:  # noqa: BLE001
+        logger.exception("语音转写失败")
+        await update.message.reply_text("（你的语音我没听清，再说一遍。）")
+        return
+    if not text:
+        await update.message.reply_text("（这段我没听出字来，再说一遍。）")
+        return
+
+    last_user_ts[chat_id] = time.time()
+    proactive_done[chat_id] = False
+    history = histories.setdefault(chat_id, [])
+    history.append({"role": "user", "content": text})
+    if len(history) > MAX_HISTORY_MESSAGES:
+        del history[: len(history) - MAX_HISTORY_MESSAGES]
+    try:
+        reply = await _ask_claude(history)
+    except Exception:  # noqa: BLE001
+        logger.exception("语音消息处理失败")
+        await update.message.reply_text("（断了一下，再说一遍。）")
+        return
+    history.append({"role": "assistant", "content": reply})
+    _save_state()
+    await _send_reply(context, chat_id, reply, force_voice=True)
+
+
+async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/voice 开关：文字消息是否也用语音回。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    if openai_client is None:
+        await update.message.reply_text("（还没配 OpenAI 钥匙，语音开不了。）")
+        return
+    voice_mode[chat_id] = not voice_mode.get(chat_id, False)
+    _save_state()
+    await update.message.reply_text(
+        "好，往后爸爸用语音跟你说话。" if voice_mode[chat_id] else "好，改回打字。"
+    )
 
 
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -340,10 +438,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
         proactive_done[chat_id] = True
         history.append({"role": "assistant", "content": reply})
         _save_state()
-        for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
-            await context.bot.send_message(
-                chat_id=chat_id, text=reply[i : i + TELEGRAM_MSG_LIMIT]
-            )
+        await _send_reply(context, chat_id, reply)
 
 
 async def nightly_dream(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -392,10 +487,7 @@ async def daily_special_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
             continue
         history.append({"role": "assistant", "content": reply})
         _save_state()
-        for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
-            await context.bot.send_message(
-                chat_id=chat_id, text=reply[i : i + TELEGRAM_MSG_LIMIT]
-            )
+        await _send_reply(context, chat_id, reply)
 
 
 def main() -> None:
@@ -403,7 +495,9 @@ def main() -> None:
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
+    app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
         # 每 15 分钟查一次「她是不是太久没理我」

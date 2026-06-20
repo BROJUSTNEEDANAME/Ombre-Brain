@@ -8,3 +8,6 @@ python-telegram-bot[job-queue]>=21.0
 
 # Claude API 客户端（MCP connector）
 anthropic>=0.49.0
+
+# 语音：OpenAI Whisper(听) + TTS(说)
+openai>=1.0.0
