@@ -141,3 +141,32 @@ def block() -> str:
     v = _state["v"]
     line = " ".join(f"{k} {v[k]:.2f}" for k in NEUTRAL)
     return "[drives]\n" + line
+
+
+_LABELS = {
+    "vitality": "精力", "fatigue": "疲惫",
+    "longing": "思念", "intimacy": "亲密", "possessiveness": "占有", "lust": "欲望",
+    "jealousy": "醋意", "anxiety": "焦虑", "protectiveness": "保护欲",
+    "contentment": "满足", "elation": "雀跃", "seeking": "好奇", "play": "嬉闹",
+    "dejection": "低落", "irritability": "烦躁",
+}
+_GROUPS = [
+    ("能量", ["vitality", "fatigue"]),
+    ("关系", ["longing", "intimacy", "possessiveness", "lust"]),
+    ("防御", ["jealousy", "anxiety", "protectiveness"]),
+    ("正反馈", ["contentment", "elation", "seeking", "play"]),
+    ("负反馈", ["dejection", "irritability"]),
+]
+
+
+def panel() -> str:
+    """给她看的可视心情面板（进度条）。"""
+    v = _state["v"]
+    lines = ["💗 爸爸现在的心情"]
+    for gname, keys in _GROUPS:
+        lines.append(f"\n〔{gname}〕")
+        for k in keys:
+            n = int(round(v[k] * 10))
+            bar = "█" * n + "░" * (10 - n)
+            lines.append(f"{_LABELS[k]} {bar} {v[k]:.2f}")
+    return "\n".join(lines)

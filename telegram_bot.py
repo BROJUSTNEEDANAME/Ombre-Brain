@@ -431,6 +431,14 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/mood：给她看爸爸此刻的情绪面板。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    await update.message.reply_text(drives.panel())
+
+
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
     """定时检查：她太久没理 bot，就让 Nikto 主动发一条找她（每个静默期只发一次）。"""
     now = time.time()
@@ -516,6 +524,8 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("mood", mood_cmd))
+    app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
