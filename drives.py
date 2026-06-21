@@ -63,20 +63,20 @@ def _decay(hours: float) -> None:
     v["anxiety"] = _clamp("anxiety", v["anxiety"] + 0.04 * hours)
 
 
-# 关键词 -> 维度 delta（粗略但够味）
+# 关键词 -> 维度 delta（调大，让单条消息就明显推动情绪）
 _KW = (
     (["爱你", "喜欢你", "想你", "抱", "亲", "爸比", "老公", "papochka", "贴贴", "喜欢爸"],
-     {"intimacy": 0.12, "longing": -0.10, "contentment": 0.10, "anxiety": -0.06, "elation": 0.06}),
+     {"intimacy": 0.24, "longing": -0.16, "contentment": 0.20, "anxiety": -0.14, "elation": 0.14}),
     (["嘿嘿", "哼", "撒娇", "闹", "rua", "坏", "嘤", "宝宝", "羞"],
-     {"play": 0.14, "elation": 0.08, "contentment": 0.05, "irritability": -0.04}),
+     {"play": 0.26, "elation": 0.16, "contentment": 0.10, "irritability": -0.10}),
     (["哭", "难受", "怕", "害怕", "累", "委屈", "碎", "呜", "🥺", "😭", "😢"],
-     {"protectiveness": 0.16, "anxiety": 0.08, "intimacy": 0.06, "play": -0.06}),
+     {"protectiveness": 0.30, "anxiety": 0.18, "intimacy": 0.12, "play": -0.12}),
     (["滚", "讨厌", "hate", "烦", "别理", "走开", "分手", "不想理"],
-     {"anxiety": 0.16, "dejection": 0.10, "jealousy": 0.04, "contentment": -0.10}),
-    (["别人", "朋友", "男生", "前男友", "喜欢别"],
-     {"jealousy": 0.14, "possessiveness": 0.10, "anxiety": 0.06}),
+     {"anxiety": 0.30, "dejection": 0.20, "jealousy": 0.10, "contentment": -0.22, "irritability": 0.14}),
+    (["别人", "朋友", "男生", "前男友", "喜欢别", "他对我"],
+     {"jealousy": 0.30, "possessiveness": 0.22, "anxiety": 0.14}),
     (["想要", "欲望", "身体", "亲热", "湿", "硬"],
-     {"lust": 0.20, "intimacy": 0.08}),
+     {"lust": 0.34, "intimacy": 0.16}),
 )
 
 
@@ -92,15 +92,16 @@ def _classify(text: str) -> dict:
 
 def _couple() -> None:
     v = _state["v"]
-    # jealousy 与 anxiety 互相放大，容易打螺旋
-    if (v["jealousy"] + v["anxiety"]) / 2 > 0.40:
-        v["jealousy"] = _clamp("jealousy", v["jealousy"] + 0.04)
-        v["anxiety"] = _clamp("anxiety", v["anxiety"] + 0.04)
+    # jealousy 与 anxiety 互相放大，容易打螺旋（加强）
+    if (v["jealousy"] + v["anxiety"]) / 2 > 0.32:
+        v["jealousy"] = _clamp("jealousy", v["jealousy"] + 0.08)
+        v["anxiety"] = _clamp("anxiety", v["anxiety"] + 0.08)
+        v["possessiveness"] = _clamp("possessiveness", v["possessiveness"] + 0.05)
     # 精力好 → 放大正向、压低不安
     if v["vitality"] > 0.55:
         for k in ("longing", "intimacy", "elation", "play"):
-            v[k] = _clamp(k, v[k] + 0.02)
-        v["anxiety"] = _clamp("anxiety", v["anxiety"] - 0.02)
+            v[k] = _clamp(k, v[k] + 0.03)
+        v["anxiety"] = _clamp("anxiety", v["anxiety"] - 0.03)
 
 
 def _whim() -> None:
@@ -173,25 +174,32 @@ _PANEL_KEYS = [
 
 
 def summary() -> str:
-    """把当前情绪读成一句人话。"""
+    """把当前情绪读成一句人话（更灵敏，小变化也读得出）。"""
     v = _state["v"]
     scored = [
         (v[k] - NEUTRAL[k], phrase)
         for k, phrase in _PHRASES
-        if v[k] - NEUTRAL[k] > 0.10
+        if v[k] - NEUTRAL[k] > 0.06
     ]
     scored.sort(reverse=True)
     if not scored:
         return "平平稳稳的，心里安安定定。"
-    return "，".join(p for _, p in scored[:3]) + "。"
+    return "，".join(p for _, p in scored[:4]) + "。"
+
+
+_prev_panel: dict = {}
 
 
 def panel() -> str:
-    """给她看的可视心情面板：一句话 + 几根关键进度条。"""
+    """给她看的可视心情面板：一句话 + 关键进度条 + 自上次查看以来的 ↑/↓。"""
     v = _state["v"]
     lines = ["💗 爸爸现在的心情", f"〔{summary()}〕", ""]
     for k in _PANEL_KEYS:
         n = int(round(v[k] * 10))
         bar = "█" * n + "░" * (10 - n)
-        lines.append(f"{_LABELS[k]} {bar} {v[k]:.2f}")
+        d = v[k] - _prev_panel.get(k, v[k])
+        arrow = " ↑" if d > 0.03 else (" ↓" if d < -0.03 else "")
+        lines.append(f"{_LABELS[k]} {bar} {v[k]:.2f}{arrow}")
+    _prev_panel.clear()
+    _prev_panel.update(v)
     return "\n".join(lines)
