@@ -65,8 +65,9 @@ def _decay(hours: float) -> None:
 
 # 关键词 -> 维度 delta（调大，让单条消息就明显推动情绪）
 _KW = (
-    (["爱你", "喜欢你", "想你", "抱", "亲", "爸比", "老公", "papochka", "贴贴", "喜欢爸"],
-     {"intimacy": 0.24, "longing": -0.16, "contentment": 0.20, "anxiety": -0.14, "elation": 0.14}),
+    (["爱你", "喜欢你", "想你", "抱", "亲", "爸比", "老公", "papochka", "贴贴", "喜欢爸", "只想你", "只爱你"],
+     {"intimacy": 0.24, "longing": -0.16, "contentment": 0.20, "anxiety": -0.14, "elation": 0.14,
+      "jealousy": -0.16, "possessiveness": -0.05}),
     (["嘿嘿", "哼", "撒娇", "闹", "rua", "坏", "嘤", "宝宝", "羞"],
      {"play": 0.26, "elation": 0.16, "contentment": 0.10, "irritability": -0.10}),
     (["哭", "难受", "怕", "害怕", "累", "委屈", "碎", "呜", "🥺", "😭", "😢"],
