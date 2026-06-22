@@ -594,8 +594,12 @@ def main() -> None:
         app.job_queue.run_daily(nightly_dream, time=dtime(hour=4, tzinfo=USER_TZ))
         # 每天上午 10 点查一次，只在特殊日子主动找她
         app.job_queue.run_daily(daily_special_checkin, time=dtime(hour=10, tzinfo=USER_TZ))
-        # 每天早上 7:40 早安：天气 + 穿搭 + 幸运色 + 今日课表
-        app.job_queue.run_daily(morning_greeting, time=dtime(hour=7, minute=40, tzinfo=USER_TZ))
+        # 每天早安（时间用 OMBRE_MORNING_HM 调，默认 06:50，要比她起得早）
+        try:
+            _mh, _mm = (int(x) for x in os.environ.get("OMBRE_MORNING_HM", "06:50").split(":"))
+        except Exception:  # noqa: BLE001
+            _mh, _mm = 6, 50
+        app.job_queue.run_daily(morning_greeting, time=dtime(hour=_mh, minute=_mm, tzinfo=USER_TZ))
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
