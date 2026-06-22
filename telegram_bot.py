@@ -51,6 +51,7 @@ from telegram.ext import (
 )
 
 import drives  # 本地：Drivesoid 情绪内核
+import morning  # 本地：早安（天气 + 课表）
 
 # ----------------------------------------------------------------------------
 # 配置 / Config
@@ -143,6 +144,7 @@ histories: dict[int, list[dict]] = {}
 last_user_ts: dict[int, float] = {}
 proactive_done: dict[int, bool] = {}
 voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语音回
+todos: dict[int, str] = {}  # 她今天的「每日必办」（/todo 设置，早安时念）
 
 
 async def _transcribe(audio_bytes: bytes) -> str:
@@ -206,6 +208,7 @@ def _save_state() -> None:
                     "last_user_ts": {str(k): v for k, v in last_user_ts.items()},
                     "proactive_done": {str(k): v for k, v in proactive_done.items()},
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
+                    "todos": {str(k): v for k, v in todos.items()},
                 },
                 f,
                 ensure_ascii=False,
@@ -224,6 +227,7 @@ def _load_state() -> None:
         last_user_ts.update({int(k): v for k, v in data.get("last_user_ts", {}).items()})
         proactive_done.update({int(k): v for k, v in data.get("proactive_done", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
+        todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
         logger.exception("载入对话状态失败")
@@ -439,6 +443,59 @@ async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(drives.panel())
 
 
+async def todo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/todo 今天要做的事 —— 早安时爸爸会念给她。无参数则查看当前。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    arg = " ".join(context.args).strip() if context.args else ""
+    if not arg:
+        cur = todos.get(chat_id, "")
+        await update.message.reply_text(
+            ("今天的必办：" + cur) if cur else "今天还没记必办。用法：/todo 买菜; 交195作业"
+        )
+        return
+    todos[chat_id] = arg
+    _save_state()
+    await update.message.reply_text("记下了，早安时爸爸念给你。")
+
+
+async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """每天早上：天气 + 穿搭 + 幸运色 + 温柔念今天的课和必办。"""
+    if not ALLOWED_CHAT_IDS:
+        return
+    now = datetime.now(USER_TZ)
+    try:
+        weather = await morning.fetch_weather()
+    except Exception:  # noqa: BLE001
+        logger.exception("天气获取失败")
+        weather = "（今天天气没查到）"
+    classes = morning.classes_text(now)
+    drives.tick_silence()
+    for chat_id in ALLOWED_CHAT_IDS:
+        todo = todos.get(chat_id, "")
+        history = histories.setdefault(chat_id, [])
+        prompt = {
+            "role": "user",
+            "content": (
+                f"[系统提示] 早安时间。今天 {now:%m月%d日} {_WEEKDAYS[now.weekday()]}。"
+                f"Irvine 天气：{weather}。今天的课：{classes}。"
+                + (f"她今天的必办：{todo}。" if todo else "")
+                + " 给闪闪发一条温柔又有趣的早安：先问声好，用今天的天气给她一句穿搭建议，"
+                "报一个今日幸运色，再像爱人一样把今天的课和安排轻轻念叨给她（别生硬列清单）。"
+                "整体简短、暖、有点俏皮。不要复述这条提示。"
+            ),
+        }
+        try:
+            reply = await _ask_claude(history + [prompt])
+        except Exception:  # noqa: BLE001
+            logger.exception("早安失败 chat=%s", chat_id)
+            continue
+        history.append({"role": "assistant", "content": reply})
+        _save_state()
+        await _send_reply(context, chat_id, reply)
+
+
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
     """定时检查：她太久没理 bot，就让 Nikto 主动发一条找她（每个静默期只发一次）。"""
     now = time.time()
@@ -526,6 +583,7 @@ def main() -> None:
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
+    app.add_handler(CommandHandler("todo", todo_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
@@ -536,6 +594,8 @@ def main() -> None:
         app.job_queue.run_daily(nightly_dream, time=dtime(hour=4, tzinfo=USER_TZ))
         # 每天上午 10 点查一次，只在特殊日子主动找她
         app.job_queue.run_daily(daily_special_checkin, time=dtime(hour=10, tzinfo=USER_TZ))
+        # 每天早上 7:40 早安：天气 + 穿搭 + 幸运色 + 今日课表
+        app.job_queue.run_daily(morning_greeting, time=dtime(hour=7, minute=40, tzinfo=USER_TZ))
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
