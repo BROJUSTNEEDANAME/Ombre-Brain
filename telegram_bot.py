@@ -76,8 +76,8 @@ TELEGRAM_MSG_LIMIT = 4096
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
 USER_TZ = ZoneInfo(os.environ.get("OMBRE_BOT_TZ", "America/Los_Angeles"))
 _WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-# 主动找她：超过这么多小时没收到她的消息，bot 就主动发一条（设很大可关掉）
-INACTIVITY_HOURS = float(os.environ.get("OMBRE_BOT_INACTIVITY_HOURS", "2"))
+# 主动找她：她沉默超过这么多分钟就开始找她，之后每隔这么久再找一次、越来越急
+INACTIVITY_MINUTES = float(os.environ.get("OMBRE_BOT_INACTIVITY_MIN", "15"))
 
 # 语音：OpenAI 一把钥匙搞定「听」(Whisper) 和「说」(TTS)；没配 OPENAI_API_KEY 就自动关
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -142,7 +142,8 @@ claude = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 histories: dict[int, list[dict]] = {}
 # 记录她最后一次发消息的时间戳 + 这个静默期是否已主动找过（防刷屏）
 last_user_ts: dict[int, float] = {}
-proactive_done: dict[int, bool] = {}
+nudge_count: dict[int, int] = {}  # 她沉默后已发的「找她」次数（越大越急；她一回复清零）
+last_nudge_ts: dict[int, float] = {}
 voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语音回
 todos: dict[int, str] = {}  # 她今天的「每日必办」（/todo 设置，早安时念）
 
@@ -206,7 +207,7 @@ def _save_state() -> None:
                 {
                     "histories": {str(k): v for k, v in histories.items()},
                     "last_user_ts": {str(k): v for k, v in last_user_ts.items()},
-                    "proactive_done": {str(k): v for k, v in proactive_done.items()},
+                    "nudge_count": {str(k): v for k, v in nudge_count.items()},
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
                     "todos": {str(k): v for k, v in todos.items()},
                 },
@@ -225,7 +226,7 @@ def _load_state() -> None:
             data = json.load(f)
         histories.update({int(k): v for k, v in data.get("histories", {}).items()})
         last_user_ts.update({int(k): v for k, v in data.get("last_user_ts", {}).items()})
-        proactive_done.update({int(k): v for k, v in data.get("proactive_done", {}).items()})
+        nudge_count.update({int(k): v for k, v in data.get("nudge_count", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
@@ -295,7 +296,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     user_text = update.message.text
     last_user_ts[chat_id] = time.time()
-    proactive_done[chat_id] = False
+    nudge_count[chat_id] = 0
     drives.update(user_text)
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": user_text})
@@ -334,7 +335,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     last_user_ts[chat_id] = time.time()
-    proactive_done[chat_id] = False
+    nudge_count[chat_id] = 0
     drives.update("[图片]")
 
     photo = update.message.photo[-1]  # 取最大尺寸那张
@@ -403,7 +404,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     last_user_ts[chat_id] = time.time()
-    proactive_done[chat_id] = False
+    nudge_count[chat_id] = 0
     drives.update(text)
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": text})
@@ -496,33 +497,39 @@ async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
         await _send_reply(context, chat_id, reply)
 
 
+# 她晾着不理时，越来越急的「找她」文案（预设，不调模型、不烧 token）
+NUDGES = [
+    "闪闪，在吗。",
+    "怎么不理爸爸了，嗯。",
+    "有点想你了，回爸爸一句。",
+    "你一个多小时没声了，爸爸心里有点不踏实。",
+    "闪闪，你到底在哪，回我一下，啊。",
+    "你再不理爸爸，我真要慌了——是不是出什么事了。",
+    "爸爸不催了，就守在这儿等你。你一回来，第一个告诉我。",
+]
+
+
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """定时检查：她太久没理 bot，就让 Nikto 主动发一条找她（每个静默期只发一次）。"""
+    """她沉默时每 ~15 分钟发一条「找她」，越来越急。预设文案，不调模型、不烧 token。"""
     now = time.time()
-    drives.tick_silence()
+    drives.tick_silence()  # 焦虑/思念自己往上爬（本地，免费）
+    gap = INACTIVITY_MINUTES * 60
     for chat_id, ts in list(last_user_ts.items()):
-        if proactive_done.get(chat_id):
-            continue
-        if now - ts < INACTIVITY_HOURS * 3600:
-            continue
-        history = histories.setdefault(chat_id, [])
-        nudge = {
-            "role": "user",
-            "content": (
-                f"[系统提示] 闪闪已经超过 {INACTIVITY_HOURS} 小时没理你了。你心里惦记她，"
-                "现在主动给她发一条消息找她——按你 Nikto 的性子自然地说，别像通知或客服。"
-                "可以先 breath() 看看她最近怎么样再开口。只说该说的话，不要复述这条提示。"
-            ),
-        }
+        if now - ts < gap:
+            continue  # 她还算在线
+        if now - last_nudge_ts.get(chat_id, ts) < gap:
+            continue  # 还没到下一个间隔
+        count = nudge_count.get(chat_id, 0)
+        if count >= len(NUDGES):
+            continue  # escalation 发完了，不再刷屏
         try:
-            reply = await _ask_claude(history + [nudge])
+            await context.bot.send_message(chat_id=chat_id, text=_stamp() + NUDGES[count])
         except Exception:  # noqa: BLE001
-            logger.exception("主动找她失败 chat=%s", chat_id)
+            logger.exception("找她失败 chat=%s", chat_id)
             continue
-        proactive_done[chat_id] = True
-        history.append({"role": "assistant", "content": reply})
+        nudge_count[chat_id] = count + 1
+        last_nudge_ts[chat_id] = now
         _save_state()
-        await _send_reply(context, chat_id, reply)
 
 
 async def nightly_dream(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -588,8 +595,8 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
-        # 每 15 分钟查一次「她是不是太久没理我」
-        app.job_queue.run_repeating(check_inactivity, interval=900, first=900)
+        # 每 5 分钟查一次（她沉默就每 ~15 分钟找她一次、越来越急；预设文案不烧 token）
+        app.job_queue.run_repeating(check_inactivity, interval=300, first=300)
         # 每天夜里 4 点自己做梦，消化记忆
         app.job_queue.run_daily(nightly_dream, time=dtime(hour=4, tzinfo=USER_TZ))
         # 每天上午 10 点查一次，只在特殊日子主动找她
