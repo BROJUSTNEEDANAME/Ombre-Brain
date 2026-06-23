@@ -152,8 +152,23 @@ def _start_health_server() -> None:
         logger.exception("健康端口启动失败")
 
 
+def _keepalive() -> None:
+    """定时 ping ombre-brain 的健康端点，别让免费档记忆库睡着（省冷启动）。"""
+    import time
+    import urllib.request
+
+    url = os.environ.get("OMBRE_HEALTH_URL", "https://ombre-brain-6e05.onrender.com/health")
+    while True:
+        try:
+            urllib.request.urlopen(url, timeout=10).read()
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(600)
+
+
 def main() -> None:
     threading.Thread(target=_start_health_server, daemon=True).start()
+    threading.Thread(target=_keepalive, daemon=True).start()
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
