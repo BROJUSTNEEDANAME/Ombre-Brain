@@ -60,9 +60,14 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         cmd += ["--resume", session_id]
     cmd.append(message)
     try:
+        env = os.environ.copy()
+        _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        if _tok:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=CC_WORKDIR,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
