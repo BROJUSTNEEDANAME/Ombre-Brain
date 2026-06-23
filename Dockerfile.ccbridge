@@ -26,4 +26,9 @@ RUN pip install --no-cache-dir -r requirements-telegram.txt
 # 整个仓库（含 CLAUDE.md + .mcp.json，让 cc 自动加载人设和 ombre-brain 记忆）
 COPY . .
 
+# 用普通用户运行：claude 的 --dangerously-skip-permissions 不允许 root 跑
+RUN useradd -m -u 10001 appuser && chown -R appuser:appuser /app
+USER appuser
+ENV HOME=/home/appuser
+
 CMD ["python", "cc_bridge.py"]
