@@ -22,6 +22,8 @@ import asyncio
 import json
 import logging
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -125,7 +127,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
 
 
+def _start_health_server() -> None:
+    """绑一个极小的 HTTP 端口，好让 Render 检测到端口、放行 Live。"""
+    port = int(os.environ.get("PORT", "10000"))
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):  # 静音
+            pass
+
+    try:
+        HTTPServer(("0.0.0.0", port), _H).serve_forever()
+    except Exception:  # noqa: BLE001
+        logger.exception("健康端口启动失败")
+
+
 def main() -> None:
+    threading.Thread(target=_start_health_server, daemon=True).start()
     app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
