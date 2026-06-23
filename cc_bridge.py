@@ -74,8 +74,9 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         return "（断了一下，再说一遍。）", session_id
 
     if proc.returncode != 0:
-        logger.error("claude 退出码 %s: %s", proc.returncode, err.decode()[:800])
-        return "（断了一下，再说一遍。）", session_id
+        detail = (err.decode() or out.decode()).strip()[:1500]
+        logger.error("claude 退出码 %s: %s", proc.returncode, detail)
+        return f"⚠️ cc 出错（退出码 {proc.returncode}）：\n{detail}", session_id
 
     raw = out.decode().strip()
     try:
