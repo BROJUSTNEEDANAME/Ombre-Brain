@@ -77,7 +77,8 @@
     color: var(--text);
     transition: background .5s ease, color .5s ease;
     display: flex; flex-direction: column;
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden;
+    position: fixed; top: 0; left: 0; width: 100%; height: 100dvh; overflow: hidden;
+    transform: translateY(0);
     -webkit-font-smoothing: antialiased;
   }
   /* 纸纹颗粒：高级感的底子 */
@@ -194,7 +195,7 @@
   .soon { font-size: 11px; color: var(--text-faint); letter-spacing: .5px; margin-top: 14px; text-align: center; }
 
   /* ---------- 底栏 ---------- */
-  .nav { flex: 0 0 auto; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 9px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  .nav { flex: 0 0 auto; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 5px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
   .nav button { border: none; background: none; cursor: pointer; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-faint); font-size: 10.5px; letter-spacing: .5px; transition: color .2s; padding: 3px 0; }
   .nav button svg { width: 23px; height: 23px; transition: transform .2s; }
   .nav button.on { color: var(--accent); }
@@ -382,23 +383,23 @@
   </nav>
 
 <script>
-  // ---------- 键盘处理：平时纹丝不动贴满屏；只有键盘弹出才抬输入框、藏底栏 ----------
+  // ---------- 键盘处理：让界面精确贴住「键盘上方的可见区域」，不自己叠加位移 ----------
   let baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  function onVV(){
+  function trackVV(){
     const vv = window.visualViewport; if(!vv) return;
-    const keyboard = Math.max(0, baseH - vv.height);   // 相对开机时的基线算键盘高度
-    const open = keyboard > 120;
-    document.body.classList.toggle('kb-open', open);
-    document.body.style.bottom = open ? keyboard + 'px' : '0px';
+    document.body.style.height = vv.height + 'px';
+    document.body.style.transform = 'translateY(' + vv.offsetTop + 'px)';
+    document.body.classList.toggle('kb-open', (baseH - vv.height) > 120); // 键盘开了就藏底栏
   }
   if(window.visualViewport){
-    window.visualViewport.addEventListener('resize', onVV);
-    window.visualViewport.addEventListener('scroll', onVV);
+    window.visualViewport.addEventListener('resize', trackVV);
+    window.visualViewport.addEventListener('scroll', trackVV);
   }
   window.addEventListener('orientationchange', () => setTimeout(() => {
-    document.body.classList.remove('kb-open'); document.body.style.bottom='0px';
     baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    trackVV();
   }, 250));
+  trackVV();
 
   // ---------- 临时调试条（定位后会删掉） ----------
   const dbg = document.getElementById('dbg'), saProbe = document.getElementById('saProbe');
