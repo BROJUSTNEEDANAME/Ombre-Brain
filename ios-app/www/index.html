@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>家</title>
+<style>
+  html,body{height:100%;margin:0;background:#14110D;color:#EBE2D3;
+    font-family:-apple-system,BlinkMacSystemFont,'Noto Serif SC',sans-serif;
+    display:flex;align-items:center;justify-content:center;text-align:center}
+  .box{padding:24px}
+  .o{font-size:48px;color:#D98A52}
+  p{color:#998C77;font-size:14px;line-height:1.8;margin-top:12px}
+</style>
+</head>
+<body>
+  <!-- 这是离线兜底页。正常情况下 app 会直接加载线上版（capacitor.config 里的 server.url）。
+       只有线上连不上（比如服务器在冷启动）时，才会短暂看到这个。 -->
+  <div class="box">
+    <div class="o">◐</div>
+    <p>正在连接……<br>服务器刚醒可能要等几十秒，稍候。</p>
+  </div>
+</body>
+</html>

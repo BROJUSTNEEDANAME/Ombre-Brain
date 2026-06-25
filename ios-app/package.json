@@ -1,0 +1,13 @@
+{
+  "name": "ombre-home-ios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "把『家』包成原生 iOS app 的外壳（加载线上版，无浏览器痕迹）",
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0"
+  }
+}

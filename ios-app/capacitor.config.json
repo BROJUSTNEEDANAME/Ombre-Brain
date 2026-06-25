@@ -1,0 +1,14 @@
+{
+  "appId": "com.shanshan.ombrehome",
+  "appName": "家",
+  "webDir": "www",
+  "server": {
+    "url": "https://ombre-brain-6e05.onrender.com/home",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#14110D",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

@@ -19,3 +19,8 @@ import_state.json
 # Telegram bot 运行态（各部署自己在磁盘生成，不入库）
 drives.json
 telegram_state.json
+
+# Capacitor / iOS 原生壳（在 Mac 上生成，不入库）
+ios-app/node_modules/
+ios-app/ios/
+ios-app/package-lock.json
