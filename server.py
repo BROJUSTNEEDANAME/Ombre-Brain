@@ -1376,6 +1376,19 @@ async def dashboard(request):
         return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
 
 
+@mcp.custom_route("/home", methods=["GET"])
+async def home_app(request):
+    """Serve the mobile 家 app (chat + gacha + bingo). Add to Home Screen to install as PWA."""
+    from starlette.responses import HTMLResponse
+    import os
+    home_path = os.path.join(os.path.dirname(__file__), "home.html")
+    try:
+        with open(home_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
+
+
 @mcp.custom_route("/api/config", methods=["GET"])
 async def api_config_get(request):
     """Get current runtime config (safe fields only, API key masked)."""
