@@ -77,7 +77,7 @@
     color: var(--text);
     transition: background .5s ease, color .5s ease;
     display: flex; flex-direction: column;
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden;
+    position: fixed; top: 0; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom) * -1); overflow: hidden;
     -webkit-font-smoothing: antialiased;
   }
   /* 纸纹颗粒：高级感的底子 */
