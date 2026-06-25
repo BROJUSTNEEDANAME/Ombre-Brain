@@ -241,6 +241,27 @@
   .cat { font-size: 11.5px; color: var(--text-dim); }
   .gc-quote { font-size: 15.5px; font-weight: 600; line-height: 1.5; color: var(--text); }
   .gc-sub { font-size: 12.5px; color: var(--text-dim); font-style: italic; margin-top: 6px; line-height: 1.5; }
+
+  /* ---------- 任务 Bingo ---------- */
+  .bhead { display: flex; align-items: flex-end; justify-content: space-between; margin: 4px 2px 6px; }
+  .bhead .t { font-family: 'Cormorant Garamond','Noto Serif SC',serif; font-size: 22px; font-weight: 600; }
+  .bhead .d { font-size: 12.5px; color: var(--text-dim); }
+  .bsub { font-size: 12px; color: var(--text-faint); margin: 0 2px 14px; letter-spacing: .3px; }
+  .bstat { font-size: 12.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); padding: 7px 15px; border-radius: 20px; display: inline-block; margin-bottom: 16px; }
+  .bgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .cell { position: relative; aspect-ratio: 1; border: 1.5px solid var(--hair); background: var(--surface); border-radius: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; cursor: pointer; text-align: center; padding: 6px; box-shadow: var(--sh-soft); transition: transform .15s, background .25s, border-color .25s, box-shadow .25s; }
+  .cell:active { transform: scale(.93); }
+  .cell .ce { font-size: 25px; transition: transform .25s; }
+  .cell .cl { font-size: 11.5px; color: var(--text-dim); line-height: 1.3; transition: color .25s; }
+  .cell.done { background: var(--bubble-me); border-color: transparent; }
+  .cell.done .cl { color: rgba(255,255,255,.94); }
+  .cell.done .ce { transform: scale(1.12); }
+  .cell.line { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
+  .cell .chk { position: absolute; top: 7px; right: 9px; font-size: 12px; color: #fff; opacity: 0; transform: scale(.5); transition: .25s; }
+  .cell.done .chk { opacity: 1; transform: scale(1); }
+
+  .btoast { position: fixed; left: 50%; top: 26%; transform: translateX(-50%) translateY(0); background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; padding: 11px 22px; border-radius: 22px; font-size: 14.5px; font-weight: 500; box-shadow: var(--sh-float); opacity: 0; pointer-events: none; transition: opacity .3s, transform .3s; z-index: 60; }
+  .btoast.show { opacity: 1; transform: translateX(-50%) translateY(-12px); }
 </style>
 </head>
 <body>
@@ -279,24 +300,35 @@
           <div class="date" id="gdate"></div>
         </div>
 
-        <div class="pools">
-          <button class="pool" data-pool="0"><div class="pt">常驻池</div><div class="ps">Nikto日常</div></button>
-          <button class="pool" data-pool="1"><div class="pt">春季限定</div><div class="ps">🌸 花与熊</div></button>
-          <button class="pool on" data-pool="2"><div class="pt">和風限定</div><div class="ps">🎍 熊と狐</div></button>
-        </div>
-
-        <div class="gcard drawcard">
-          <div class="dtitle" id="drawTitle">🎍 和風限定 · 熊と狐</div>
-          <div class="kao" id="kao">ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ</div>
-          <div class="draws">
-            <button class="draw" data-n="1"><b>单抽</b><span>1 券</span></button>
-            <button class="draw" data-n="5"><b>五连</b><span>5 券</span></button>
-            <button class="draw on" data-n="10"><b>十连</b><span>10 券</span></button>
+        <!-- 扭蛋视图 -->
+        <div id="gachaView">
+          <div class="pools">
+            <button class="pool" data-pool="0"><div class="pt">常驻池</div><div class="ps">Nikto日常</div></button>
+            <button class="pool" data-pool="1"><div class="pt">春季限定</div><div class="ps">🌸 花与熊</div></button>
+            <button class="pool on" data-pool="2"><div class="pt">和風限定</div><div class="ps">🎍 熊と狐</div></button>
           </div>
-          <div class="dnote">SSR 不重复 · 集齐解锁信物</div>
+
+          <div class="gcard drawcard">
+            <div class="dtitle" id="drawTitle">🎍 和風限定 · 熊と狐</div>
+            <div class="kao" id="kao">ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ</div>
+            <div class="draws">
+              <button class="draw" data-n="1"><b>单抽</b><span>1 券</span></button>
+              <button class="draw" data-n="5"><b>五连</b><span>5 券</span></button>
+              <button class="draw on" data-n="10"><b>十连</b><span>10 券</span></button>
+            </div>
+            <div class="dnote">SSR 不重复 · 集齐解锁信物</div>
+          </div>
+
+          <div class="cards" id="cardList"></div>
         </div>
 
-        <div class="cards" id="cardList"></div>
+        <!-- 任务（bingo）视图 -->
+        <div id="bingoView" style="display:none">
+          <div class="bhead"><span class="t">今天的 3×3</span><span class="d" id="bdate"></span></div>
+          <div class="bsub">点掉做到的小事，连成一条线就有扭蛋券。每天一张，过期不补。</div>
+          <div class="bstat" id="bstat">连成 0 条线 · 得 0 券</div>
+          <div class="bgrid" id="bgrid"></div>
+        </div>
       </div>
     </section>
 
@@ -335,6 +367,8 @@
     <textarea id="input" rows="1" placeholder="跟我说点什么。"></textarea>
     <button class="send" id="sendBtn"></button>
   </div>
+
+  <div class="btoast" id="btoast"></div>
 
   <!-- 底栏 -->
   <nav class="nav" id="nav">
@@ -503,9 +537,15 @@
 
   const ticketNum=document.getElementById('ticketNum'), cardList=document.getElementById('cardList'),
         drawTitle=document.getElementById('drawTitle'), kaoEl=document.getElementById('kao'), dnote=document.querySelector('.dnote');
-  let tickets=18, cur=2;
+  let cur=2;
+  let tickets = parseInt(localStorage.getItem('tickets'));
+  if(isNaN(tickets)) tickets=18;
+  function setTickets(v){ tickets=v; ticketNum.textContent=v; localStorage.setItem('tickets',v); }
+  setTickets(tickets);
   // 日期
-  (function(){ const d=new Date(), w='日一二三四五六'[d.getDay()]; document.getElementById('gdate').textContent=(d.getMonth()+1)+'/'+d.getDate()+' 周'+w; })();
+  const today=new Date(), W='日一二三四五六'[today.getDay()], dateKey=today.getFullYear()+'-'+(today.getMonth()+1)+'-'+today.getDate();
+  document.getElementById('gdate').textContent=(today.getMonth()+1)+'/'+today.getDate()+' 周'+W;
+  document.getElementById('bdate').textContent=(today.getMonth()+1)+'/'+today.getDate()+' 周'+W;
 
   function renderCards(){
     cardList.innerHTML='';
@@ -528,7 +568,7 @@
   function draw(n,btn){
     document.querySelectorAll('.draw').forEach(b=>b.classList.toggle('on', b===btn));
     if(tickets<n){ flashNote('扭蛋券不够了'); return; }
-    tickets-=n; ticketNum.textContent=tickets;
+    setTickets(tickets-n);
     const deck=POOLS[cur].deck;
     for(let k=0;k<n;k++) POOLS[cur].got.unshift({...deck[Math.floor(Math.random()*deck.length)]});
     renderCards();
@@ -536,10 +576,54 @@
   }
   document.querySelectorAll('.draw').forEach(b=>b.onclick=()=>draw(+b.dataset.n,b));
 
-  // 顶部小标签：日历跳到日历页，其余先只高亮
+  // ---------- 任务 Bingo ----------
+  const TASKS = [
+    {e:'💊',l:'吃铁剂'}, {e:'💧',l:'喝水'}, {e:'🍚',l:'好好吃饭'},
+    {e:'📌',l:'碰一下DDL'}, {e:'☀️',l:'出门走走'}, {e:'💬',l:'跟我说句话'},
+    {e:'🧸',l:'理理小尼'}, {e:'🛁',l:'洗漱'}, {e:'🌙',l:'别熬夜'}
+  ];
+  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const bgrid=document.getElementById('bgrid'), bstat=document.getElementById('bstat'), btoast=document.getElementById('btoast');
+  let bDone=new Array(9).fill(false), bReward=[];
+  (function loadBingo(){
+    try{ const s=JSON.parse(localStorage.getItem('bingo_'+dateKey)); if(s){ bDone=s.done; bReward=s.reward; } }catch(e){}
+  })();
+  function saveBingo(){ localStorage.setItem('bingo_'+dateKey, JSON.stringify({done:bDone,reward:bReward})); }
+  function toast(t){ btoast.textContent=t; btoast.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>btoast.classList.remove('show'),1500); }
+
+  function buildGrid(){
+    bgrid.innerHTML='';
+    TASKS.forEach((t,i)=>{
+      const c=document.createElement('div'); c.className='cell'; c.dataset.i=i;
+      c.innerHTML=`<span class="chk">✓</span><span class="ce">${t.e}</span><span class="cl">${t.l}</span>`;
+      c.onclick=()=>toggleCell(i);
+      bgrid.appendChild(c);
+    });
+  }
+  function lineCells(){ const set=new Set(); bReward.forEach(li=>LINES[li].forEach(i=>set.add(i))); return set; }
+  function renderBingo(){
+    const lc=lineCells();
+    [...bgrid.children].forEach((c,i)=>{ c.classList.toggle('done',bDone[i]); c.classList.toggle('line',lc.has(i)); });
+    bstat.textContent=`连成 ${bReward.length} 条线 · 得 ${bReward.length} 券`;
+  }
+  function toggleCell(i){
+    bDone[i]=!bDone[i];
+    let earned=0;
+    LINES.forEach((line,li)=>{ if(!bReward.includes(li) && line.every(x=>bDone[x])){ bReward.push(li); earned++; } });
+    if(earned){ setTickets(tickets+earned); toast('连成一线 · +'+earned+' 扭蛋券'); }
+    saveBingo(); renderBingo();
+  }
+  buildGrid(); renderBingo();
+
+  // ---------- 顶部标签切换 ----------
+  const gachaView=document.getElementById('gachaView'), bingoView=document.getElementById('bingoView');
   document.querySelectorAll('.gtabs button').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.gtab;
+    if(k==='cal'){ go('cal'); return; }
     document.querySelectorAll('.gtabs button').forEach(x=>x.classList.toggle('on',x===b));
-    if(b.dataset.gtab==='cal') go('cal');
+    if(k==='bingo'){ gachaView.style.display='none'; bingoView.style.display='block'; }
+    else if(k==='gacha'){ gachaView.style.display='block'; bingoView.style.display='none'; }
+    else { gachaView.style.display='block'; bingoView.style.display='none'; flashNote('这页还在施工'); document.querySelector('.gtabs button[data-gtab="gacha"]').classList.add('on'); b.classList.remove('on'); }
   });
 
   setPool(2);
