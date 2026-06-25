@@ -267,6 +267,8 @@
 </style>
 </head>
 <body>
+  <div id="dbg" style="position:fixed;top:env(safe-area-inset-top);left:0;right:0;z-index:99999;background:rgba(0,0,0,.78);color:#5f5;font:11px/1.45 ui-monospace,Menlo,monospace;padding:4px 8px;white-space:pre;pointer-events:none"></div>
+  <div id="saProbe" style="position:fixed;bottom:0;left:0;width:0;height:env(safe-area-inset-bottom);pointer-events:none"></div>
   <div class="header">
     <div class="avatar">◐</div>
     <div class="who">
@@ -397,6 +399,21 @@
     document.body.classList.remove('kb-open'); document.body.style.bottom='0px';
     baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
   }, 250));
+
+  // ---------- 临时调试条（定位后会删掉） ----------
+  const dbg = document.getElementById('dbg'), saProbe = document.getElementById('saProbe');
+  function updDbg(){
+    const vv = window.visualViewport;
+    const sa = Math.round(saProbe.getBoundingClientRect().height);
+    const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    dbg.textContent =
+      'iH ' + window.innerHeight + '   vvH ' + (vv?Math.round(vv.height):'-') + '   vvTop ' + (vv?Math.round(vv.offsetTop):'-') + '\n' +
+      'base ' + Math.round(baseH) + '   body.bottom ' + (document.body.style.bottom||'0px') + '   saB ' + sa + '\n' +
+      'kbCalc ' + (vv?Math.round(Math.max(0, baseH - vv.height)):'-') + '   standalone ' + standalone;
+  }
+  setInterval(updDbg, 300);
+  if(window.visualViewport){ window.visualViewport.addEventListener('resize', updDbg); window.visualViewport.addEventListener('scroll', updDbg); }
+  updDbg();
 
   // ---------- 线性图标库（高级感靠它，不用 emoji） ----------
   const I = {
