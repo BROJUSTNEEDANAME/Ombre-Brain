@@ -79,7 +79,7 @@
     color: var(--text);
     transition: background .5s ease, color .5s ease;
     display: flex; flex-direction: column;
-    position: fixed; top: 0; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom) * -1); overflow: hidden;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden;
     -webkit-font-smoothing: antialiased;
   }
   /* 纸纹颗粒：高级感的底子 */
@@ -417,10 +417,13 @@
     const vv = window.visualViewport;
     const sa = Math.round(saProbe.getBoundingClientRect().height);
     const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    const nav = document.getElementById('nav');
+    const navB = nav ? Math.round(nav.getBoundingClientRect().bottom) : '-';
+    const bodyH = Math.round(document.body.getBoundingClientRect().height);
     dbg.textContent =
-      'iH ' + window.innerHeight + '   vvH ' + (vv?Math.round(vv.height):'-') + '   vvTop ' + (vv?Math.round(vv.offsetTop):'-') + '\n' +
-      'base ' + Math.round(baseH) + '   body.bottom ' + (document.body.style.bottom||'0px') + '   saB ' + sa + '\n' +
-      'kbCalc ' + (vv?Math.round(Math.max(0, baseH - vv.height)):'-') + '   standalone ' + standalone;
+      'iH ' + window.innerHeight + '   vvH ' + (vv?Math.round(vv.height):'-') + '   saB ' + sa + '\n' +
+      'bodyH ' + bodyH + '   navBottom ' + navB + '   (差 ' + (typeof navB==='number'? window.innerHeight-navB : '-') + ')\n' +
+      'standalone ' + standalone;
   }
   setInterval(updDbg, 300);
   if(window.visualViewport){ window.visualViewport.addEventListener('resize', updDbg); window.visualViewport.addEventListener('scroll', updDbg); }
