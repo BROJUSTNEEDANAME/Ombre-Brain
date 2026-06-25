@@ -68,18 +68,17 @@
     --sh-float: 0 12px 40px rgba(0, 0, 0, 0.55);
     --grain: 0.05;
   }
+  /* 布局尺寸变量：JS 实时填，给各固定层用 */
+  :root { --app-h: 100vh; --kb: 0px; --header-h: 0px; --nav-h: 0px; --composer-h: 0px; --attach-h: 0px; }
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; overscroll-behavior: none; }
-  /* 给最外层也铺背景：物理底部 home 指示条那块即使没被盖到也不会露黑 */
-  html { background: var(--bg); transition: background .5s ease; }
+  html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg); }
+  html { transition: background .5s ease; }
   body {
+    position: fixed; inset: 0; width: 100%; height: var(--app-h); margin: 0; padding: 0; overflow: hidden; display: block;
     font-family: 'Inter', 'Noto Serif SC', -apple-system, BlinkMacSystemFont, sans-serif;
-    background: var(--bg);
-    color: var(--text);
+    background: var(--bg); color: var(--text);
     transition: background .5s ease, color .5s ease;
-    display: flex; flex-direction: column;
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden;
     -webkit-font-smoothing: antialiased;
   }
   /* 纸纹颗粒：高级感的底子 */
@@ -93,11 +92,10 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
     mix-blend-mode: overlay;
   }
-  .header, .pages, .composer, .nav, .attach-sheet { position: relative; z-index: 2; }
 
   /* ---------- 顶栏 ---------- */
   .header {
-    flex: 0 0 auto;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 40;
     padding: calc(env(safe-area-inset-top) + 14px) 20px 13px;
     display: flex; align-items: center; gap: 13px;
     background: var(--header-bg);
@@ -124,7 +122,12 @@
   .icon-btn svg { width: 19px; height: 19px; }
 
   /* ---------- 页面 ---------- */
-  .pages { flex: 1; position: relative; overflow: hidden; }
+  .pages {
+    position: fixed; left: 0; right: 0; z-index: 2;
+    top: var(--header-h);
+    bottom: calc(var(--nav-h) + var(--composer-h) + var(--attach-h) + var(--kb));
+    overflow: hidden;
+  }
   .page { position: absolute; inset: 0; display: none; flex-direction: column; animation: fade .4s ease; }
   .page.active { display: flex; }
   @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
@@ -156,7 +159,9 @@
 
   /* ---------- 附件抽屉 ---------- */
   .attach-sheet {
-    flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    position: fixed; left: 0; right: 0; z-index: 35;
+    bottom: calc(var(--nav-h) + var(--composer-h) + var(--kb));
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
     padding: 0 16px; max-height: 0; overflow: hidden; opacity: 0;
     transition: max-height .3s ease, opacity .25s ease, padding .3s ease;
     background: var(--nav-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -169,7 +174,7 @@
   .att span { font-size: 11.5px; color: var(--text-dim); }
 
   /* 输入栏 */
-  .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 10px; background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  .composer { position: fixed; left: 0; right: 0; z-index: 35; bottom: calc(var(--nav-h) + var(--kb)); display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 10px; background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
   .composer .plus { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); display: grid; place-items: center; cursor: pointer; transition: transform .25s, color .2s; box-shadow: var(--sh-soft); }
   .composer .plus svg { width: 22px; height: 22px; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
   .composer .plus.rot svg { transform: rotate(45deg); color: var(--accent); }
@@ -195,8 +200,8 @@
   .ticket { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--accent); background: var(--accent-soft); padding: 6px 14px; border-radius: 20px; margin-top: 4px; }
   .soon { font-size: 11px; color: var(--text-faint); letter-spacing: .5px; margin-top: 14px; text-align: center; }
 
-  /* ---------- 底栏 ---------- */
-  .nav { flex: 0 0 auto; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 2px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  /* ---------- 底栏（死钉屏幕物理最底，安全区只作内部 padding） ---------- */
+  .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 36; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 2px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
   .nav button { border: none; background: none; cursor: pointer; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-faint); font-size: 10.5px; letter-spacing: .5px; transition: color .2s; padding: 3px 0; }
   .nav button svg { width: 23px; height: 23px; transition: transform .2s; }
   .nav button.on { color: var(--accent); }
@@ -384,32 +389,54 @@
   </nav>
 
 <script>
-  // ---------- 键盘处理：让界面精确贴住「键盘上方的可见区域」，不自己叠加位移 ----------
-  let baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  function trackVV(){
-    const vv = window.visualViewport; if(!vv) return;
-    const kbOpen = (baseH - vv.height) > 120;
-    if(kbOpen){
-      // 键盘弹出：精确贴住键盘上方那块可见区
-      document.body.style.height = vv.height + 'px';
-      document.body.style.transform = 'translateY(' + vv.offsetTop + 'px)';
-      document.body.classList.add('kb-open');
-    } else {
-      // 平时：交给 CSS 的 top:0/bottom:0 铺满整块屏幕（含底部 home 指示条区域）
-      document.body.style.height = '';
-      document.body.style.transform = 'translateY(0)';
-      document.body.classList.remove('kb-open');
-    }
+  // ---------- 固定分层布局：各层独立 fixed，底栏死钉物理底；键盘弹出只抬输入框 ----------
+  const root = document.documentElement;
+  let baseVisualHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+
+  function visibleHeight(el) {
+    if (!el || getComputedStyle(el).display === 'none') return 0;
+    return Math.round(el.getBoundingClientRect().height);
   }
-  if(window.visualViewport){
-    window.visualViewport.addEventListener('resize', trackVV);
-    window.visualViewport.addEventListener('scroll', trackVV);
+
+  function syncFixedLayout() {
+    const vv = window.visualViewport;
+    const layoutH = window.innerHeight;
+    const vvH = vv ? vv.height : layoutH;
+    const vvTop = vv ? vv.offsetTop : 0;
+
+    const kb = Math.max(0, Math.round(layoutH - vvH - vvTop));
+    const kbOpen = kb > 120 || baseVisualHeight - vvH > 120;
+
+    document.body.classList.toggle('kb-open', kbOpen);
+    root.style.setProperty('--app-h', `${layoutH}px`);
+    root.style.setProperty('--kb', kbOpen ? `${kb}px` : '0px');
+
+    requestAnimationFrame(() => {
+      const header = document.querySelector('.header');
+      const nav = document.getElementById('nav');
+      const composer = document.getElementById('composer');
+      const attachSheet = document.getElementById('attachSheet');
+
+      root.style.setProperty('--header-h', `${visibleHeight(header)}px`);
+      root.style.setProperty('--nav-h', kbOpen ? '0px' : `${visibleHeight(nav)}px`);
+      root.style.setProperty('--composer-h', `${visibleHeight(composer)}px`);
+      root.style.setProperty('--attach-h', `${visibleHeight(attachSheet)}px`);
+    });
   }
-  window.addEventListener('orientationchange', () => setTimeout(() => {
-    baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    trackVV();
-  }, 250));
-  trackVV();
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncFixedLayout);
+    window.visualViewport.addEventListener('scroll', syncFixedLayout);
+  }
+  window.addEventListener('resize', syncFixedLayout);
+  window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+      baseVisualHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      syncFixedLayout();
+    }, 300);
+  });
+  new ResizeObserver(syncFixedLayout).observe(document.body);
+  syncFixedLayout();
 
   // ---------- 临时调试条（定位后会删掉） ----------
   const dbg = document.getElementById('dbg'), saProbe = document.getElementById('saProbe');
@@ -484,14 +511,15 @@
     composer.classList.toggle('hidden', !chat);
     attachSheet.classList.toggle('hidden', !chat);
     if(!chat) closeAttach();
+    syncFixedLayout();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
 
   // ---------- 附件抽屉 ----------
   const plusBtn = document.getElementById('plusBtn');
   let attachOpen = false;
-  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); plusBtn.classList.remove('rot'); }
-  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); if(attachOpen) toBottom(); };
+  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); plusBtn.classList.remove('rot'); syncFixedLayout(); }
+  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); syncFixedLayout(); if(attachOpen) toBottom(); };
   attachSheet.querySelectorAll('.att').forEach(a => a.onclick = () => {
     const map={photo:'照片',file:'文件',voice:'语音'};
     closeAttach();
@@ -553,7 +581,7 @@
     }, 1800+Math.random()*2200);
   }
   sendBtn.onclick=send;
-  input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; });
+  input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; syncFixedLayout(); });
   input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
 
   addMsg('you','回来了。');
