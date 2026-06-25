@@ -71,6 +71,8 @@
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; overscroll-behavior: none; }
+  /* 给最外层也铺背景：物理底部 home 指示条那块即使没被盖到也不会露黑 */
+  html { background: var(--bg); transition: background .5s ease; }
   body {
     font-family: 'Inter', 'Noto Serif SC', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
