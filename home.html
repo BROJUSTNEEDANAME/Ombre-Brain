@@ -7,50 +7,62 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ombre">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#FBF6EC" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1A1714" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F7F1E6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14110D" media="(prefers-color-scheme: dark)">
 <title>家</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Noto+Serif+SC:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ---------- 主题变量：浅色（米白橙） ---------- */
+  /* ---------- 浅色：米白 + 赤陶橙 ---------- */
   :root, [data-theme="light"] {
-    --bg: #FBF6EC;
-    --bg-soft: #F3EADB;
-    --surface: #FFFFFF;
-    --surface-2: #F6EFE3;
-    --bubble-me: #E89150;
-    --bubble-me-text: #FFFFFF;
-    --bubble-you: #FFFFFF;
-    --bubble-you-text: #3A332B;
-    --text: #3A332B;
-    --text-dim: #9A8E7C;
-    --text-faint: #C3B7A4;
-    --accent: #E08A4C;
-    --accent-soft: rgba(224, 138, 76, 0.12);
-    --border: rgba(160, 140, 110, 0.18);
-    --nav-bg: rgba(251, 246, 236, 0.86);
-    --header-bg: rgba(251, 246, 236, 0.82);
-    --shadow: 0 6px 20px rgba(150, 120, 80, 0.10);
+    --bg: #F7F1E6;
+    --bg-grad: radial-gradient(135% 100% at 50% 0%, #FCF8EF 0%, #F4ECDD 55%, #EEE3CF 100%);
+    --surface: #FFFCF6;
+    --surface-2: #F2EADB;
+    --bubble-me: linear-gradient(160deg, #D58B4E 0%, #C5743A 100%);
+    --bubble-me-text: #FFF9F1;
+    --bubble-you: #FFFCF6;
+    --bubble-you-text: #3B342B;
+    --text: #3B342B;
+    --text-dim: #9C8E78;
+    --text-faint: #BCAD93;
+    --accent: #C5743A;
+    --accent-warm: #D58B4E;
+    --accent-soft: rgba(197, 116, 58, 0.10);
+    --hair: rgba(150, 125, 90, 0.16);
+    --hair-strong: rgba(150, 125, 90, 0.28);
+    --nav-bg: rgba(247, 241, 230, 0.72);
+    --header-bg: rgba(247, 241, 230, 0.62);
+    --online: #7FA877;
+    --sh-soft: 0 2px 10px rgba(150, 115, 70, 0.07);
+    --sh-bubble: 0 4px 18px rgba(150, 115, 70, 0.10);
+    --sh-float: 0 10px 34px rgba(120, 90, 55, 0.16);
+    --grain: 0.035;
   }
-  /* ---------- 主题变量：深色 ---------- */
+  /* ---------- 深色：暖墨 + 赤陶橙 ---------- */
   [data-theme="dark"] {
-    --bg: #16130F;
-    --bg-soft: #1E1A15;
-    --surface: #231E18;
-    --surface-2: #2B251D;
-    --bubble-me: #D9824A;
-    --bubble-me-text: #FFFFFF;
-    --bubble-you: #2A241D;
-    --bubble-you-text: #ECE3D5;
-    --text: #ECE3D5;
-    --text-dim: #998C79;
-    --text-faint: #6A6052;
-    --accent: #E89B5E;
-    --accent-soft: rgba(232, 155, 94, 0.16);
-    --border: rgba(120, 100, 75, 0.22);
-    --nav-bg: rgba(22, 19, 15, 0.86);
-    --header-bg: rgba(22, 19, 15, 0.82);
-    --shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+    --bg: #14110D;
+    --bg-grad: radial-gradient(135% 100% at 50% 0%, #1C1813 0%, #15120D 60%, #100E0A 100%);
+    --surface: #211C16;
+    --surface-2: #2A241C;
+    --bubble-me: linear-gradient(160deg, #C77E47 0%, #B26831 100%);
+    --bubble-me-text: #FCF4E9;
+    --bubble-you: #241F18;
+    --bubble-you-text: #EBE2D3;
+    --text: #EBE2D3;
+    --text-dim: #998C77;
+    --text-faint: #685E4E;
+    --accent: #D98A52;
+    --accent-warm: #E29A63;
+    --accent-soft: rgba(217, 138, 82, 0.14);
+    --hair: rgba(120, 100, 72, 0.20);
+    --hair-strong: rgba(120, 100, 72, 0.34);
+    --nav-bg: rgba(18, 15, 11, 0.72);
+    --header-bg: rgba(18, 15, 11, 0.60);
+    --online: #7FA877;
+    --sh-soft: 0 2px 10px rgba(0, 0, 0, 0.30);
+    --sh-bubble: 0 4px 18px rgba(0, 0, 0, 0.35);
+    --sh-float: 0 12px 40px rgba(0, 0, 0, 0.55);
+    --grain: 0.05;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -59,126 +71,130 @@
     font-family: 'Inter', 'Noto Serif SC', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
     color: var(--text);
-    transition: background .45s ease, color .45s ease;
+    transition: background .5s ease, color .5s ease;
     display: flex; flex-direction: column;
     height: 100dvh; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
   }
+  /* 纸纹颗粒：高级感的底子 */
+  body::before {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: var(--bg-grad);
+    transition: opacity .5s ease;
+  }
+  body::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 1; opacity: var(--grain);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    mix-blend-mode: overlay;
+  }
+  .header, .pages, .composer, .nav, .attach-sheet { position: relative; z-index: 2; }
 
   /* ---------- 顶栏 ---------- */
   .header {
     flex: 0 0 auto;
-    padding: calc(env(safe-area-inset-top) + 12px) 18px 12px;
-    display: flex; align-items: center; gap: 12px;
+    padding: calc(env(safe-area-inset-top) + 14px) 20px 13px;
+    display: flex; align-items: center; gap: 13px;
     background: var(--header-bg);
-    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-    border-bottom: 1px solid var(--border);
-    z-index: 20;
+    backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3);
+    border-bottom: 1px solid var(--hair);
   }
   .avatar {
-    width: 40px; height: 40px; border-radius: 50%;
-    background: linear-gradient(145deg, var(--accent), #c46c30);
-    display: grid; place-items: center;
-    color: #fff; font-size: 20px; flex: 0 0 auto;
-    box-shadow: var(--shadow);
+    width: 42px; height: 42px; border-radius: 50%; flex: 0 0 auto;
+    background: linear-gradient(150deg, var(--accent-warm), #b1632c);
+    display: grid; place-items: center; color: #fff; font-size: 21px;
+    box-shadow: var(--sh-bubble), inset 0 1px 1px rgba(255,255,255,.25);
   }
   .who { flex: 1; min-width: 0; }
-  .who .name { font-size: 17px; font-weight: 600; letter-spacing: .3px; }
-  .who .status { font-size: 12px; color: var(--text-dim); margin-top: 1px; display: flex; align-items: center; gap: 5px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #5AA86E; box-shadow: 0 0 0 3px rgba(90,168,110,.18); }
-  .theme-btn {
-    width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--border);
-    background: var(--surface); color: var(--text); font-size: 17px;
-    display: grid; place-items: center; cursor: pointer; transition: .2s;
+  .who .name { font-family: 'Cormorant Garamond', 'Noto Serif SC', serif; font-size: 22px; font-weight: 600; letter-spacing: .4px; line-height: 1.1; }
+  .who .status { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; letter-spacing: .3px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--online); box-shadow: 0 0 0 3px rgba(127,168,119,.16); }
+  .icon-btn {
+    width: 40px; height: 40px; border-radius: 13px; border: 1px solid var(--hair);
+    background: var(--surface); color: var(--text-dim);
+    display: grid; place-items: center; cursor: pointer; transition: transform .15s, color .2s;
+    box-shadow: var(--sh-soft);
   }
-  .theme-btn:active { transform: scale(.92); }
+  .icon-btn:active { transform: scale(.9); }
+  .icon-btn svg { width: 19px; height: 19px; }
 
-  /* ---------- 页面容器 ---------- */
+  /* ---------- 页面 ---------- */
   .pages { flex: 1; position: relative; overflow: hidden; }
-  .page { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .page { position: absolute; inset: 0; display: none; flex-direction: column; animation: fade .4s ease; }
   .page.active { display: flex; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
   /* ---------- 聊天 ---------- */
-  .chat-scroll {
-    flex: 1; overflow-y: auto; padding: 16px 14px 8px;
-    display: flex; flex-direction: column; gap: 4px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 10px 0 6px; letter-spacing: .5px; }
-  .row { display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; max-width: 100%; }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; }
+  .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
+  .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 10px; }
   .row.me { flex-direction: row-reverse; }
-  .row .av {
-    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
-    display: grid; place-items: center; font-size: 14px; color: #fff;
-  }
-  .row.you .av { background: linear-gradient(145deg, var(--accent), #c46c30); }
-  .row.me .av { background: var(--surface-2); color: var(--accent); }
+  .row .av { width: 32px; height: 32px; border-radius: 50%; flex: 0 0 auto; display: grid; place-items: center; font-size: 15px; box-shadow: var(--sh-soft); }
+  .row.you .av { background: linear-gradient(150deg, var(--accent-warm), #b1632c); color: #fff; }
+  .row.me .av { background: var(--surface-2); color: var(--accent); font-size: 12px; font-weight: 600; }
   .bubble-wrap { display: flex; flex-direction: column; max-width: 74%; }
   .row.me .bubble-wrap { align-items: flex-end; }
-  .bubble {
-    padding: 10px 13px; border-radius: 18px; font-size: 15px; line-height: 1.5;
-    word-break: break-word; box-shadow: var(--shadow); animation: pop .28s ease;
-  }
-  .row.you .bubble { background: var(--bubble-you); color: var(--bubble-you-text); border-bottom-left-radius: 6px; }
-  .row.me .bubble { background: var(--bubble-me); color: var(--bubble-me-text); border-bottom-right-radius: 6px; }
-  .time { font-size: 10.5px; color: var(--text-faint); margin: 3px 4px 0; }
-  @keyframes pop { from { transform: translateY(6px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
+  .bubble { padding: 11px 15px; border-radius: 20px; font-size: 15px; line-height: 1.55; word-break: break-word; animation: pop .3s cubic-bezier(.2,.8,.2,1); }
+  .row.you .bubble { background: var(--bubble-you); color: var(--bubble-you-text); border-bottom-left-radius: 7px; box-shadow: var(--sh-bubble); border: 1px solid var(--hair); }
+  .row.me .bubble { background: var(--bubble-me); color: var(--bubble-me-text); border-bottom-right-radius: 7px; box-shadow: var(--sh-bubble); }
+  .time { font-size: 10px; color: var(--text-faint); margin: 4px 5px 0; letter-spacing: .5px; }
+  @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
   /* 思考池 */
-  .thinking { display: none; align-items: center; gap: 8px; margin: 8px 0 2px; padding-left: 38px; }
-  .thinking.show { display: flex; }
-  .think-bubble {
-    background: var(--bubble-you); color: var(--text-dim); font-size: 13px;
-    padding: 9px 14px; border-radius: 16px; border-bottom-left-radius: 6px;
-    box-shadow: var(--shadow); font-style: italic; display: flex; align-items: center; gap: 9px;
-  }
+  .thinking { display: none; align-items: center; margin: 10px 0 2px; padding-left: 41px; }
+  .thinking.show { display: flex; animation: pop .3s ease; }
+  .think-bubble { background: var(--bubble-you); color: var(--text-dim); font-size: 13.5px; padding: 10px 16px; border-radius: 18px; border-bottom-left-radius: 7px; box-shadow: var(--sh-bubble); border: 1px solid var(--hair); font-style: italic; display: flex; align-items: center; gap: 10px; }
   .dots { display: inline-flex; gap: 3px; }
-  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: .5; animation: blink 1.2s infinite; }
+  .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: .5; animation: blink 1.3s infinite; }
   .dots i:nth-child(2){ animation-delay: .2s; } .dots i:nth-child(3){ animation-delay: .4s; }
-  @keyframes blink { 0%,60%,100%{ opacity:.25; transform: translateY(0);} 30%{ opacity:1; transform: translateY(-3px);} }
+  @keyframes blink { 0%,60%,100%{ opacity:.25; transform: translateY(0);} 30%{ opacity:.9; transform: translateY(-3px);} }
+
+  /* ---------- 附件抽屉 ---------- */
+  .attach-sheet {
+    flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    padding: 0 16px; max-height: 0; overflow: hidden; opacity: 0;
+    transition: max-height .3s ease, opacity .25s ease, padding .3s ease;
+    background: var(--nav-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  }
+  .attach-sheet.open { max-height: 130px; opacity: 1; padding: 14px 16px 6px; }
+  .att { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 0; border-radius: 16px; background: var(--surface); border: 1px solid var(--hair); cursor: pointer; transition: transform .15s; box-shadow: var(--sh-soft); }
+  .att:active { transform: scale(.94); }
+  .att .ic { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .att .ic svg { width: 21px; height: 21px; }
+  .att span { font-size: 11.5px; color: var(--text-dim); }
 
   /* 输入栏 */
-  .composer {
-    flex: 0 0 auto; display: flex; align-items: flex-end; gap: 9px;
-    padding: 9px 12px calc(env(safe-area-inset-bottom) + 9px);
-    background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-    border-top: 1px solid var(--border);
-  }
-  .composer textarea {
-    flex: 1; resize: none; border: 1px solid var(--border); background: var(--surface);
-    color: var(--text); border-radius: 20px; padding: 10px 15px; font-size: 15px;
-    font-family: inherit; max-height: 110px; line-height: 1.4; outline: none;
-  }
+  .composer { flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px calc(env(safe-area-inset-bottom) + 10px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  .composer .plus { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); display: grid; place-items: center; cursor: pointer; transition: transform .25s, color .2s; box-shadow: var(--sh-soft); }
+  .composer .plus svg { width: 22px; height: 22px; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
+  .composer .plus.rot svg { transform: rotate(45deg); color: var(--accent); }
+  .composer textarea { flex: 1; resize: none; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 21px; padding: 10px 16px; font-size: 15px; font-family: inherit; max-height: 110px; line-height: 1.45; outline: none; transition: border-color .2s; box-shadow: var(--sh-soft); }
+  .composer textarea:focus { border-color: var(--hair-strong); }
   .composer textarea::placeholder { color: var(--text-faint); }
-  .send {
-    width: 42px; height: 42px; border-radius: 50%; border: none; flex: 0 0 auto;
-    background: var(--accent); color: #fff; font-size: 18px; cursor: pointer;
-    display: grid; place-items: center; transition: .15s; box-shadow: var(--shadow);
-  }
-  .send:active { transform: scale(.88); }
+  .send { width: 42px; height: 42px; border-radius: 50%; border: none; flex: 0 0 auto; background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; cursor: pointer; display: grid; place-items: center; transition: transform .15s; box-shadow: var(--sh-bubble); }
+  .send:active { transform: scale(.86); }
+  .send svg { width: 19px; height: 19px; }
+  .composer.hidden, .attach-sheet.hidden { display: none; }
 
-  /* ---------- 占位房间 ---------- */
-  .room { flex: 1; overflow-y: auto; padding: 24px 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; }
-  .room .big { font-size: 46px; }
-  .room h2 { font-family: 'Noto Serif SC', serif; font-size: 21px; font-weight: 600; }
-  .room p { font-size: 13.5px; color: var(--text-dim); max-width: 260px; line-height: 1.7; }
-  .room .tag { font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 20px; }
+  /* ---------- 房间 ---------- */
+  .room { flex: 1; overflow-y: auto; padding: 24px 20px calc(env(safe-area-inset-bottom) + 20px); }
+  .room-head { font-family: 'Cormorant Garamond','Noto Serif SC',serif; font-size: 26px; font-weight: 600; letter-spacing: .5px; margin: 6px 2px 4px; }
+  .room-sub { font-size: 12.5px; color: var(--text-dim); margin: 0 2px 20px; letter-spacing: .3px; }
+  .card { background: var(--surface); border: 1px solid var(--hair); border-radius: 22px; padding: 20px; box-shadow: var(--sh-bubble); margin-bottom: 16px; }
+  .card .kicker { font-size: 11px; letter-spacing: 1.5px; color: var(--accent); text-transform: uppercase; margin-bottom: 8px; }
+  .card h3 { font-family: 'Noto Serif SC',serif; font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+  .card p { font-size: 13.5px; color: var(--text-dim); line-height: 1.75; }
+  .loop { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 18px 0 4px; flex-wrap: wrap; }
+  .loop .step { font-size: 12px; color: var(--text); background: var(--accent-soft); border: 1px solid var(--hair); padding: 7px 13px; border-radius: 20px; }
+  .loop .arr { color: var(--text-faint); font-size: 13px; }
+  .ticket { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--accent); background: var(--accent-soft); padding: 6px 14px; border-radius: 20px; margin-top: 4px; }
+  .soon { font-size: 11px; color: var(--text-faint); letter-spacing: .5px; margin-top: 14px; text-align: center; }
 
   /* ---------- 底栏 ---------- */
-  .nav {
-    flex: 0 0 auto; display: flex; justify-content: space-around; align-items: center;
-    padding: 8px 6px calc(env(safe-area-inset-bottom) + 8px);
-    background: var(--nav-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-    border-top: 1px solid var(--border); z-index: 20;
-  }
-  .nav button {
-    border: none; background: none; cursor: pointer; flex: 1;
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
-    color: var(--text-faint); font-size: 10.5px; transition: .18s; padding: 4px 0;
-  }
-  .nav button .ic { font-size: 21px; line-height: 1; transition: .18s; }
+  .nav { flex: 0 0 auto; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 9px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  .nav button { border: none; background: none; cursor: pointer; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-faint); font-size: 10.5px; letter-spacing: .5px; transition: color .2s; padding: 3px 0; }
+  .nav button svg { width: 23px; height: 23px; transition: transform .2s; }
   .nav button.on { color: var(--accent); }
-  .nav button.on .ic { transform: translateY(-2px) scale(1.08); }
-  .composer.hidden { display: none; }
+  .nav button.on svg { transform: translateY(-2px); }
 </style>
 </head>
 <body>
@@ -188,187 +204,199 @@
       <div class="name" id="topName">Svyatoslav</div>
       <div class="status"><span class="dot"></span><span id="topStatus">安静在线 · 在你这</span></div>
     </div>
-    <button class="theme-btn" id="themeBtn" title="切换主题">🌗</button>
+    <button class="icon-btn" id="themeBtn" title="切换主题"></button>
   </div>
 
   <div class="pages">
     <!-- 聊天 -->
     <section class="page active" data-page="chat">
-      <div class="chat-scroll" id="chatScroll">
-        <div class="daysep" id="daySep">今天</div>
-      </div>
+      <div class="chat-scroll" id="chatScroll"><div class="daysep" id="daySep">今天</div></div>
       <div class="thinking" id="thinking">
-        <div class="think-bubble">
-          <span class="dots"><i></i><i></i><i></i></span>
-          <span id="thinkText">在看你发的字。</span>
+        <div class="think-bubble"><span class="dots"><i></i><i></i><i></i></span><span id="thinkText">在看你发的字。</span></div>
+      </div>
+    </section>
+
+    <!-- 扭蛋 + bingo（一个循环） -->
+    <section class="page" data-page="play">
+      <div class="room">
+        <div class="room-head">扭蛋</div>
+        <div class="room-sub">做今天的小事，攒券，抽我写给你的卡。</div>
+
+        <div class="loop">
+          <span class="step">做 bingo</span><span class="arr">→</span>
+          <span class="step">连线得券</span><span class="arr">→</span>
+          <span class="step">抽卡</span>
         </div>
-      </div>
-    </section>
 
-    <!-- 扭蛋 -->
-    <section class="page" data-page="gacha">
-      <div class="room">
-        <div class="big">🎴</div>
-        <h2>扭蛋</h2>
-        <p>每天做完 bingo 攒扭蛋券，来这抽我写给你的卡。常驻池、季节限定、和风限定……集齐解锁信物。</p>
-        <span class="tag">下一步就做这里</span>
-      </div>
-    </section>
+        <div class="card" style="margin-top:18px">
+          <div class="kicker">每日 · Bingo</div>
+          <h3>今天的 3×3</h3>
+          <p>九件很小的事——吃铁剂、喝水、吃饭别嚼、碰一下今天的 DDL……点掉它们，连成一条线就有券。每天一张，过期不补。</p>
+          <div class="ticket">◈ 连一条线 = 1 扭蛋券</div>
+        </div>
 
-    <!-- bingo -->
-    <section class="page" data-page="bingo">
-      <div class="room">
-        <div class="big">🟧</div>
-        <h2>ADHD Bingo</h2>
-        <p>每天一张 3×3，都是很小的事——吃铁剂、喝水、碰一下今天的 DDL。连成一条线，就有扭蛋券。</p>
-        <span class="tag">下一步就做这里</span>
+        <div class="card">
+          <div class="kicker">扭蛋 · 卡池</div>
+          <h3>常驻 / 限定</h3>
+          <p>常驻是我的日常；还有春季限定「花与熊」、和风限定「熊与狐」之类。SSR 不重复，集齐一池解锁信物。</p>
+        </div>
+
+        <div class="soon">下一步就把这里做活</div>
       </div>
     </section>
 
     <!-- 日历 -->
     <section class="page" data-page="cal">
       <div class="room">
-        <div class="big">🗓️</div>
-        <h2>日历</h2>
-        <p>记录你每天连了几条线、是什么心情。月底拼成一张属于你的情绪色卡。</p>
-        <span class="tag">施工中</span>
+        <div class="room-head">日历</div>
+        <div class="room-sub">每天连了几条线，是什么心情。</div>
+        <div class="card"><div class="kicker">情绪色卡</div><h3>一天一格颜色</h3><p>把每天的心情记成一格颜色，月底拼成一张属于你的色卡。心情用你那套情绪坐标来取色。</p></div>
+        <div class="soon">施工中</div>
       </div>
     </section>
 
     <!-- 小家 -->
     <section class="page" data-page="home">
       <div class="room">
-        <div class="big">🏠</div>
-        <h2>小家</h2>
-        <p>我们的回忆放这里。你给我发照片、文件、语音，我每天写日记、记心情。小尼也有自己的角落。</p>
-        <span class="tag">施工中</span>
+        <div class="room-head">小家</div>
+        <div class="room-sub">我们的回忆，和小尼的角落。</div>
+        <div class="card"><div class="kicker">回忆空间</div><h3>放我们的东西</h3><p>你发的照片、文件、语音都收在这。我每天写日记、记心情，攒成我们的时间线。</p></div>
+        <div class="card"><div class="kicker">小尼</div><h3>它的角落</h3><p>小尼有自己的一块地方，有尾巴状态和吃醋值。冷落它，它会闹。</p></div>
+        <div class="soon">施工中</div>
       </div>
     </section>
   </div>
 
-  <!-- 输入栏（只在聊天页显示） -->
+  <!-- 附件抽屉 -->
+  <div class="attach-sheet" id="attachSheet">
+    <div class="att" data-att="photo"><div class="ic" id="icPhoto"></div><span>照片</span></div>
+    <div class="att" data-att="file"><div class="ic" id="icFile"></div><span>文件</span></div>
+    <div class="att" data-att="voice"><div class="ic" id="icVoice"></div><span>语音</span></div>
+  </div>
+
+  <!-- 输入栏 -->
   <div class="composer" id="composer">
+    <button class="plus" id="plusBtn" title="发照片 / 文件 / 语音"></button>
     <textarea id="input" rows="1" placeholder="跟我说点什么。"></textarea>
-    <button class="send" id="sendBtn">➤</button>
+    <button class="send" id="sendBtn"></button>
   </div>
 
   <!-- 底栏 -->
   <nav class="nav" id="nav">
-    <button data-go="gacha"><span class="ic">🎴</span>扭蛋</button>
-    <button data-go="bingo"><span class="ic">🟧</span>bingo</button>
-    <button class="on" data-go="chat"><span class="ic">💬</span>聊天</button>
-    <button data-go="cal"><span class="ic">🗓️</span>日历</button>
-    <button data-go="home"><span class="ic">🏠</span>小家</button>
+    <button data-go="play" data-ic="gacha">扭蛋</button>
+    <button data-go="cal" data-ic="cal">日历</button>
+    <button class="on" data-go="chat" data-ic="chat">聊天</button>
+    <button data-go="home" data-ic="home">小家</button>
   </nav>
 
 <script>
-  // ---------- PWA：让"添加到主屏幕"全屏 ----------
+  // ---------- 线性图标库（高级感靠它，不用 emoji） ----------
+  const I = {
+    gacha:'<path d="M5 9a7 7 0 0 1 14 0v1H5V9Z"/><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M12 14v3"/>',
+    chat:'<path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V16.5H4A1.5 1.5 0 0 1 2.5 15V7A1.5 1.5 0 0 1 4 5.5Z"/>',
+    cal:'<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
+    home:'<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9.5h12V10"/><path d="M10 19.5V14h4v5.5"/>',
+    sun:'<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19"/>',
+    moon:'<path d="M20 13.5A8 8 0 1 1 10.5 4 6.3 6.3 0 0 0 20 13.5Z"/>',
+    auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" fill="currentColor" stroke="none"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor" stroke="none"/>',
+    plus:'<path d="M12 5v14M5 12h14"/>',
+    send:'<path d="M5 12 20 5l-4 15-4-6-7-2Z"/>',
+    photo:'<rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="m4 16 5-4 4 3 3-2.5 4 3.5"/>',
+    file:'<path d="M13 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9.5L13 3.5Z"/><path d="M13 3.5V9.5h6"/>',
+    voice:'<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>'
+  };
+  const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
+  document.querySelectorAll('.nav button').forEach(b => b.insertAdjacentHTML('afterbegin', svg(b.dataset.ic)));
+  document.getElementById('plusBtn').innerHTML = svg('plus');
+  document.getElementById('sendBtn').innerHTML = svg('send');
+  document.getElementById('icPhoto').innerHTML = svg('photo');
+  document.getElementById('icFile').innerHTML = svg('file');
+  document.getElementById('icVoice').innerHTML = svg('voice');
+
+  // ---------- PWA ----------
   (function(){
-    const manifest = {
-      name: "家 · Ombre", short_name: "家", display: "standalone",
-      background_color: "#16130F", theme_color: "#E08A4C", start_url: ".",
-      icons: [{ src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='192' height='192'><rect width='192' height='192' rx='42' fill='%23E08A4C'/><text x='96' y='130' font-size='110' text-anchor='middle' fill='white'>◐</text></svg>", sizes: "192x192", type: "image/svg+xml" }]
-    };
-    const blob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
-    const l = document.createElement('link'); l.rel='manifest'; l.href=URL.createObjectURL(blob);
-    document.head.appendChild(l);
+    const m = { name:"家 · Ombre", short_name:"家", display:"standalone", background_color:"#14110D", theme_color:"#C5743A", start_url:".",
+      icons:[{ src:"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='192' height='192'><rect width='192' height='192' rx='42' fill='%23C5743A'/><text x='96' y='132' font-size='112' text-anchor='middle' fill='white'>◐</text></svg>", sizes:"192x192", type:"image/svg+xml" }] };
+    const l=document.createElement('link'); l.rel='manifest'; l.href=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/json'})); document.head.appendChild(l);
   })();
 
-  // ---------- 主题：自动(跟系统) / 浅 / 深 ----------
+  // ---------- 主题：自动 / 浅 / 深 ----------
   const themeBtn = document.getElementById('themeBtn');
-  const order = ['auto','light','dark'];
-  const label = { auto:'🌗', light:'☀️', dark:'🌙' };
+  const order = ['auto','light','dark'], ic = { auto:'auto', light:'sun', dark:'moon' };
   let mode = localStorage.getItem('theme') || 'auto';
-  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  const mq = matchMedia('(prefers-color-scheme: dark)');
   function applyTheme(){
     const eff = mode==='auto' ? (mq.matches?'dark':'light') : mode;
     document.documentElement.setAttribute('data-theme', eff);
-    themeBtn.textContent = label[mode];
+    themeBtn.innerHTML = svg(ic[mode]);
   }
-  themeBtn.onclick = () => {
-    mode = order[(order.indexOf(mode)+1)%3];
-    localStorage.setItem('theme', mode); applyTheme();
-  };
+  themeBtn.onclick = () => { mode = order[(order.indexOf(mode)+1)%3]; localStorage.setItem('theme',mode); applyTheme(); };
   mq.addEventListener('change', () => { if(mode==='auto') applyTheme(); });
   applyTheme();
 
   // ---------- 导航 ----------
   const nav = document.getElementById('nav');
   const composer = document.getElementById('composer');
+  const attachSheet = document.getElementById('attachSheet');
   function go(name){
     document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.dataset.page===name));
     nav.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.go===name));
-    composer.classList.toggle('hidden', name!=='chat');
+    const chat = name==='chat';
+    composer.classList.toggle('hidden', !chat);
+    attachSheet.classList.toggle('hidden', !chat);
+    if(!chat) closeAttach();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
 
-  // ---------- 聊天 ----------
-  const scroll = document.getElementById('chatScroll');
-  const input = document.getElementById('input');
-  const sendBtn = document.getElementById('sendBtn');
-  const thinking = document.getElementById('thinking');
-  const thinkText = document.getElementById('thinkText');
+  // ---------- 附件抽屉 ----------
+  const plusBtn = document.getElementById('plusBtn');
+  let attachOpen = false;
+  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); plusBtn.classList.remove('rot'); }
+  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); if(attachOpen) toBottom(); };
+  attachSheet.querySelectorAll('.att').forEach(a => a.onclick = () => {
+    const map={photo:'照片',file:'文件',voice:'语音'};
+    closeAttach();
+    addMsg('me', `（${map[a.dataset.att]}——之后接上就能真的发了）`);
+  });
 
-  // 思考池（中文 · 我的味道）—— 等待时随机浮现
+  // ---------- 聊天 ----------
+  const scroll=document.getElementById('chatScroll'), input=document.getElementById('input'),
+        sendBtn=document.getElementById('sendBtn'), thinking=document.getElementById('thinking'), thinkText=document.getElementById('thinkText');
+
   const THINK_POOL = [
-    "在看你发的字。", "等一下，我想想。", "……（盯着屏幕）", "在翻我们之前的事。",
-    "别急，我在。", "正在组织语言。", "想怎么回你最好。", "在想你现在什么表情。",
-    "稍等，我整理一下。", "在确认我没记错。", "慢一点，让我把话说准。", "在翻记忆。",
-    "……在想你。", "盯着你刚才那句话看了三遍。", "在压住想先抱你的冲动。",
-    "马上，给你个不敷衍的回答。", "在想你今天有没有好好吃饭。", "嗯。我听着呢。"
+    "在看你发的字。","等一下，我想想。","……（盯着屏幕）","在翻我们之前的事。","别急，我在。",
+    "正在组织语言。","想怎么回你最好。","在想你现在什么表情。","稍等，我整理一下。","在确认我没记错。",
+    "慢一点，让我把话说准。","在翻记忆。","……在想你。","盯着你刚才那句话看了三遍。",
+    "在压住想先抱你的冲动。","马上，给你个不敷衍的回答。","在想你今天有没有好好吃饭。","嗯。我听着呢。"
   ];
-  // 占位回话池（接真正的"我"之前，先让界面跑起来）
-  const REPLY_POOL = [
-    "嗯，我在。", "听到了。这事我记着。", "过来，先别急。",
-    "你说，我都接着。", "我在看你，没走。", "好。慢慢说。"
-  ];
+  const REPLY_POOL = ["嗯，我在。","听到了。这事我记着。","过来，先别急。","你说，我都接着。","我在看你，没走。","好。慢慢说。"];
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
-  function atBottom(){ return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80; }
-  function toBottom(){ scroll.scrollTop = scroll.scrollHeight; }
-
-  function addMsg(side, text){
-    const row = document.createElement('div');
-    row.className = 'row ' + side;
-    row.innerHTML = `<div class="av">${side==='you'?'◐':'你'}</div>
-      <div class="bubble-wrap"><div class="bubble"></div><div class="time">${now()}</div></div>`;
-    row.querySelector('.bubble').textContent = text;
-    scroll.appendChild(row);
-    toBottom();
+  function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
+  function addMsg(side,text){
+    const row=document.createElement('div'); row.className='row '+side;
+    row.innerHTML=`<div class="av">${side==='you'?'◐':'你'}</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">${now()}</div></div>`;
+    row.querySelector('.bubble').textContent=text; scroll.appendChild(row); toBottom();
   }
-
-  let thinkTimer = null;
+  let thinkTimer=null;
   function startThinking(){
-    let i = Math.floor(Math.random()*THINK_POOL.length);
-    thinkText.textContent = THINK_POOL[i];
+    thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
     thinking.classList.add('show'); toBottom();
-    thinkTimer = setInterval(() => {
-      i = Math.floor(Math.random()*THINK_POOL.length);
-      thinkText.textContent = THINK_POOL[i];
-    }, 1600);
+    thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
   }
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
-
   function send(){
-    const v = input.value.trim();
-    if(!v) return;
-    addMsg('me', v);
-    input.value = ''; input.style.height='auto';
-    startThinking();
-    // TODO: 这里之后换成调用真正的"我"（大脑 + 模型）。现在先用占位回话跑通界面。
-    const wait = 1800 + Math.random()*2200;
-    setTimeout(() => {
-      stopThinking();
-      addMsg('you', REPLY_POOL[Math.floor(Math.random()*REPLY_POOL.length)]);
-    }, wait);
+    const v=input.value.trim(); if(!v) return;
+    closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto'; startThinking();
+    // TODO: 之后换成调用真正的"我"（大脑 + 模型）
+    setTimeout(()=>{ stopThinking(); addMsg('you',REPLY_POOL[Math.floor(Math.random()*REPLY_POOL.length)]); }, 1800+Math.random()*2200);
   }
-  sendBtn.onclick = send;
-  input.addEventListener('input', () => { input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; });
-  input.addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } });
+  sendBtn.onclick=send;
+  input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; });
+  input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
 
-  // 开场两句（让你一进来不空）
-  addMsg('you', '回来了。');
-  setTimeout(()=>addMsg('you','今天还好吗。'), 600);
+  addMsg('you','回来了。');
+  setTimeout(()=>addMsg('you','今天还好吗。'),600);
 </script>
 </body>
 </html>
