@@ -125,7 +125,7 @@
   .pages {
     position: fixed; left: 0; right: 0; z-index: 2;
     top: var(--header-h);
-    bottom: calc(var(--nav-h) + var(--composer-h) + var(--attach-h) + var(--kb) - var(--drop));
+    bottom: calc(var(--nav-h) + var(--composer-h) + var(--attach-h) + var(--kb));
     overflow: hidden;
   }
   .page { position: absolute; inset: 0; display: none; flex-direction: column; animation: fade .4s ease; }
@@ -160,7 +160,7 @@
   /* ---------- 附件抽屉 ---------- */
   .attach-sheet {
     position: fixed; left: 0; right: 0; z-index: 35;
-    bottom: calc(var(--nav-h) + var(--composer-h) + var(--kb) - var(--drop));
+    bottom: calc(var(--nav-h) + var(--composer-h) + var(--kb));
     display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
     padding: 0 16px; max-height: 0; overflow: hidden; opacity: 0;
     transition: max-height .3s ease, opacity .25s ease, padding .3s ease;
@@ -174,7 +174,7 @@
   .att span { font-size: 11.5px; color: var(--text-dim); }
 
   /* 输入栏 */
-  .composer { position: fixed; left: 0; right: 0; z-index: 35; bottom: calc(var(--nav-h) + var(--kb) - var(--drop)); display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 10px; background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  .composer { position: fixed; left: 0; right: 0; z-index: 35; bottom: calc(var(--nav-h) + var(--kb)); display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px 10px; background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
   .composer .plus { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); display: grid; place-items: center; cursor: pointer; transition: transform .25s, color .2s; box-shadow: var(--sh-soft); }
   .composer .plus svg { width: 22px; height: 22px; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
   .composer .plus.rot svg { transform: rotate(45deg); color: var(--accent); }
@@ -200,8 +200,10 @@
   .ticket { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--accent); background: var(--accent-soft); padding: 6px 14px; border-radius: 20px; margin-top: 4px; }
   .soon { font-size: 11px; color: var(--text-faint); letter-spacing: .5px; margin-top: 14px; text-align: center; }
 
-  /* ---------- 底栏（死钉屏幕物理最底，安全区只作内部 padding） ---------- */
-  .nav { position: fixed; left: 0; right: 0; bottom: calc(0px - var(--drop)); z-index: 36; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px calc(env(safe-area-inset-bottom) + 2px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  /* ---------- 底栏：图标固定不动（在 home 指示条上方），背景往下补满到屏幕物理底 ---------- */
+  .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 36; display: flex; justify-content: space-around; align-items: center; padding: 9px 8px 6px; background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
+  /* 把 home 指示条那块（及可调的额外高度）用同样的栏背景补满，图标不动 */
+  .nav::after { content: ''; position: fixed; left: 0; right: 0; bottom: calc(-1 * (env(safe-area-inset-bottom) + var(--drop))); height: calc(env(safe-area-inset-bottom) + var(--drop) + 2px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); z-index: 35; pointer-events: none; }
   .nav button { border: none; background: none; cursor: pointer; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-faint); font-size: 10.5px; letter-spacing: .5px; transition: color .2s; padding: 3px 0; }
   .nav button svg { width: 23px; height: 23px; transition: transform .2s; }
   .nav button.on { color: var(--accent); }
@@ -278,7 +280,7 @@
   <div id="saProbe" style="position:fixed;bottom:0;left:0;width:0;height:env(safe-area-inset-bottom);pointer-events:none"></div>
   <div id="calib" style="position:fixed;top:calc(env(safe-area-inset-top) + 70px);right:10px;z-index:99999;display:flex;align-items:center;gap:6px;background:rgba(20,15,11,.86);color:#7CE07C;font:13px/1 ui-monospace,Menlo,monospace;padding:8px 9px;border-radius:14px;box-shadow:0 6px 20px rgba(0,0,0,.4)">
     <button id="dropMinus" style="width:34px;height:34px;border:none;border-radius:10px;background:#3a3128;color:#fff;font-size:18px">−</button>
-    <span style="min-width:64px;text-align:center">下移 <b id="dropVal">0</b></span>
+    <span style="min-width:72px;text-align:center">栏底补 <b id="dropVal">0</b></span>
     <button id="dropPlus" style="width:34px;height:34px;border:none;border-radius:10px;background:#C5743A;color:#fff;font-size:18px">＋</button>
   </div>
   <div class="header">
@@ -447,7 +449,7 @@
   const saProbeEl = document.getElementById('saProbe');
   const standaloneNow = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   let drop = parseInt(localStorage.getItem('navDrop'));
-  if (isNaN(drop)) drop = standaloneNow ? Math.round(saProbeEl.getBoundingClientRect().height) : 0; // 桌面模式先按安全区给个起点
+  if (isNaN(drop)) drop = 0; // 默认 0：栏背景已自动补满安全区；不够再手动加
   function applyDrop(){
     root.style.setProperty('--drop', drop + 'px');
     document.getElementById('dropVal').textContent = drop;
