@@ -469,7 +469,7 @@
     const navB = nav ? Math.round(nav.getBoundingClientRect().bottom) : '-';
     const bodyH = Math.round(document.body.getBoundingClientRect().height);
     dbg.textContent =
-      'iH ' + window.innerHeight + '   vvH ' + (vv?Math.round(vv.height):'-') + '   saB ' + sa + '\n' +
+      '【版本 B9】   iH ' + window.innerHeight + '   vvH ' + (vv?Math.round(vv.height):'-') + '   saB ' + sa + '\n' +
       'bodyH ' + bodyH + '   navBottom ' + navB + '   (差 ' + (typeof navB==='number'? window.innerHeight-navB : '-') + ')\n' +
       'standalone ' + standalone;
   }

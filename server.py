@@ -1382,9 +1382,14 @@ async def home_app(request):
     from starlette.responses import HTMLResponse
     import os
     home_path = os.path.join(os.path.dirname(__file__), "home.html")
+    no_cache = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
     try:
         with open(home_path, "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            return HTMLResponse(f.read(), headers=no_cache)
     except FileNotFoundError:
         return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
 
