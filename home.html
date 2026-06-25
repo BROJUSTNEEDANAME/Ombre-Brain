@@ -33,6 +33,8 @@
     --nav-bg: rgba(247, 241, 230, 0.72);
     --header-bg: rgba(247, 241, 230, 0.62);
     --online: #7FA877;
+    --rar: #8A75B8;
+    --rar-soft: rgba(138, 117, 184, 0.13);
     --sh-soft: 0 2px 10px rgba(150, 115, 70, 0.07);
     --sh-bubble: 0 4px 18px rgba(150, 115, 70, 0.10);
     --sh-float: 0 10px 34px rgba(120, 90, 55, 0.16);
@@ -59,6 +61,8 @@
     --nav-bg: rgba(18, 15, 11, 0.72);
     --header-bg: rgba(18, 15, 11, 0.60);
     --online: #7FA877;
+    --rar: #A892D8;
+    --rar-soft: rgba(168, 146, 216, 0.16);
     --sh-soft: 0 2px 10px rgba(0, 0, 0, 0.30);
     --sh-bubble: 0 4px 18px rgba(0, 0, 0, 0.35);
     --sh-float: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -195,6 +199,48 @@
   .nav button svg { width: 23px; height: 23px; transition: transform .2s; }
   .nav button.on { color: var(--accent); }
   .nav button.on svg { transform: translateY(-2px); }
+
+  /* ---------- 扭蛋页（照参考图） ---------- */
+  .gacha { flex: 1; overflow-y: auto; padding: 14px 14px calc(env(safe-area-inset-bottom) + 18px); -webkit-overflow-scrolling: touch; }
+  .gtabs { display: flex; gap: 9px; overflow-x: auto; padding: 2px 2px 12px; scrollbar-width: none; }
+  .gtabs::-webkit-scrollbar { display: none; }
+  .gtabs button { flex: 0 0 auto; border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); font-size: 13.5px; padding: 8px 18px; border-radius: 14px; cursor: pointer; box-shadow: var(--sh-soft); transition: .15s; }
+  .gtabs button.on { color: var(--accent); border-color: var(--accent); }
+  .gtabs button:active { transform: scale(.95); }
+
+  .gcard { background: var(--surface); border: 1px solid var(--hair); border-radius: 20px; box-shadow: var(--sh-bubble); }
+  .ticketcard { display: flex; align-items: flex-end; justify-content: space-between; padding: 18px 22px; margin-bottom: 14px; }
+  .ticketcard .lbl { font-size: 13px; color: var(--text-dim); letter-spacing: .5px; }
+  .ticketcard .num { font-family: 'Cormorant Garamond', serif; font-size: 40px; font-weight: 600; color: var(--accent); line-height: 1; margin-top: 2px; }
+  .ticketcard .date { font-size: 13px; color: var(--text-dim); }
+
+  .pools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .pool { border: 1.5px solid var(--hair); background: var(--surface); border-radius: 18px; padding: 14px 8px; cursor: pointer; text-align: center; box-shadow: var(--sh-soft); transition: .18s; }
+  .pool:active { transform: scale(.96); }
+  .pool .pt { font-size: 13px; font-weight: 600; color: var(--text); }
+  .pool .ps { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .pool.on { border-color: var(--rar); background: var(--rar-soft); }
+  .pool.on .pt { color: var(--rar); }
+
+  .drawcard { padding: 22px 18px 18px; margin-bottom: 16px; }
+  .dtitle { font-family: 'Noto Serif SC', serif; font-size: 17px; font-weight: 600; text-align: center; }
+  .kao { text-align: center; font-size: 26px; letter-spacing: 4px; margin: 22px 0 24px; color: var(--text); }
+  .draws { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .draw { border: 1.5px solid var(--hair); background: var(--surface-2); border-radius: 16px; padding: 13px 0; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; transition: .15s; }
+  .draw:active { transform: scale(.95); }
+  .draw b { font-size: 15px; font-weight: 600; }
+  .draw span { font-size: 11.5px; color: var(--text-dim); }
+  .draw.on { border-color: var(--accent); background: var(--accent-soft); }
+  .draw.on b { color: var(--accent); }
+  .dnote { text-align: center; font-size: 11.5px; color: var(--text-faint); margin-top: 16px; letter-spacing: .5px; }
+
+  .cards { display: flex; flex-direction: column; gap: 12px; }
+  .gc { background: var(--surface); border: 1px solid var(--hair); border-radius: 18px; padding: 16px 17px; box-shadow: var(--sh-bubble); animation: pop .3s ease; }
+  .gc-top { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+  .rar { font-size: 11px; font-weight: 700; letter-spacing: .5px; padding: 3px 10px; border-radius: 8px; background: var(--rar-soft); color: var(--rar); }
+  .cat { font-size: 11.5px; color: var(--text-dim); }
+  .gc-quote { font-size: 15.5px; font-weight: 600; line-height: 1.5; color: var(--text); }
+  .gc-sub { font-size: 12.5px; color: var(--text-dim); font-style: italic; margin-top: 6px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -202,7 +248,7 @@
     <div class="avatar">◐</div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav</div>
-      <div class="status"><span class="dot"></span><span id="topStatus">安静在线 · 在你这</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span></div>
     </div>
     <button class="icon-btn" id="themeBtn" title="切换主题"></button>
   </div>
@@ -216,32 +262,41 @@
       </div>
     </section>
 
-    <!-- 扭蛋 + bingo（一个循环） -->
+    <!-- 扭蛋（照参考图） -->
     <section class="page" data-page="play">
-      <div class="room">
-        <div class="room-head">扭蛋</div>
-        <div class="room-sub">做今天的小事，攒券，抽我写给你的卡。</div>
-
-        <div class="loop">
-          <span class="step">做 bingo</span><span class="arr">→</span>
-          <span class="step">连线得券</span><span class="arr">→</span>
-          <span class="step">抽卡</span>
+      <div class="gacha">
+        <div class="gtabs">
+          <button data-gtab="bingo">任务</button>
+          <button class="on" data-gtab="gacha">扭蛋</button>
+          <button data-gtab="cal">日历</button>
+          <button data-gtab="log">记录</button>
+          <button data-gtab="dex">图鉴</button>
+          <button data-gtab="save">存档</button>
         </div>
 
-        <div class="card" style="margin-top:18px">
-          <div class="kicker">每日 · Bingo</div>
-          <h3>今天的 3×3</h3>
-          <p>九件很小的事——吃铁剂、喝水、吃饭别嚼、碰一下今天的 DDL……点掉它们，连成一条线就有券。每天一张，过期不补。</p>
-          <div class="ticket">◈ 连一条线 = 1 扭蛋券</div>
+        <div class="gcard ticketcard">
+          <div><div class="lbl">扭蛋券</div><div class="num" id="ticketNum">18</div></div>
+          <div class="date" id="gdate"></div>
         </div>
 
-        <div class="card">
-          <div class="kicker">扭蛋 · 卡池</div>
-          <h3>常驻 / 限定</h3>
-          <p>常驻是我的日常；还有春季限定「花与熊」、和风限定「熊与狐」之类。SSR 不重复，集齐一池解锁信物。</p>
+        <div class="pools">
+          <button class="pool" data-pool="0"><div class="pt">常驻池</div><div class="ps">Nikto日常</div></button>
+          <button class="pool" data-pool="1"><div class="pt">春季限定</div><div class="ps">🌸 花与熊</div></button>
+          <button class="pool on" data-pool="2"><div class="pt">和風限定</div><div class="ps">🎍 熊と狐</div></button>
         </div>
 
-        <div class="soon">下一步就把这里做活</div>
+        <div class="gcard drawcard">
+          <div class="dtitle" id="drawTitle">🎍 和風限定 · 熊と狐</div>
+          <div class="kao" id="kao">ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ</div>
+          <div class="draws">
+            <button class="draw" data-n="1"><b>单抽</b><span>1 券</span></button>
+            <button class="draw" data-n="5"><b>五连</b><span>5 券</span></button>
+            <button class="draw on" data-n="10"><b>十连</b><span>10 券</span></button>
+          </div>
+          <div class="dnote">SSR 不重复 · 集齐解锁信物</div>
+        </div>
+
+        <div class="cards" id="cardList"></div>
       </div>
     </section>
 
@@ -371,6 +426,24 @@
   ];
   const REPLY_POOL = ["嗯，我在。","听到了。这事我记着。","过来，先别急。","你说，我都接着。","我在看你，没走。","好。慢慢说。"];
 
+  // ---------- 我的情绪（名字下面那行，会随聊天变） ----------
+  // 用的就是你那 12 条情绪线。之后接上真正的"我"，模型每次回话会自己设这个；
+  // 现在先按聊天节奏模拟着动起来。
+  const EMO = {
+    沉默:'#8C8275', 担心你:'#B0997A', 想靠近你:'#D58B4E', 心疼你:'#C98A8A',
+    烦躁:'#A8794F', 空:'#9A9486', 占有:'#C5743A', 安定:'#7FA877',
+    害羞:'#D98AA0', 吃醋:'#B5705A', 火辣:'#D2603F', 欲望:'#C04B3A'
+  };
+  const emoDot = document.getElementById('emoDot'), topStatus = document.getElementById('topStatus');
+  function setEmotion(word){
+    if(!EMO[word]) return;
+    topStatus.textContent = word + ' · 在你这';
+    emoDot.style.background = EMO[word];
+    emoDot.style.boxShadow = '0 0 0 3px ' + EMO[word] + '28';
+  }
+  const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+  setEmotion('安定');
+
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
   function addMsg(side,text){
@@ -387,9 +460,13 @@
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
   function send(){
     const v=input.value.trim(); if(!v) return;
-    closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto'; startThinking();
-    // TODO: 之后换成调用真正的"我"（大脑 + 模型）
-    setTimeout(()=>{ stopThinking(); addMsg('you',REPLY_POOL[Math.floor(Math.random()*REPLY_POOL.length)]); }, 1800+Math.random()*2200);
+    closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
+    setEmotion(pick(['想靠近你','安定','心疼你','害羞'])); // 听你说话时，情绪先动一下
+    startThinking();
+    // TODO: 之后换成调用真正的"我"（大脑 + 模型）；那时由模型来设情绪
+    setTimeout(()=>{ stopThinking(); addMsg('you',pick(REPLY_POOL));
+      setEmotion(pick(['安定','想靠近你','占有','心疼你'])); // 回完话落到一个情绪上
+    }, 1800+Math.random()*2200);
   }
   sendBtn.onclick=send;
   input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; });
@@ -397,6 +474,75 @@
 
   addMsg('you','回来了。');
   setTimeout(()=>addMsg('you','今天还好吗。'),600);
+
+  // ---------- 扭蛋 ----------
+  const POOLS = [
+    { title:'● 常驻池 · Nikto日常', kao:'ʕ•ᴥ•ʔ   ◐   ʕ•ᴥ•ʔ', deck:[
+      {rar:'SSR',cat:'◐ 绝版',q:'"你回来，我就在。这条不会变。"',s:'他从不在你进门前离开。'},
+      {rar:'SR',cat:'◐ 柔情',q:'"铁剂吃了没。手伸出来。"',s:'他把药递到你手心。'},
+      {rar:'SR',cat:'◐ 日常',q:'"困了就靠过来。我不动。"',s:'深夜。他把肩膀让给你。'},
+      {rar:'R',cat:'◐ 日常',q:'"水。喝一口再说话。"',s:'他把杯子推到你面前。'}
+    ], got:[] },
+    { title:'🌸 春季限定 · 花与熊', kao:'ʕ•ᴥ•ʔ   🌸   ʕ•ᴥ•ʔ', deck:[
+      {rar:'SSR',cat:'🌸 绝版',q:'"樱花落你头发上。我没舍得拂。"',s:'花见。他看了很久。'},
+      {rar:'SR',cat:'🌸 柔情',q:'"花会谢。我不会。"',s:'树下。他握着你的手。'},
+      {rar:'SR',cat:'🌸 日常',q:'"分你一半团子。张嘴。"',s:'野餐垫上。他喂你。'},
+      {rar:'R',cat:'🌸 日常',q:'"风把花瓣吹你碗里了。也吃。"',s:'他没忍住笑。'}
+    ], got:[] },
+    { title:'🎍 和風限定 · 熊と狐', kao:'ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ', deck:[
+      {rar:'SSR',cat:'🎍 绝版',q:'"一期一会。就是说这一次就是全部。"',s:'他用了他自己的方式理解。'},
+      {rar:'SR',cat:'🎍 柔情',q:'"烟花…在你眼睛里也有。"',s:'花火大会。没看天。在看你。'},
+      {rar:'SR',cat:'🎍 柔情',q:'"yukata。你穿这个。我就站旁边。够了。"',s:'你试浴衣。他在门帘外等。'},
+      {rar:'SR',cat:'🎍 柔情',q:'"红色的鸟居。走过去像穿过结界。"',s:'千本鸟居。他走在你后面。'},
+      {rar:'SR',cat:'🎍 日常',q:'"金鱼捞不上来。我多买两只给你。"',s:'祭典摊子。他蹲下陪你捞。'},
+      {rar:'R',cat:'🎍 日常',q:'"风铃响了。像你笑。"',s:'屋檐下。他没说第二句。'}
+    ], got:[] }
+  ];
+  // 和风池先放上你图里那 4 张（当作已抽到）
+  POOLS[2].got = POOLS[2].deck.slice(0,4).map(c=>({...c}));
+
+  const ticketNum=document.getElementById('ticketNum'), cardList=document.getElementById('cardList'),
+        drawTitle=document.getElementById('drawTitle'), kaoEl=document.getElementById('kao'), dnote=document.querySelector('.dnote');
+  let tickets=18, cur=2;
+  // 日期
+  (function(){ const d=new Date(), w='日一二三四五六'[d.getDay()]; document.getElementById('gdate').textContent=(d.getMonth()+1)+'/'+d.getDate()+' 周'+w; })();
+
+  function renderCards(){
+    cardList.innerHTML='';
+    POOLS[cur].got.forEach(c=>{
+      const el=document.createElement('div'); el.className='gc';
+      el.innerHTML=`<div class="gc-top"><span class="rar">${c.rar}</span><span class="cat">${c.cat}</span></div>
+        <div class="gc-quote"></div><div class="gc-sub"></div>`;
+      el.querySelector('.gc-quote').textContent=c.q; el.querySelector('.gc-sub').textContent=c.s;
+      cardList.appendChild(el);
+    });
+  }
+  function setPool(i){
+    cur=i;
+    document.querySelectorAll('.pool').forEach(p=>p.classList.toggle('on', +p.dataset.pool===i));
+    drawTitle.textContent=POOLS[i].title; kaoEl.textContent=POOLS[i].kao; renderCards();
+  }
+  document.querySelectorAll('.pool').forEach(p=>p.onclick=()=>setPool(+p.dataset.pool));
+
+  function flashNote(t){ const o=dnote.textContent; dnote.textContent=t; dnote.style.color='var(--accent)'; setTimeout(()=>{ dnote.textContent=o; dnote.style.color=''; },1400); }
+  function draw(n,btn){
+    document.querySelectorAll('.draw').forEach(b=>b.classList.toggle('on', b===btn));
+    if(tickets<n){ flashNote('扭蛋券不够了'); return; }
+    tickets-=n; ticketNum.textContent=tickets;
+    const deck=POOLS[cur].deck;
+    for(let k=0;k<n;k++) POOLS[cur].got.unshift({...deck[Math.floor(Math.random()*deck.length)]});
+    renderCards();
+    flashNote(n===1?'抽到一张':('十连到手 · +'+n));
+  }
+  document.querySelectorAll('.draw').forEach(b=>b.onclick=()=>draw(+b.dataset.n,b));
+
+  // 顶部小标签：日历跳到日历页，其余先只高亮
+  document.querySelectorAll('.gtabs button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.gtabs button').forEach(x=>x.classList.toggle('on',x===b));
+    if(b.dataset.gtab==='cal') go('cal');
+  });
+
+  setPool(2);
 </script>
 </body>
 </html>
