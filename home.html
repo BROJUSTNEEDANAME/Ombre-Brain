@@ -77,7 +77,7 @@
     color: var(--text);
     transition: background .5s ease, color .5s ease;
     display: flex; flex-direction: column;
-    height: 100dvh; overflow: hidden;
+    height: 100dvh; height: var(--app-h, 100dvh); overflow: hidden;
     -webkit-font-smoothing: antialiased;
   }
   /* 纸纹颗粒：高级感的底子 */
@@ -289,7 +289,6 @@
         <div class="gtabs">
           <button data-gtab="bingo">任务</button>
           <button class="on" data-gtab="gacha">扭蛋</button>
-          <button data-gtab="cal">日历</button>
           <button data-gtab="log">记录</button>
           <button data-gtab="dex">图鉴</button>
           <button data-gtab="save">存档</button>
@@ -379,6 +378,16 @@
   </nav>
 
 <script>
+  // ---------- 用屏幕真实可见高度撑满，避免底栏下面空一块 ----------
+  function setAppH(){
+    const h = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+    document.documentElement.style.setProperty('--app-h', h + 'px');
+  }
+  setAppH();
+  window.addEventListener('resize', setAppH);
+  window.addEventListener('orientationchange', setAppH);
+  if(window.visualViewport) window.visualViewport.addEventListener('resize', setAppH);
+
   // ---------- 线性图标库（高级感靠它，不用 emoji） ----------
   const I = {
     gacha:'<path d="M5 9a7 7 0 0 1 14 0v1H5V9Z"/><rect x="4" y="10" width="16" height="10" rx="2.5"/><path d="M12 14v3"/>',
