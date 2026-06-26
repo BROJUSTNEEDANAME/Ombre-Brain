@@ -26,6 +26,8 @@ services:
         value: claude-opus-4-6
       - key: OMBRE_MCP_URL
         value: https://ombre-brain-6e05.onrender.com/mcp
+      - key: OMBRE_WEB_TOKEN
+        sync: false          # 可选：网页聊天 /api/chat 的访问令牌，防陌生人烧额度；留空=不校验
     disk:
       name: ombre-buckets
       mountPath: /opt/render/project/src/buckets
