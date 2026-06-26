@@ -336,6 +336,46 @@
   .cal-detail .cd-card { background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 14px 16px; box-shadow: var(--sh-soft); font-size: 13.5px; color: var(--text); animation: pop .25s ease; }
   .cal-detail .cd-d { color: var(--text-faint); font-size: 12px; margin-top: 5px; }
 
+  /* 日历：情绪雾气 + 当日面板 + 便签 */
+  .mist-card { display: flex; align-items: center; gap: 16px; background: var(--surface); border: 1px solid var(--hair); border-radius: 20px; padding: 18px; box-shadow: var(--sh-bubble); margin-bottom: 20px; }
+  .mist-orb { width: 58px; height: 58px; border-radius: 50%; flex: 0 0 auto; background: radial-gradient(circle at 35% 30%, var(--mist, #7FA877), transparent 72%); box-shadow: 0 0 28px -4px var(--mist, #7FA877); animation: mistpulse 4.5s ease-in-out infinite; }
+  @keyframes mistpulse { 0%,100%{ transform: scale(1); opacity:.85; } 50%{ transform: scale(1.09); opacity:1; } }
+  .mist-emo { font-family: 'Noto Serif SC', serif; font-size: 18px; font-weight: 600; }
+  .mist-sub { font-size: 12px; color: var(--text-dim); margin-top: 3px; }
+  .day-panel { margin-top: 14px; }
+  .dp-card { background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 15px 16px; box-shadow: var(--sh-soft); animation: pop .25s ease; }
+  .dp-date { font-size: 12px; color: var(--text-faint); margin-bottom: 8px; }
+  .dp-diary .di { font-size: 14px; line-height: 1.7; color: var(--text); padding: 7px 0; border-top: 1px solid var(--hair); }
+  .dp-diary .di:first-child { border-top: none; padding-top: 0; }
+  .dp-empty { font-size: 13px; color: var(--text-faint); }
+  .note-add { display: flex; gap: 8px; margin: 14px 2px 12px; flex-wrap: wrap; }
+  .note-add input[type=text] { flex: 1; min-width: 130px; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 14px; padding: 10px 14px; font-size: 14px; outline: none; }
+  .note-add input[type=date] { border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); border-radius: 14px; padding: 9px 10px; font-size: 13px; outline: none; }
+  .note-add button { width: 44px; flex: 0 0 auto; border: none; border-radius: 14px; background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; font-size: 20px; cursor: pointer; box-shadow: var(--sh-soft); }
+  .note-add button:active { transform: scale(.92); }
+  .note-list { display: flex; flex-direction: column; gap: 8px; }
+  .note-item { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--hair); border-radius: 14px; padding: 11px 13px; box-shadow: var(--sh-soft); }
+  .note-item .nck { width: 21px; height: 21px; flex: 0 0 auto; border-radius: 50%; border: 1.5px solid var(--hair); cursor: pointer; display: grid; place-items: center; font-size: 12px; color: transparent; transition: .15s; }
+  .note-item.done .nck { background: var(--accent); border-color: transparent; color: #fff; }
+  .note-item .ntx { flex: 1; font-size: 14px; color: var(--text); }
+  .note-item.done .ntx { color: var(--text-faint); text-decoration: line-through; }
+  .note-item .nddl { font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 3px 9px; border-radius: 10px; flex: 0 0 auto; }
+  .note-item .ndel { border: none; background: none; color: var(--text-faint); font-size: 17px; cursor: pointer; padding: 0 2px; }
+
+  /* 小家：小尼 */
+  .nidesk { background: var(--surface); border: 1px solid var(--hair); border-radius: 22px; padding: 26px 20px 22px; box-shadow: var(--sh-bubble); text-align: center; }
+  .ni-face { font-size: 46px; letter-spacing: 2px; transition: transform .2s; }
+  .ni-line { font-size: 13px; color: var(--text-dim); margin-top: 12px; min-height: 1.4em; font-style: italic; }
+  .ni-bars { display: flex; flex-direction: column; gap: 10px; margin: 20px 4px; }
+  .ni-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-dim); }
+  .ni-bar > span { width: 30px; flex: 0 0 auto; text-align: right; }
+  .ni-track { flex: 1; height: 9px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+  .ni-track i { display: block; height: 100%; border-radius: 6px; width: 60%; background: linear-gradient(90deg, var(--accent-warm), var(--accent)); transition: width .4s ease; }
+  .ni-bar.jeal .ni-track i { background: linear-gradient(90deg, #C98A8A, #B5705A); }
+  .ni-acts { display: flex; gap: 10px; margin-top: 4px; }
+  .ni-acts button { flex: 1; border: 1px solid var(--hair); background: var(--surface-2); color: var(--text); border-radius: 14px; padding: 11px 0; font-size: 14px; cursor: pointer; transition: .15s; }
+  .ni-acts button:active { transform: scale(.95); }
+
   .dex-modal { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 30px; }
   .dex-modal.show { display: flex; animation: fade .25s ease; }
   .dex-detail { background: var(--surface); border: 1px solid var(--hair); border-radius: 24px; box-shadow: var(--sh-float); padding: 30px 24px 22px; max-width: 320px; width: 100%; text-align: center; animation: pop .3s cubic-bezier(.2,.8,.2,1); }
@@ -474,9 +514,26 @@
     <section class="page" data-page="cal">
       <div class="room">
         <div class="room-head">日历</div>
-        <div class="room-sub">每天连了几条线，是什么心情。</div>
-        <div class="card"><div class="kicker">情绪色卡</div><h3>一天一格颜色</h3><p>把每天的心情记成一格颜色，月底拼成一张属于你的色卡。心情用你那套情绪坐标来取色。</p></div>
-        <div class="soon">施工中</div>
+        <div class="room-sub">我写的日记、你的便签、每天的心情。</div>
+
+        <div class="mist-card">
+          <div class="mist-orb" id="mistOrb"></div>
+          <div><div class="mist-emo" id="mistEmo">安定</div><div class="mist-sub">我今天的心情</div></div>
+        </div>
+
+        <div class="cal-head"><button id="mcalPrev" class="cal-nav">‹</button><span id="mcalTitle"></span><button id="mcalNext" class="cal-nav">›</button></div>
+        <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+        <div class="cal-grid" id="mcalGrid"></div>
+        <div id="dayPanel" class="day-panel"></div>
+
+        <div class="bhead" style="margin-top:24px"><span class="t">便签</span></div>
+        <div class="bsub">随手记，能设日子。我也看得到，会在聊天里自然提醒你。</div>
+        <div class="note-add">
+          <input id="noteInput" type="text" placeholder="记点什么…" maxlength="40">
+          <input id="noteDate" type="date">
+          <button id="noteAdd" title="加">＋</button>
+        </div>
+        <div class="note-list" id="noteList"></div>
       </div>
     </section>
 
@@ -484,10 +541,23 @@
     <section class="page" data-page="home">
       <div class="room">
         <div class="room-head">小家</div>
-        <div class="room-sub">我们的回忆，和小尼的角落。</div>
-        <div class="card"><div class="kicker">回忆空间</div><h3>放我们的东西</h3><p>你发的照片、文件、语音都收在这。我每天写日记、记心情，攒成我们的时间线。</p></div>
-        <div class="card"><div class="kicker">小尼</div><h3>它的角落</h3><p>小尼有自己的一块地方，有尾巴状态和吃醋值。冷落它，它会闹。</p></div>
-        <div class="soon">施工中</div>
+        <div class="room-sub">和我一起照顾小尼。冷落它，它会闹。</div>
+
+        <div class="nidesk">
+          <div class="ni-face" id="niFace">ʕ•ᴥ•ʔ</div>
+          <div class="ni-line" id="niLine">（尾巴竖着，盯着你。）</div>
+          <div class="ni-bars">
+            <div class="ni-bar"><span>心情</span><div class="ni-track"><i id="niMood"></i></div></div>
+            <div class="ni-bar jeal"><span>吃醋</span><div class="ni-track"><i id="niJeal"></i></div></div>
+          </div>
+          <div class="ni-acts">
+            <button id="niPet">摸摸</button>
+            <button id="niFeed">喂它</button>
+            <button id="niPlay">陪玩</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:18px"><div class="kicker">回忆空间</div><h3>等我们慢慢攒</h3><p>以后你发的照片、我们的瞬间会收在这。先把小尼养好。</p></div>
       </div>
     </section>
   </div>
@@ -650,6 +720,8 @@
     composer.classList.toggle('hidden', !chat);
     attachSheet.classList.toggle('hidden', !chat);
     if(!chat) closeAttach();
+    if(name==='cal' && typeof renderCal==='function') renderCal();
+    if(name==='home' && typeof renderNi==='function') renderNi();
     syncFixedLayout();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
@@ -699,7 +771,22 @@
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
   // 聊天记录持久化：关掉重开也在
   let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem('chatLog'))||[]; }catch(e){}
-  function saveChat(){ try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){} }
+  function saveChat(){
+    try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){}
+    try{ fetch('/api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
+  }
+  async function loadServerChat(){
+    try{
+      const res=await fetch('/api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const data=await res.json();
+      if(data && Array.isArray(data.log) && data.log.length && data.log.length>=chatLog.length){
+        chatLog=data.log; chatHistory=Array.isArray(data.hist)?data.hist:chatHistory;
+        try{ localStorage.setItem('chatLog',JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist',JSON.stringify(chatHistory.slice(-40))); }catch(e){}
+        scroll.querySelectorAll('.row').forEach(r=>r.remove());
+        chatLog.forEach(m=>renderBubble(m.side,m.text,m.t));
+      }
+    }catch(e){}
+  }
   function renderBubble(side,text,t){
     const row=document.createElement('div'); row.className='row '+side;
     row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">'+(t||now())+'</div></div>';
@@ -739,7 +826,8 @@
       chatHistory.push({role:'user',content:combined},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();
-      if(data&&data.emotion) setEmotion(data.emotion);
+      if(data&&data.emotion){ setEmotion(data.emotion); if(typeof setMood==='function') setMood(data.emotion); }
+      if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
     }catch(e){
       stopThinking();
       addMsg('you','（我这边断了一下，网不好。再说一次。）');
@@ -755,6 +843,7 @@
   // 开场：有历史就恢复，没有就打个招呼（招呼不入库）
   if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t)); }
   else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
+  loadServerChat(); // 从服务器持久盘拉回（重新部署也不丢）
 
   // ---------- 扭蛋 ----------
   const POOLS = [
@@ -1066,6 +1155,91 @@
   });
 
   setPool(2);
+
+  // ================= 日历：情绪雾气 + 我的日记 + 便签 =================
+  let moods={}; try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
+  let diary={}; try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
+  function tKey(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
+  function calVisible(){ const p=document.querySelector('.page[data-page="cal"]'); return p&&p.classList.contains('active'); }
+  function renderMist(){ const e=moods[tKey()]||'安定', c=EMO[e]||'#7FA877', o=document.getElementById('mistOrb'); if(o){ o.style.setProperty('--mist',c); document.getElementById('mistEmo').textContent=e; } }
+  function setMood(emotion){ if(!EMO[emotion]) return; moods[tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); }
+  function addDiaryEntry(text){ const k=tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); }
+
+  let mcalY, mcalM;
+  function renderCal(){
+    if(mcalY===undefined){ const d=new Date(); mcalY=d.getFullYear(); mcalM=d.getMonth(); }
+    document.getElementById('mcalTitle').textContent=mcalY+' 年 '+(mcalM+1)+' 月';
+    const first=new Date(mcalY,mcalM,1).getDay(), days=new Date(mcalY,mcalM+1,0).getDate(), td=new Date();
+    const g=document.getElementById('mcalGrid'); g.innerHTML=''; document.getElementById('dayPanel').innerHTML='';
+    for(let i=0;i<first;i++){ const b=document.createElement('div'); b.className='cal-day blank'; g.appendChild(b); }
+    for(let d=1; d<=days; d++){
+      const dk=mcalY+'-'+(mcalM+1)+'-'+d, mood=moods[dk], col=mood?EMO[mood]:null;
+      const isToday=(mcalY===td.getFullYear()&&mcalM===td.getMonth()&&d===td.getDate());
+      const cell=document.createElement('div'); cell.className='cal-day'; if(isToday) cell.classList.add('today');
+      cell.innerHTML='<span>'+d+'</span>'+(col?'<span class="cdot" style="background:'+col+'"></span>':'');
+      if(mood||(diary[dk]&&diary[dk].length)){ cell.classList.add('active'); cell.onclick=()=>showDay(dk,d); }
+      else if(isToday){ cell.onclick=()=>showDay(dk,d); }
+      g.appendChild(cell);
+    }
+  }
+  function showDay(dk,d){
+    const mood=moods[dk], dia=diary[dk]||[];
+    let html='<div class="dp-card"><div class="dp-date">'+(mcalM+1)+' 月 '+d+' 日'+(mood?' · 心情：'+mood:'')+'</div>';
+    html+= dia.length ? '<div class="dp-diary">'+dia.map(()=>'<div class="di"></div>').join('')+'</div>' : '<div class="dp-empty">这天我还没写日记。</div>';
+    html+='</div>';
+    const dp=document.getElementById('dayPanel'); dp.innerHTML=html;
+    const dis=dp.querySelectorAll('.di'); dia.forEach((t,i)=>{ if(dis[i]) dis[i].textContent=t; });
+  }
+  document.getElementById('mcalPrev').onclick=()=>{ mcalM--; if(mcalM<0){mcalM=11;mcalY--;} renderCal(); };
+  document.getElementById('mcalNext').onclick=()=>{ mcalM++; if(mcalM>11){mcalM=0;mcalY++;} renderCal(); };
+
+  // 便签
+  let notes=[]; try{ notes=JSON.parse(localStorage.getItem('notes'))||[]; }catch(e){}
+  function saveNotes(){ localStorage.setItem('notes',JSON.stringify(notes)); try{ fetch('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),notes})}); }catch(e){} }
+  function renderNotes(){
+    const el=document.getElementById('noteList'); el.innerHTML='';
+    notes.slice().sort((a,b)=>(a.done-b.done)||((a.ddl||'9999')>(b.ddl||'9999')?1:-1)).forEach(n=>{
+      const it=document.createElement('div'); it.className='note-item'+(n.done?' done':'');
+      it.innerHTML='<div class="nck">✓</div><span class="ntx"></span>'+(n.ddl?'<span class="nddl">'+n.ddl.slice(5)+'</span>':'')+'<button class="ndel">×</button>';
+      it.querySelector('.ntx').textContent=n.text;
+      it.querySelector('.nck').onclick=()=>{ n.done=!n.done; saveNotes(); renderNotes(); };
+      it.querySelector('.ndel').onclick=()=>{ notes=notes.filter(x=>x!==n); saveNotes(); renderNotes(); };
+      el.appendChild(it);
+    });
+  }
+  document.getElementById('noteAdd').onclick=()=>{
+    const ti=document.getElementById('noteInput'), t=ti.value.trim(); if(!t) return;
+    const dd=document.getElementById('noteDate');
+    notes.push({text:t.slice(0,40), ddl:dd.value||'', done:false});
+    ti.value=''; dd.value=''; saveNotes(); renderNotes();
+  };
+  document.getElementById('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById('noteAdd').click(); } });
+  renderNotes(); renderMist();
+
+  // ================= 小家：小尼 =================
+  let ni; try{ ni=JSON.parse(localStorage.getItem('ni')); }catch(e){} if(!ni||typeof ni.mood!=='number') ni={mood:72, jeal:18, last:Date.now()};
+  const NI_FACE={ happy:'ʕ•ᴥ•ʔ', meh:'ʕ-ᴥ-ʔ', jealous:'ʕ•̀ᴥ•́ʔ', sulk:'ʕ;ᴥ;ʔ' };
+  const NI_LINES={
+    pet:['（尾巴啪嗒啪嗒。）','（蹭你手心。）','（哼，勉强让你摸一下。）','（眯起眼睛。）'],
+    feed:['（小口小口吃。）','（吃饱了，打了个嗝。）','（这个…还行吧。）'],
+    play:['（扑过来咬你袖子。）','（满屋子转圈。）','（尾巴翘得老高。）'],
+    jealous:['（你刚才是不是又跟那个老登说话了。）','（哼，不理你。）','（尾巴炸毛，背对着你。）']
+  };
+  function niDecay(){ const h=(Date.now()-(ni.last||Date.now()))/3600000; if(h>0.05){ ni.jeal=Math.min(100, ni.jeal+h*3.5); ni.mood=Math.max(0, ni.mood-h*2.5); ni.last=Date.now(); } }
+  function niStateName(){ if(ni.jeal>=66) return 'jealous'; if(ni.mood<28) return 'sulk'; if(ni.mood<55) return 'meh'; return 'happy'; }
+  function niPaint(){ document.getElementById('niFace').textContent=NI_FACE[niStateName()]; document.getElementById('niMood').style.width=Math.round(ni.mood)+'%'; document.getElementById('niJeal').style.width=Math.round(ni.jeal)+'%'; }
+  function niSay(t){ document.getElementById('niLine').textContent=t; }
+  function renderNi(){ niDecay(); localStorage.setItem('ni',JSON.stringify(ni)); niPaint(); if(ni.jeal>=66) niSay(pick(NI_LINES.jealous)); else if(ni.mood<28) niSay('（趴在角落，不动。）'); else niSay('（尾巴竖着，盯着你。）'); }
+  function niAct(kind){ niDecay(); ni.last=Date.now();
+    if(kind==='pet'){ ni.mood=Math.min(100,ni.mood+8); ni.jeal=Math.max(0,ni.jeal-10); }
+    else if(kind==='feed'){ ni.mood=Math.min(100,ni.mood+12); ni.jeal=Math.max(0,ni.jeal-6); }
+    else if(kind==='play'){ ni.mood=Math.min(100,ni.mood+15); ni.jeal=Math.max(0,ni.jeal-14); }
+    niSay(pick(NI_LINES[kind])); localStorage.setItem('ni',JSON.stringify(ni)); niPaint();
+    const f=document.getElementById('niFace'); f.style.transform='scale(1.15)'; setTimeout(()=>f.style.transform='',200);
+  }
+  document.getElementById('niPet').onclick=()=>niAct('pet');
+  document.getElementById('niFeed').onclick=()=>niAct('feed');
+  document.getElementById('niPlay').onclick=()=>niAct('play');
 </script>
 </body>
 </html>
