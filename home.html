@@ -139,10 +139,13 @@
   /* DIY 聊天背景（仿 Telegram 壁纸）：铺在气泡后面 */
   body.has-bg .page[data-page="chat"] { background-image: var(--chatbg); background-size: cover; background-position: center; }
   .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
-  /* 桌面宠：claude code 小家伙，在气泡后面慢慢游荡，不挡气泡 */
-  .pet { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; opacity: .42; color: var(--accent); transition: transform 3s cubic-bezier(.4,0,.45,1); will-change: transform; }
-  .pet-g { display: inline-block; font-size: 22px; animation: petbob 1.6s ease-in-out infinite; }
-  @keyframes petbob { 0%,100%{ transform: translateY(0) rotate(0); } 50%{ transform: translateY(-5px) rotate(14deg); } }
+  /* 桌面宠：Clawd 小螃蟹，踩在聊天区底部爬来爬去 */
+  .pet { position: absolute; left: 0; bottom: 4px; z-index: 3; pointer-events: none; transition: transform 2.4s linear; will-change: transform; }
+  .pet-g { display: inline-block; font-size: 27px; line-height: 1; animation: scuttle .34s ease-in-out infinite; filter: drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
+  @keyframes scuttle { 0%,100%{ transform: translateY(0); } 50%{ transform: translateY(-2px); } }
+  .pet.thinking .pet-g { animation: scuttle 1.4s ease-in-out infinite; }  /* 思考时慢下来 */
+  .pet-think { position: absolute; top: -15px; right: -7px; font-size: 14px; opacity: 0; transform: scale(.6); transition: opacity .3s, transform .3s; }
+  .pet.thinking .pet-think { opacity: 1; transform: scale(1); }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
   .row.me { flex-direction: row-reverse; }
@@ -444,7 +447,7 @@
   <div class="pages">
     <!-- 聊天 -->
     <section class="page active" data-page="chat">
-      <div class="pet" id="pet"><span class="pet-g">✳</span></div>
+      <div class="pet" id="pet"><span class="pet-think">💭</span><span class="pet-g">🦀</span></div>
       <div class="chat-scroll" id="chatScroll"><div class="daysep" id="daySep">今天</div></div>
       <div class="thinking" id="thinking">
         <div class="think-bubble"><span class="dots"><i></i><i></i><i></i></span><span id="thinkText">在看你发的字。</span></div>
@@ -898,13 +901,14 @@
     row.querySelector('.bubble').textContent=text; scroll.appendChild(row); toBottom();
   }
   function addMsg(side,text){ const t=now(); renderBubble(side,text,t); chatLog.push({side,text,t}); saveChat(); }
-  let thinkTimer=null;
+  let thinkTimer=null, petBusy=false;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
     thinking.classList.add('show'); toBottom();
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
+    petBusy=true; document.getElementById('pet')&&document.getElementById('pet').classList.add('thinking');
   }
-  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
+  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petBusy=false; document.getElementById('pet')&&document.getElementById('pet').classList.remove('thinking'); }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
@@ -955,13 +959,14 @@
     const pet=document.getElementById('pet'); if(!pet) return;
     let lastX=30;
     function wander(){
+      if(petBusy) return; // 我在思考时它停下来发呆
       const area=document.querySelector('.page[data-page="chat"]'); if(!area) return;
-      const w=area.clientWidth||340, h=area.clientHeight||500;
-      const nx=18+Math.random()*Math.max(20,w-56), ny=70+Math.random()*Math.max(40,h-190);
-      pet.style.transform='translate('+nx+'px,'+ny+'px) scaleX('+(nx<lastX?-1:1)+')';
+      const w=area.clientWidth||340;
+      const nx=8+Math.random()*Math.max(20, w-46);
+      pet.style.transform='translateX('+nx+'px) scaleX('+(nx<lastX?-1:1)+')';
       lastX=nx;
     }
-    wander(); setInterval(wander, 3800);
+    wander(); setInterval(wander, 2900);
   })();
 
   // ---------- 扭蛋 ----------
