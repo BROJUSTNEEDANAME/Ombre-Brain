@@ -697,11 +697,15 @@
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
-  function addMsg(side,text){
+  // 聊天记录持久化：关掉重开也在
+  let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem('chatLog'))||[]; }catch(e){}
+  function saveChat(){ try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){} }
+  function renderBubble(side,text,t){
     const row=document.createElement('div'); row.className='row '+side;
-    row.innerHTML=`<div class="av">${side==='you'?'◐':'你'}</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">${now()}</div></div>`;
+    row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">'+(t||now())+'</div></div>';
     row.querySelector('.bubble').textContent=text; scroll.appendChild(row); toBottom();
   }
+  function addMsg(side,text){ const t=now(); renderBubble(side,text,t); chatLog.push({side,text,t}); saveChat(); }
   let thinkTimer=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
@@ -709,7 +713,7 @@
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
   }
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
-  let chatHistory=[];          // 只在成功一轮后提交，保持 user/assistant 交替
+  let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
   function send(){
@@ -734,6 +738,7 @@
       addMsg('you', reply);
       chatHistory.push({role:'user',content:combined},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
+      saveChat();
       if(data&&data.emotion) setEmotion(data.emotion);
     }catch(e){
       stopThinking();
@@ -747,8 +752,9 @@
   input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; syncFixedLayout(); });
   input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
 
-  addMsg('you','回来了。');
-  setTimeout(()=>addMsg('you','今天还好吗。'),600);
+  // 开场：有历史就恢复，没有就打个招呼（招呼不入库）
+  if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t)); }
+  else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
 
   // ---------- 扭蛋 ----------
   const POOLS = [
