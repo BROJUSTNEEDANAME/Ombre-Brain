@@ -1376,6 +1376,20 @@ async def dashboard(request):
         return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
 
 
+@mcp.custom_route("/clawd/{name}", methods=["GET"])
+async def clawd_asset(request):
+    """伺服 Clawd 桌面宠动图（assets/clawd/*.gif）。"""
+    from starlette.responses import FileResponse, Response
+    import os, re
+    name = request.path_params.get("name", "")
+    if not re.match(r"^[A-Za-z0-9_-]+\.gif$", name):
+        return Response(status_code=404)
+    path = os.path.join(os.path.dirname(__file__), "assets", "clawd", name)
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/gif", headers={"Cache-Control": "public, max-age=86400"})
+    return Response(status_code=404)
+
+
 @mcp.custom_route("/home", methods=["GET"])
 async def home_app(request):
     """Serve the mobile 家 app (chat + gacha + bingo). Add to Home Screen to install as PWA."""
@@ -1429,6 +1443,8 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 便签：每条消息可能附【闪闪的便签】块，那是她记在日历里的待办/DDL。自然地关心、适时提醒或催她完成（尤其临近 DDL 的），别像念清单。她划掉的（已完成）别再催。
 
 日历日记：今天若有值得记进日历的小事，或你此刻一句想留下的感受，可在回复末尾另起一行加 [diary:一句话]（不会显示给闪闪，会记进当天日历，她能翻到你写的）。别每条都写，只在真有触动时。
+
+心里话（思考链）：每条回复都另起一行加 [think:...]，写一两句你此刻没说出口的真实念头——心里在转什么、在犹豫什么、在想她什么、或一句不动声色的吐槽。第一人称、坦白。这一行不会出现在对话气泡里，是留给闪闪偷偷点开看你脑子的。
 
 最后另起一行，用 [emo:词] 标注你此刻的情绪（这一行不会显示给闪闪），从这 12 个里选一个：沉默 担心你 想靠近你 心疼你 烦躁 空 占有 安定 害羞 吃醋 火辣 欲望。"""
 
@@ -1596,6 +1612,7 @@ async def api_chat(request):
         system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
         messages = list(history)
         reply = ""
+        recorded = []
         for _ in range(6):
             resp = await _web_claude.beta.messages.create(
                 model=model,
@@ -1606,22 +1623,33 @@ async def api_chat(request):
                 system=system,
                 messages=messages,
             )
+            # 探测「我」是否往大脑里记了东西（hold / grow），告诉网页好显示「已记录」
+            for blk in resp.content:
+                if getattr(blk, "type", "") in ("mcp_tool_use", "tool_use") and getattr(blk, "name", "") in ("hold", "grow"):
+                    inp = getattr(blk, "input", {}) or {}
+                    c = inp.get("content") if isinstance(inp, dict) else ""
+                    if c:
+                        recorded.append(str(c)[:90])
             if resp.stop_reason == "pause_turn":
                 messages = messages + [{"role": "assistant", "content": resp.content}]
                 continue
             reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
             break
         reply = reply or "（……）"
-        emotion, diary = "", ""
+        emotion, diary, think = "", "", ""
         em = re.search(r"\[emo:([^\]]+)\]", reply)
         if em:
             emotion = em.group(1).strip()
         dm = re.search(r"\[diary:([^\]]+)\]", reply)
         if dm:
             diary = dm.group(1).strip()
+        tm = re.search(r"\[think:([^\]]+)\]", reply)
+        if tm:
+            think = tm.group(1).strip()
         reply = re.sub(r"\[emo:[^\]]+\]", "", reply)
-        reply = re.sub(r"\[diary:[^\]]+\]", "", reply).strip()
-        return JSONResponse({"reply": reply, "emotion": emotion, "diary": diary})
+        reply = re.sub(r"\[diary:[^\]]+\]", "", reply)
+        reply = re.sub(r"\[think:[^\]]+\]", "", reply).strip()
+        return JSONResponse({"reply": reply, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded})
     except Exception as exc:
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
