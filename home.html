@@ -103,11 +103,14 @@
     border-bottom: 1px solid var(--hair);
   }
   .avatar {
-    width: 42px; height: 42px; border-radius: 50%; flex: 0 0 auto;
+    width: 42px; height: 42px; border-radius: 50%; flex: 0 0 auto; position: relative; cursor: pointer;
     background: linear-gradient(150deg, var(--accent-warm), #b1632c);
     display: grid; place-items: center; color: #fff; font-size: 21px;
     box-shadow: var(--sh-bubble), inset 0 1px 1px rgba(255,255,255,.25);
+    background-size: cover; background-position: center;
   }
+  .av-edit { position: absolute; right: -2px; bottom: -2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); color: var(--accent); font-size: 9px; display: grid; place-items: center; border: 1px solid var(--hair); box-shadow: var(--sh-soft); }
+  body.has-av .avatar, body.has-av .row.you .av { background-image: var(--av); background-size: cover; background-position: center; color: transparent; }
   .who { flex: 1; min-width: 0; }
   .who .name { font-family: 'Cormorant Garamond', 'Noto Serif SC', serif; font-size: 22px; font-weight: 600; letter-spacing: .4px; line-height: 1.1; }
   .who .status { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; letter-spacing: .3px; }
@@ -352,8 +355,9 @@
 </head>
 <body>
   <script>window.OMBRE_TOKEN="__OMBRE_WEB_TOKEN__";</script>
+  <input type="file" id="avatarFile" accept="image/*" style="display:none">
   <div class="header">
-    <div class="avatar">◐</div>
+    <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav</div>
       <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span></div>
@@ -607,6 +611,34 @@
   mq.addEventListener('change', () => { if(mode==='auto') applyTheme(); });
   applyTheme();
 
+  // ---------- DIY 头像（点顶部头像换图，存本地，气泡同步） ----------
+  const avatarBtn=document.getElementById('avatarBtn'), avatarFile=document.getElementById('avatarFile');
+  function applyAvatar(url){
+    if(url){ document.documentElement.style.setProperty('--av','url("'+url+'")'); document.body.classList.add('has-av'); }
+    else document.body.classList.remove('has-av');
+  }
+  applyAvatar(localStorage.getItem('avatar')||'');
+  avatarBtn.onclick=()=>avatarFile.click();
+  avatarFile.onchange=()=>{
+    const f=avatarFile.files&&avatarFile.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        const S=160, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
+        const g=cv.getContext('2d');
+        const m=Math.min(img.width,img.height), sx=(img.width-m)/2, sy=(img.height-m)/2;
+        g.drawImage(img, sx,sy,m,m, 0,0,S,S);
+        let url; try{ url=cv.toDataURL('image/jpeg',0.85); }catch(e){ return; }
+        try{ localStorage.setItem('avatar',url); }catch(e){}
+        applyAvatar(url);
+      };
+      img.src=r.result;
+    };
+    r.readAsDataURL(f);
+    avatarFile.value='';
+  };
+
   // ---------- 导航 ----------
   const nav = document.getElementById('nav');
   const composer = document.getElementById('composer');
@@ -677,13 +709,22 @@
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
   }
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
-  let chatHistory=[]; // 只在成功一轮后提交，保持 user/assistant 交替
-  async function send(){
+  let chatHistory=[];          // 只在成功一轮后提交，保持 user/assistant 交替
+  let pending=[], debTimer=null, busy=false;
+  const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
+  function send(){
     const v=input.value.trim(); if(!v) return;
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
+    pending.push(v);
     setEmotion(pick(['想靠近你','安定','心疼你','害羞'])); // 听你说话时，情绪先动一下
+    clearTimeout(debTimer); debTimer=setTimeout(flush, SEND_WAIT);
+  }
+  async function flush(){
+    if(busy || !pending.length) return;
+    busy=true;
+    const combined=pending.join('\n'); pending=[];
     startThinking();
-    const outgoing = chatHistory.concat([{role:'user',content:v}]).slice(-20);
+    const outgoing = chatHistory.concat([{role:'user',content:combined}]).slice(-20);
     try{
       const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||'') }) });
@@ -691,12 +732,15 @@
       stopThinking();
       const reply=(data&&data.reply)||'（……）';
       addMsg('you', reply);
-      chatHistory.push({role:'user',content:v},{role:'assistant',content:reply});
+      chatHistory.push({role:'user',content:combined},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       if(data&&data.emotion) setEmotion(data.emotion);
     }catch(e){
       stopThinking();
       addMsg('you','（我这边断了一下，网不好。再说一次。）');
+    } finally {
+      busy=false;
+      if(pending.length){ clearTimeout(debTimer); debTimer=setTimeout(flush, 400); } // 我回话时你又发了，回完接着处理
     }
   }
   sendBtn.onclick=send;
