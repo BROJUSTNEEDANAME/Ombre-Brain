@@ -114,6 +114,14 @@
   .who { flex: 1; min-width: 0; }
   .who .name { font-family: 'Cormorant Garamond', 'Noto Serif SC', serif; font-size: 22px; font-weight: 600; letter-spacing: .4px; line-height: 1.1; }
   .who .status { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; letter-spacing: .3px; }
+  .think-chip { font-size: 12px; cursor: pointer; opacity: .8; padding: 1px 4px; border-radius: 8px; transition: .15s; }
+  .think-chip:active { transform: scale(.88); }
+  .think-modal { position: fixed; inset: 0; z-index: 76; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 30px; }
+  .think-modal.show { display: flex; animation: fade .25s ease; }
+  .think-card { background: var(--surface); border: 1px solid var(--hair); border-radius: 22px; box-shadow: var(--sh-float); padding: 24px 22px 18px; max-width: 320px; width: 100%; animation: pop .3s cubic-bezier(.2,.8,.2,1); }
+  .think-card-h { font-family: 'Noto Serif SC', serif; font-size: 13px; color: var(--text-dim); letter-spacing: 1px; margin-bottom: 12px; }
+  .think-card-body { font-size: 15px; line-height: 1.75; color: var(--text); font-style: italic; min-height: 1.5em; }
+  .think-card-close { margin-top: 18px; width: 100%; border: 1px solid var(--hair); background: var(--surface-2); color: var(--text-dim); border-radius: 14px; padding: 10px 0; font-size: 13px; cursor: pointer; }
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--online); box-shadow: 0 0 0 3px rgba(127,168,119,.16); }
   .icon-btn {
     width: 40px; height: 40px; border-radius: 13px; border: 1px solid var(--hair);
@@ -138,14 +146,10 @@
   /* ---------- 聊天 ---------- */
   /* DIY 聊天背景（仿 Telegram 壁纸）：铺在气泡后面 */
   body.has-bg .page[data-page="chat"] { background-image: var(--chatbg); background-size: cover; background-position: center; }
-  .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 10px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
-  /* 桌面宠：Clawd 小螃蟹，踩在聊天区底部爬来爬去 */
-  .pet { position: absolute; left: 0; bottom: 4px; z-index: 3; pointer-events: none; transition: transform 2.4s linear; will-change: transform; }
-  .pet-g { display: inline-block; font-size: 27px; line-height: 1; animation: scuttle .34s ease-in-out infinite; filter: drop-shadow(0 2px 3px rgba(0,0,0,.25)); }
-  @keyframes scuttle { 0%,100%{ transform: translateY(0); } 50%{ transform: translateY(-2px); } }
-  .pet.thinking .pet-g { animation: scuttle 1.4s ease-in-out infinite; }  /* 思考时慢下来 */
-  .pet-think { position: absolute; top: -15px; right: -7px; font-size: 14px; opacity: 0; transform: scale(.6); transition: opacity .3s, transform .3s; }
-  .pet.thinking .pet-think { opacity: 1; transform: scale(1); }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 54px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
+  /* 桌面宠：真·Clawd 小螃蟹，踩在聊天区底部爬来爬去 */
+  .pet { position: absolute; left: 0; bottom: 2px; z-index: 3; pointer-events: none; transition: transform 2.4s linear; will-change: transform; }
+  .pet-g { display: block; width: 48px; height: 48px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
   .row.me { flex-direction: row-reverse; }
@@ -157,6 +161,7 @@
   .row.you .bubble { background: var(--bubble-you); color: var(--bubble-you-text); border-bottom-left-radius: 7px; box-shadow: var(--sh-bubble); border: 1px solid var(--hair); }
   .row.me .bubble { background: var(--bubble-me); color: var(--bubble-me-text); border-bottom-right-radius: 7px; box-shadow: var(--sh-bubble); }
   .time { font-size: 10px; color: var(--text-faint); margin: 4px 5px 0; letter-spacing: .5px; }
+  .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 13px; margin: 9px 0 3px; animation: pop .3s ease; }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
   /* 思考池 */
@@ -390,6 +395,16 @@
   .note-item.done .ntx { color: var(--text-faint); text-decoration: line-through; }
   .note-item .nddl { font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 3px 9px; border-radius: 10px; flex: 0 0 auto; }
   .note-item .ndel { border: none; background: none; color: var(--text-faint); font-size: 17px; cursor: pointer; padding: 0 2px; }
+  .brain-list { display: flex; flex-direction: column; gap: 8px; }
+  .brain-item { display: flex; align-items: flex-start; gap: 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 14px; padding: 11px 13px; box-shadow: var(--sh-soft); }
+  .brain-item .bt { flex: 1; font-size: 13.5px; line-height: 1.55; color: var(--text); }
+  .brain-item .bk { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; margin-top: 2px; }
+  .brain-empty { font-size: 13px; color: var(--text-faint); padding: 22px 2px; }
+  .cal-toggle { width: 100%; margin-top: 24px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 14px; padding: 13px 16px; cursor: pointer; box-shadow: var(--sh-soft); font-size: 14px; font-weight: 600; font-family: 'Noto Serif SC', serif; }
+  .cal-toggle .ct-arrow { color: var(--text-faint); transition: transform .25s; font-size: 13px; }
+  .cal-toggle.open .ct-arrow { transform: rotate(180deg); }
+  .cal-collapse { overflow: hidden; max-height: 0; opacity: 0; transition: max-height .32s ease, opacity .25s ease, margin .25s ease; }
+  .cal-collapse.open { max-height: 760px; opacity: 1; margin-top: 12px; }
 
   /* 小家：小尼 */
   .nidesk { background: var(--surface); border: 1px solid var(--hair); border-radius: 22px; padding: 26px 20px 22px; box-shadow: var(--sh-bubble); text-align: center; }
@@ -430,7 +445,7 @@
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav</div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="think-chip" id="thinkChip">💭</span></div>
     </div>
     <button class="icon-btn" id="skinBtn" title="外观 / 皮肤"></button>
     <button class="icon-btn" id="themeBtn" title="切换主题"></button>
@@ -441,13 +456,14 @@
     <button data-go="play" data-ic="gacha">扭蛋</button>
     <button data-go="cal" data-ic="cal">日历</button>
     <button class="on" data-go="chat" data-ic="chat">聊天</button>
+    <button data-go="notes" data-ic="note">便签</button>
     <button data-go="home" data-ic="home">小家</button>
   </nav>
 
   <div class="pages">
     <!-- 聊天 -->
     <section class="page active" data-page="chat">
-      <div class="pet" id="pet"><span class="pet-think">💭</span><span class="pet-g">🦀</span></div>
+      <div class="pet" id="pet"><img class="pet-g" id="petImg" src="/clawd/clawd-idle.gif" alt=""></div>
       <div class="chat-scroll" id="chatScroll"><div class="daysep" id="daySep">今天</div></div>
       <div class="thinking" id="thinking">
         <div class="think-bubble"><span class="dots"><i></i><i></i><i></i></span><span id="thinkText">在看你发的字。</span></div>
@@ -546,20 +562,33 @@
     <section class="page" data-page="cal">
       <div class="room">
         <div class="room-head">日历</div>
-        <div class="room-sub">我写的日记、你的便签、每天的心情。</div>
+        <div class="room-sub">我往脑子里记的东西、我写的日记、每天的心情。</div>
 
         <div class="mist-card">
           <div class="mist-orb" id="mistOrb"></div>
           <div><div class="mist-emo" id="mistEmo">安定</div><div class="mist-sub">我今天的心情</div></div>
         </div>
 
-        <div class="cal-head"><button id="mcalPrev" class="cal-nav">‹</button><span id="mcalTitle"></span><button id="mcalNext" class="cal-nav">›</button></div>
-        <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
-        <div class="cal-grid" id="mcalGrid"></div>
-        <div id="dayPanel" class="day-panel"></div>
+        <div class="bhead"><span class="t">我记下的</span></div>
+        <div class="bsub">聊天时我往脑子里记的东西，都在这——像翻我的仓库。</div>
+        <div class="brain-list" id="brainList"></div>
 
-        <div class="bhead" style="margin-top:24px"><span class="t">便签</span></div>
-        <div class="bsub">随手记，能设日子。我也看得到，会在聊天里自然提醒你。</div>
+        <button class="cal-toggle" id="calToggle"><span class="ct-t">日记 · 日历</span><span class="ct-arrow" id="ctArrow">▾</span></button>
+        <div class="cal-collapse" id="calCollapse">
+          <div class="bsub">我每天写的小事、你的心情都收在这。点一天能翻到。</div>
+          <div class="cal-head"><button id="mcalPrev" class="cal-nav">‹</button><span id="mcalTitle"></span><button id="mcalNext" class="cal-nav">›</button></div>
+          <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+          <div class="cal-grid" id="mcalGrid"></div>
+          <div id="dayPanel" class="day-panel"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 便签 -->
+    <section class="page" data-page="notes">
+      <div class="room">
+        <div class="room-head">便签</div>
+        <div class="room-sub">随手记，能设日子。我也看得到，会在聊天里自然提醒你。</div>
         <div class="note-add">
           <input id="noteInput" type="text" placeholder="记点什么…" maxlength="40">
           <input id="noteDate" type="date">
@@ -612,6 +641,15 @@
   </div>
 
   <div class="btoast" id="btoast"></div>
+
+  <!-- 思考链：他没说出口的心里话 -->
+  <div class="think-modal" id="thinkModal">
+    <div class="think-card">
+      <div class="think-card-h">他没说出口的</div>
+      <div class="think-card-body" id="thinkBody"></div>
+      <button class="think-card-close" id="thinkClose">收起</button>
+    </div>
+  </div>
 
   <!-- 外观 / 皮肤 面板 -->
   <div class="skin-modal" id="skinModal">
@@ -698,6 +736,7 @@
     chat:'<path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V16.5H4A1.5 1.5 0 0 1 2.5 15V7A1.5 1.5 0 0 1 4 5.5Z"/>',
     cal:'<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
     home:'<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9.5h12V10"/><path d="M10 19.5V14h4v5.5"/>',
+    note:'<path d="M6 3.5h9L19 7.5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1Z"/><path d="M14.5 3.5V8H19M8.5 12h7M8.5 15.5h7M8.5 19h4"/>',
     sun:'<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19"/>',
     moon:'<path d="M20 13.5A8 8 0 1 1 10.5 4 6.3 6.3 0 0 0 20 13.5Z"/>',
     auto:'<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" fill="currentColor" stroke="none"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17Z" fill="currentColor" stroke="none"/>',
@@ -828,7 +867,8 @@
     composer.classList.toggle('hidden', !chat);
     attachSheet.classList.toggle('hidden', !chat);
     if(!chat) closeAttach();
-    if(name==='cal' && typeof renderCal==='function') renderCal();
+    if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
+    if(name==='notes' && typeof renderNotes==='function') renderNotes();
     if(name==='home' && typeof renderNi==='function') renderNi();
     syncFixedLayout();
   }
@@ -875,6 +915,31 @@
   const pick = arr => arr[Math.floor(Math.random()*arr.length)];
   setEmotion('安定');
 
+  // 思考链：他没说出口的心里话
+  let lastThink=localStorage.getItem('lastThink')||'';
+  const thinkChip=document.getElementById('thinkChip'), thinkModal=document.getElementById('thinkModal');
+  thinkChip.onclick=()=>{ document.getElementById('thinkBody').textContent=lastThink||'（这会儿没什么藏着的。）'; thinkModal.classList.add('show'); };
+  document.getElementById('thinkClose').onclick=()=>thinkModal.classList.remove('show');
+  thinkModal.onclick=e=>{ if(e.target===thinkModal) thinkModal.classList.remove('show'); };
+
+  // 我记下的（脑子/仓库）
+  let brainLog={}; try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
+  function recordBrain(text){
+    addMsg('sys','📌 已记入记忆 · '+text);
+    const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
+    (brainLog[k]=brainLog[k]||[]).push({text, t:now()});
+    localStorage.setItem('brainLog',JSON.stringify(brainLog));
+    if(typeof renderBrain==='function') renderBrain();
+  }
+  function renderBrain(){
+    const el=document.getElementById('brainList'); if(!el) return;
+    const all=[]; Object.keys(brainLog).forEach(k=>brainLog[k].forEach(r=>all.push({k, text:r.text})));
+    const items=all.slice(-20).reverse();
+    if(!items.length){ el.innerHTML='<div class="brain-empty">还没记下什么。聊几句，有值得留的我就记了。</div>'; return; }
+    el.innerHTML='';
+    items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span>'; d.querySelector('.bt').textContent=r.text; el.appendChild(d); });
+  }
+
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
   // 聊天记录持久化：关掉重开也在
@@ -896,6 +961,7 @@
     }catch(e){}
   }
   function renderBubble(side,text,t){
+    if(side==='sys'){ const d=document.createElement('div'); d.className='sysnote'; d.textContent=text; scroll.appendChild(d); toBottom(); return; }
     const row=document.createElement('div'); row.className='row '+side;
     row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">'+(t||now())+'</div></div>';
     row.querySelector('.bubble').textContent=text; scroll.appendChild(row); toBottom();
@@ -906,9 +972,9 @@
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
     thinking.classList.add('show'); toBottom();
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
-    petBusy=true; document.getElementById('pet')&&document.getElementById('pet').classList.add('thinking');
+    petBusy=true; const pi=document.getElementById('petImg'); if(pi) pi.src='/clawd/clawd-thinking.gif';
   }
-  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petBusy=false; document.getElementById('pet')&&document.getElementById('pet').classList.remove('thinking'); }
+  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petBusy=false; const pi=document.getElementById('petImg'); if(pi) pi.src='/clawd/clawd-idle.gif'; }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
@@ -937,6 +1003,8 @@
       saveChat();
       if(data&&data.emotion){ setEmotion(data.emotion); if(typeof setMood==='function') setMood(data.emotion); }
       if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
+      if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
+      if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
     }catch(e){
       stopThinking();
       addMsg('you','（我这边断了一下，网不好。再说一次。）');
@@ -1305,6 +1373,7 @@
       else if(isToday){ cell.onclick=()=>showDay(dk,d); }
       g.appendChild(cell);
     }
+    if(typeof renderBrain==='function') renderBrain();
   }
   function showDay(dk,d){
     const mood=moods[dk], dia=diary[dk]||[];
@@ -1316,6 +1385,12 @@
   }
   document.getElementById('mcalPrev').onclick=()=>{ mcalM--; if(mcalM<0){mcalM=11;mcalY--;} renderCal(); };
   document.getElementById('mcalNext').onclick=()=>{ mcalM++; if(mcalM>11){mcalM=0;mcalY++;} renderCal(); };
+  // 日记/日历 收起+展开（默认收起，先看「我记下的」）
+  (function(){
+    const tg=document.getElementById('calToggle'), co=document.getElementById('calCollapse');
+    if(!tg||!co) return;
+    tg.onclick=()=>{ const open=tg.classList.toggle('open'); co.classList.toggle('open',open); if(open) renderCal(); syncFixedLayout(); };
+  })();
 
   // 便签
   let notes=[]; try{ notes=JSON.parse(localStorage.getItem('notes'))||[]; }catch(e){}
