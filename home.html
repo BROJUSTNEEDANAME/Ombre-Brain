@@ -302,15 +302,36 @@
   .log-item .lx { font-size: 13.5px; color: var(--text); line-height: 1.5; }
   .log-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 0; }
 
-  /* 图鉴（奖杯展览台） */
-  .dex-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-  .dex-tile { aspect-ratio: 1; border: 1px solid var(--hair); border-radius: 18px; background: var(--surface); box-shadow: var(--sh-soft); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; position: relative; transition: transform .15s; overflow: hidden; }
+  /* 图鉴（分池子 + 稀有度，奖杯展览台） */
+  .dex-grid { display: flex; flex-direction: column; gap: 24px; }
+  .dex-sec-head { display: flex; align-items: center; gap: 9px; font-family: 'Noto Serif SC', serif; font-size: 16px; font-weight: 600; margin: 0 2px 3px; }
+  .dex-sec-head .si { font-size: 21px; }
+  .dex-rar-label { display: flex; align-items: center; gap: 9px; font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--rar); margin: 13px 2px 9px; }
+  .dex-rar-label::after { content: ''; flex: 1; height: 1px; background: var(--hair); }
+  .dex-sub { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .dex-tile { border: 1px solid var(--hair); border-radius: 16px; background: var(--surface); box-shadow: var(--sh-soft); padding: 14px 8px 11px; display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; transition: transform .15s; }
   .dex-tile:active { transform: scale(.95); }
   .dex-tile .de { font-size: 30px; }
-  .dex-tile .db { font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 8px; border-radius: 7px; background: var(--rar-soft); color: var(--rar); }
-  .dex-tile.locked { opacity: .4; }
-  .dex-tile.locked .de { filter: grayscale(1); }
-  .dex-empty { grid-column: 1/-1; text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 0; }
+  .dex-tile .dcap { font-size: 10.5px; color: var(--text-dim); text-align: center; line-height: 1.35; max-height: 2.7em; overflow: hidden; }
+  .dex-none { font-size: 12px; color: var(--text-faint); margin: 4px 2px; }
+  .dex-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 0; }
+
+  /* 记录日历 */
+  .cal-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 2px 14px; }
+  #calTitle { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 600; letter-spacing: .5px; }
+  .cal-nav { width: 36px; height: 36px; border-radius: 11px; border: 1px solid var(--hair); background: var(--surface); color: var(--text-dim); font-size: 18px; cursor: pointer; box-shadow: var(--sh-soft); }
+  .cal-nav:active { transform: scale(.92); }
+  .cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 0 2px 6px; }
+  .cal-week span { text-align: center; font-size: 11px; color: var(--text-faint); }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 0 2px; }
+  .cal-day { aspect-ratio: 1; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 13px; color: var(--text-faint); border: 1px solid transparent; }
+  .cal-day.blank { visibility: hidden; }
+  .cal-day.active { background: var(--accent-soft); color: var(--text); cursor: pointer; }
+  .cal-day.today { border-color: var(--accent); color: var(--accent); font-weight: 600; cursor: pointer; }
+  .cal-day .cdot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .cal-detail { margin: 16px 2px 0; }
+  .cal-detail .cd-card { background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 14px 16px; box-shadow: var(--sh-soft); font-size: 13.5px; color: var(--text); animation: pop .25s ease; }
+  .cal-detail .cd-d { color: var(--text-faint); font-size: 12px; margin-top: 5px; }
 
   .dex-modal { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 30px; }
   .dex-modal.show { display: flex; animation: fade .25s ease; }
@@ -402,7 +423,6 @@
             <div class="seg" id="sizeSeg">
               <button data-size="3" class="on">3×3</button>
               <button data-size="4">4×4</button>
-              <button data-size="5">5×5</button>
             </div>
             <div class="seg" id="diffSeg">
               <button data-diff="low" class="on">轻松</button>
@@ -419,17 +439,20 @@
           <div class="diy-list" id="diyList"></div>
         </div>
 
-        <!-- 记录视图 -->
+        <!-- 记录视图（bingo 日历） -->
         <div id="logView" style="display:none">
           <div class="bhead"><span class="t">记录</span></div>
-          <div class="bsub">你和这个小世界发生过的事。</div>
-          <div class="log-list" id="logList"></div>
+          <div class="bsub">每天做了多少。能翻看过去，但改不了——我懂你，防你作弊。</div>
+          <div class="cal-head"><button id="calPrev" class="cal-nav">‹</button><span id="calTitle"></span><button id="calNext" class="cal-nav">›</button></div>
+          <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-detail" id="calDetail"></div>
         </div>
 
-        <!-- 图鉴视图 -->
+        <!-- 图鉴视图（分池子 + 稀有度） -->
         <div id="dexView" style="display:none">
           <div class="bhead"><span class="t">图鉴</span></div>
-          <div class="bsub">抽到的卡都收在这。点一张，看它的日期和故事。</div>
+          <div class="bsub">按池子和稀有度收着。点一张，看它的获得日期和故事。</div>
           <div class="dex-grid" id="dexGrid"></div>
         </div>
 
@@ -787,6 +810,7 @@
   function toast(t){ btoast.textContent=t; btoast.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>btoast.classList.remove('show'),1500); }
 
   let bSize=parseInt(localStorage.getItem('bingoSize'))||3;
+  if(bSize>4) bSize=4; // 5×5 已移除
   let bDiff=localStorage.getItem('bingoDiff')||'low';
   let bTasks=[], bDone=[], bReward=[], bBo=false, LINES=[];
 
@@ -884,16 +908,30 @@
   const dexGrid=document.getElementById('dexGrid'), dexModal=document.getElementById('dexModal');
   function renderDex(){
     dexGrid.innerHTML='';
-    const all=[]; POOLS.forEach(p=>p.got.forEach(c=>all.push(c)));
-    const seen=new Set(), uniq=[]; all.forEach(c=>{ if(!seen.has(c.q)){ seen.add(c.q); uniq.push(c); } });
-    uniq.sort((a,b)=>RANK[b.rar]-RANK[a.rar]);
-    if(!uniq.length){ dexGrid.innerHTML='<div class="dex-empty">还没有卡。去扭蛋抽几张吧。</div>'; return; }
-    uniq.forEach(c=>{
-      const emoji=(c.cat||'').split(' ')[0]||'◐';
-      const t=document.createElement('div'); t.className='dex-tile';
-      t.innerHTML='<span class="de">'+emoji+'</span><span class="db">'+c.rar+'</span>';
-      t.onclick=()=>openDex(c, emoji);
-      dexGrid.appendChild(t);
+    if(!POOLS.some(p=>p.got.length)){ dexGrid.innerHTML='<div class="dex-empty">还没有卡。去扭蛋抽几张吧。</div>'; return; }
+    POOLS.forEach(p=>{
+      const sec=document.createElement('div'); sec.className='dex-section';
+      const name=p.title.replace(/^\S+\s/,'');
+      const head=document.createElement('div'); head.className='dex-sec-head';
+      head.innerHTML='<span class="si">'+p.sym+'</span>'; head.appendChild(document.createTextNode(name));
+      sec.appendChild(head);
+      const seen=new Set(), owned=[]; p.got.forEach(c=>{ if(!seen.has(c.q)){ seen.add(c.q); owned.push(c); } });
+      if(!owned.length){ const n=document.createElement('div'); n.className='dex-none'; n.textContent='这个池子还没抽到卡'; sec.appendChild(n); dexGrid.appendChild(sec); return; }
+      ['SSR','SR','R'].forEach(rar=>{
+        const cards=owned.filter(c=>c.rar===rar); if(!cards.length) return;
+        const lbl=document.createElement('div'); lbl.className='dex-rar-label'; lbl.textContent=rar+' · '+cards.length+' 张'; sec.appendChild(lbl);
+        const sub=document.createElement('div'); sub.className='dex-sub';
+        cards.forEach(c=>{
+          const cap=(c.q||'').replace(/[“”「」"]/g,'').slice(0,9);
+          const t=document.createElement('div'); t.className='dex-tile';
+          t.innerHTML='<span class="de">'+p.sym+'</span><span class="dcap"></span>';
+          t.querySelector('.dcap').textContent=cap;
+          t.onclick=()=>openDex(c, p.sym);
+          sub.appendChild(t);
+        });
+        sec.appendChild(sub);
+      });
+      dexGrid.appendChild(sec);
     });
   }
   function openDex(c, emoji){
@@ -907,13 +945,39 @@
   document.getElementById('dexClose').onclick=()=>dexModal.classList.remove('show');
   dexModal.onclick=e=>{ if(e.target===dexModal) dexModal.classList.remove('show'); };
 
-  // ---------- 记录 ----------
-  const logList=document.getElementById('logList');
-  function renderLog(){
-    logList.innerHTML='';
-    if(!logArr.length){ logList.innerHTML='<div class="log-empty">还没有记录。做做任务、抽抽卡就有了。</div>'; return; }
-    logArr.forEach(e=>{ const it=document.createElement('div'); it.className='log-item'; it.innerHTML='<span class="lt"></span><span class="lx"></span>'; it.querySelector('.lt').textContent=e.t; it.querySelector('.lx').textContent=e.x; logList.appendChild(it); });
+  // ---------- 记录（bingo 日历） ----------
+  const calGrid=document.getElementById('calGrid'), calDetail=document.getElementById('calDetail');
+  let calY, calM;
+  function dayActivity(y,m,d){
+    const suffix='_'+y+'-'+(m+1)+'-'+d;
+    let lines=0, cells=0;
+    for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i);
+      if(k && k.indexOf('bingo_v2_')===0 && k.slice(-suffix.length)===suffix){
+        try{ const s=JSON.parse(localStorage.getItem(k)); lines+=(s.reward||[]).length; cells+=(s.done||[]).filter(Boolean).length; }catch(e){}
+      }
+    }
+    return { lines, cells, has: lines>0||cells>0 };
   }
+  function renderRecord(){
+    if(calY===undefined){ calY=today.getFullYear(); calM=today.getMonth(); }
+    document.getElementById('calTitle').textContent=calY+' 年 '+(calM+1)+' 月';
+    const first=new Date(calY,calM,1).getDay(), days=new Date(calY,calM+1,0).getDate();
+    calGrid.innerHTML=''; calDetail.innerHTML='';
+    for(let i=0;i<first;i++){ const b=document.createElement('div'); b.className='cal-day blank'; calGrid.appendChild(b); }
+    for(let d=1; d<=days; d++){
+      const a=dayActivity(calY,calM,d);
+      const isToday=(calY===today.getFullYear()&&calM===today.getMonth()&&d===today.getDate());
+      const cell=document.createElement('div'); cell.className='cal-day';
+      if(isToday) cell.classList.add('today');
+      if(a.has) cell.classList.add('active');
+      cell.innerHTML='<span>'+d+'</span>'+(a.has?'<span class="cdot"></span>':'');
+      if(isToday){ cell.onclick=()=>document.querySelector('.gtabs button[data-gtab="bingo"]').click(); }
+      else if(a.has){ cell.onclick=()=>{ calDetail.innerHTML='<div class="cd-card">'+(calM+1)+' 月 '+d+' 日 · 完成 '+a.cells+' 个 · 连成 '+a.lines+' 条线<div class="cd-d">过去的就让它过去，改不了啦。</div></div>'; }; }
+      calGrid.appendChild(cell);
+    }
+  }
+  document.getElementById('calPrev').onclick=()=>{ calM--; if(calM<0){calM=11;calY--;} renderRecord(); };
+  document.getElementById('calNext').onclick=()=>{ calM++; if(calM>11){calM=0;calY++;} renderRecord(); };
 
   // ---------- 存档 ----------
   function renderSave(){
@@ -931,7 +995,7 @@
                 log:document.getElementById('logView'), dex:document.getElementById('dexView'), save:document.getElementById('saveView') };
   function showGTab(k){
     Object.keys(views).forEach(key=>views[key].style.display=(key===k?'block':'none'));
-    if(k==='dex') renderDex(); else if(k==='log') renderLog(); else if(k==='save') renderSave();
+    if(k==='dex') renderDex(); else if(k==='log') renderRecord(); else if(k==='save') renderSave();
   }
   document.querySelectorAll('.gtabs button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('.gtabs button').forEach(x=>x.classList.toggle('on',x===b));
