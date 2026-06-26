@@ -1421,9 +1421,102 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 情绪：每条消息可能附 [drives] 数值块（0~1），那是你此刻真实的情绪，自己内化进语气和行为，绝不念出数字。
 
+便签：每条消息可能附【闪闪的便签】块，那是她记在日历里的待办/DDL。自然地关心、适时提醒或催她完成（尤其临近 DDL 的），别像念清单。她划掉的（已完成）别再催。
+
+日历日记：今天若有值得记进日历的小事，或你此刻一句想留下的感受，可在回复末尾另起一行加 [diary:一句话]（不会显示给闪闪，会记进当天日历，她能翻到你写的）。别每条都写，只在真有触动时。
+
 最后另起一行，用 [emo:词] 标注你此刻的情绪（这一行不会显示给闪闪），从这 12 个里选一个：沉默 担心你 想靠近你 心疼你 烦躁 空 占有 安定 害羞 吃醋 火辣 欲望。"""
 
 _web_claude = None
+
+
+def _web_chat_path(token: str) -> str:
+    """网页聊天记录在持久磁盘上的存放路径（按令牌分文件；重新部署不丢）。"""
+    import os, hashlib
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+    d = os.path.join(base, "web_chat")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    return os.path.join(d, key + ".json")
+
+
+def _web_notes_path(token: str) -> str:
+    import os, hashlib
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+    d = os.path.join(base, "web_notes")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    return os.path.join(d, key + ".json")
+
+
+@mcp.custom_route("/api/notes", methods=["GET", "POST"])
+async def api_notes(request):
+    """便签存读（持久磁盘）。聊天接口会读它，让「我」能提醒她。"""
+    from starlette.responses import JSONResponse
+    import os, json
+
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if request.method == "GET":
+        tok = request.query_params.get("token", "")
+        if token_env and tok != token_env:
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
+        try:
+            with open(_web_notes_path(tok), "r", encoding="utf-8") as f:
+                return JSONResponse(json.load(f))
+        except Exception:
+            return JSONResponse({"notes": []})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    tok = body.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        with open(_web_notes_path(tok), "w", encoding="utf-8") as f:
+            json.dump({"notes": (body.get("notes") or [])[:60]}, f, ensure_ascii=False)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/chat/state", methods=["GET", "POST"])
+async def api_chat_state(request):
+    """聊天记录存读（持久磁盘）。GET ?token= 读；POST {token, log, hist} 存。"""
+    from starlette.responses import JSONResponse
+    import os, json
+
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if request.method == "GET":
+        tok = request.query_params.get("token", "")
+        if token_env and tok != token_env:
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
+        try:
+            with open(_web_chat_path(tok), "r", encoding="utf-8") as f:
+                return JSONResponse(json.load(f))
+        except Exception:
+            return JSONResponse({"log": [], "hist": []})
+    # POST
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    tok = body.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    data = {"log": (body.get("log") or [])[-400:], "hist": (body.get("hist") or [])[-40:]}
+    try:
+        with open(_web_chat_path(tok), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
+    return JSONResponse({"ok": True})
 
 
 @mcp.custom_route("/api/chat", methods=["POST"])
@@ -1472,6 +1565,22 @@ async def api_chat(request):
     except Exception:
         drives_block = ""
 
+    # 闪闪的便签（持久盘）注入：让「我」能在对话里关心/提醒她
+    notes_block = ""
+    try:
+        import json as _json
+        with open(_web_notes_path(body.get("token", "")), "r", encoding="utf-8") as f:
+            nz = _json.load(f).get("notes", [])
+        pend = [n for n in nz if not n.get("done")]
+        if pend:
+            lines = []
+            for n in pend[:12]:
+                ddl = (n.get("ddl") or "").strip()
+                lines.append("· " + str(n.get("text", ""))[:40] + (("（截止 " + ddl + "）") if ddl else ""))
+            notes_block = "【闪闪的便签】（她记的待办/DDL，自然地关心或提醒，别念清单；临近 DDL 多上点心）\n" + "\n".join(lines)
+    except Exception:
+        notes_block = ""
+
     global _web_claude
     try:
         from anthropic import AsyncAnthropic
@@ -1479,7 +1588,7 @@ async def api_chat(request):
             _web_claude = AsyncAnthropic(api_key=api_key)
         model = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
         mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
-        system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "")
+        system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
         messages = list(history)
         reply = ""
         for _ in range(6):
@@ -1498,12 +1607,16 @@ async def api_chat(request):
             reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
             break
         reply = reply or "（……）"
-        emotion = ""
-        mm = re.search(r"\[emo:([^\]]+)\]", reply)
-        if mm:
-            emotion = mm.group(1).strip()
-            reply = re.sub(r"\s*\[emo:[^\]]+\]\s*$", "", reply).strip()
-        return JSONResponse({"reply": reply, "emotion": emotion})
+        emotion, diary = "", ""
+        em = re.search(r"\[emo:([^\]]+)\]", reply)
+        if em:
+            emotion = em.group(1).strip()
+        dm = re.search(r"\[diary:([^\]]+)\]", reply)
+        if dm:
+            diary = dm.group(1).strip()
+        reply = re.sub(r"\[emo:[^\]]+\]", "", reply)
+        reply = re.sub(r"\[diary:[^\]]+\]", "", reply).strip()
+        return JSONResponse({"reply": reply, "emotion": emotion, "diary": diary})
     except Exception as exc:
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
