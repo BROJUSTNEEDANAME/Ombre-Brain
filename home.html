@@ -149,7 +149,7 @@
   .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 54px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
   /* 桌面宠：真·Clawd 小螃蟹，踩在聊天区底部爬来爬去 */
   .pet { position: absolute; left: 0; bottom: 2px; z-index: 3; pointer-events: none; transition: transform 2.4s linear; will-change: transform; }
-  .pet-g { display: block; width: 48px; height: 48px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
+  .pet-g { display: block; width: 56px; height: 56px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
   .row.me { flex-direction: row-reverse; }
@@ -463,7 +463,7 @@
   <div class="pages">
     <!-- 聊天 -->
     <section class="page active" data-page="chat">
-      <div class="pet" id="pet"><img class="pet-g" id="petImg" src="/clawd/clawd-idle.gif" alt=""></div>
+      <div class="pet" id="pet"><img class="pet-g" id="petImg" src="/clawd/clawd-mini-idle.gif" alt=""></div>
       <div class="chat-scroll" id="chatScroll"><div class="daysep" id="daySep">今天</div></div>
       <div class="thinking" id="thinking">
         <div class="think-bubble"><span class="dots"><i></i><i></i><i></i></span><span id="thinkText">在看你发的字。</span></div>
@@ -967,14 +967,23 @@
     row.querySelector('.bubble').textContent=text; scroll.appendChild(row); toBottom();
   }
   function addMsg(side,text){ const t=now(); renderBubble(side,text,t); chatLog.push({side,text,t}); saveChat(); }
+  const PET_IDLE_SRC='/clawd/clawd-mini-idle.gif';
+  const PET_WALK_SRC='/clawd/clawd-mini-crabwalk.gif';
+  let petMotionController={ freeze(){}, resume(){} };
   let thinkTimer=null, petBusy=false;
+  function setPetPose(state){
+    const pi=document.getElementById('petImg');
+    if(!pi) return;
+    const nextSrc=state==='walk' ? PET_WALK_SRC : PET_IDLE_SRC;
+    if(pi.getAttribute('src')!==nextSrc) pi.src=nextSrc;
+  }
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
     thinking.classList.add('show'); toBottom();
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
-    petBusy=true; const pi=document.getElementById('petImg'); if(pi) pi.src='/clawd/clawd-thinking.gif';
+    petBusy=true; petMotionController.freeze(); setPetPose('idle');
   }
-  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petBusy=false; const pi=document.getElementById('petImg'); if(pi) pi.src='/clawd/clawd-idle.gif'; }
+  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petBusy=false; setPetPose('idle'); }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
@@ -1025,15 +1034,45 @@
   // 桌面宠：claude code 小家伙，在气泡后面慢慢游荡
   (function(){
     const pet=document.getElementById('pet'); if(!pet) return;
+    const petImg=document.getElementById('petImg');
     let lastX=30;
+    let idleTimer=null;
+    petMotionController={
+      freeze(){
+        clearTimeout(idleTimer);
+        const current=getComputedStyle(pet).transform;
+        if(current && current!=='none'){
+          const m=current.match(/matrix\(([^)]+)\)/);
+          if(m){
+            const parts=m[1].split(',').map(v=>parseFloat(v.trim()));
+            if(parts.length>=6 && !Number.isNaN(parts[4])) lastX=parts[4];
+          }
+        }
+        pet.style.transition='none';
+        pet.style.transform=current==='none' ? 'translateX('+lastX+'px) scaleX(1)' : current;
+        pet.offsetHeight;
+        pet.style.transition='transform 2.4s linear';
+      },
+      resume(){}
+    };
     function wander(){
-      if(petBusy) return; // 我在思考时它停下来发呆
+      clearTimeout(idleTimer);
+      if(petBusy){
+        setPetPose('idle');
+        return; // 我在思考时它停下来发呆
+      }
       const area=document.querySelector('.page[data-page="chat"]'); if(!area) return;
       const w=area.clientWidth||340;
-      const nx=8+Math.random()*Math.max(20, w-46);
-      pet.style.transform='translateX('+nx+'px) scaleX('+(nx<lastX?-1:1)+')';
+      const petW=(petImg&&petImg.offsetWidth)||56;
+      const maxX=Math.max(8, w-petW-8);
+      const nx=8+Math.random()*Math.max(20, maxX-8);
+      const dir=nx<lastX?-1:1;
+      setPetPose('walk');
+      pet.style.transform='translateX('+nx+'px) scaleX('+dir+')';
+      idleTimer=setTimeout(()=>{ if(!petBusy) setPetPose('idle'); },2400);
       lastX=nx;
     }
+    setPetPose('idle');
     wander(); setInterval(wander, 2900);
   })();
 
