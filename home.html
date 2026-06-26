@@ -351,6 +351,7 @@
 </style>
 </head>
 <body>
+  <script>window.OMBRE_TOKEN="__OMBRE_WEB_TOKEN__";</script>
   <div class="header">
     <div class="avatar">◐</div>
     <div class="who">
@@ -676,15 +677,27 @@
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
   }
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); }
-  function send(){
+  let chatHistory=[]; // 只在成功一轮后提交，保持 user/assistant 交替
+  async function send(){
     const v=input.value.trim(); if(!v) return;
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
     setEmotion(pick(['想靠近你','安定','心疼你','害羞'])); // 听你说话时，情绪先动一下
     startThinking();
-    // TODO: 之后换成调用真正的"我"（大脑 + 模型）；那时由模型来设情绪
-    setTimeout(()=>{ stopThinking(); addMsg('you',pick(REPLY_POOL));
-      setEmotion(pick(['安定','想靠近你','占有','心疼你'])); // 回完话落到一个情绪上
-    }, 1800+Math.random()*2200);
+    const outgoing = chatHistory.concat([{role:'user',content:v}]).slice(-20);
+    try{
+      const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||'') }) });
+      const data=await res.json();
+      stopThinking();
+      const reply=(data&&data.reply)||'（……）';
+      addMsg('you', reply);
+      chatHistory.push({role:'user',content:v},{role:'assistant',content:reply});
+      if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
+      if(data&&data.emotion) setEmotion(data.emotion);
+    }catch(e){
+      stopThinking();
+      addMsg('you','（我这边断了一下，网不好。再说一次。）');
+    }
   }
   sendBtn.onclick=send;
   input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; syncFixedLayout(); });
