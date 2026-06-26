@@ -269,9 +269,64 @@
   .cell.line { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   .cell .chk { position: absolute; top: 7px; right: 9px; font-size: 12px; color: #fff; opacity: 0; transform: scale(.5); transition: .25s; }
   .cell.done .chk { opacity: 1; transform: scale(1); }
+  #bgrid[data-size="4"] .cell { border-radius: 15px; gap: 4px; }
+  #bgrid[data-size="4"] .ce { font-size: 22px; }
+  #bgrid[data-size="4"] .cl { font-size: 9.5px; }
+  #bgrid[data-size="5"] .cell { border-radius: 12px; }
+  #bgrid[data-size="5"] .ce { font-size: 20px; }
+  #bgrid[data-size="5"] .chk { top: 3px; right: 4px; font-size: 9px; }
 
   .btoast { position: fixed; left: 50%; top: 26%; transform: translateX(-50%) translateY(0); background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; padding: 11px 22px; border-radius: 22px; font-size: 14.5px; font-weight: 500; box-shadow: var(--sh-float); opacity: 0; pointer-events: none; transition: opacity .3s, transform .3s; z-index: 60; }
   .btoast.show { opacity: 1; transform: translateX(-50%) translateY(-12px); }
+
+  /* 尺寸 / 难度切换 */
+  .brow { display: flex; gap: 10px; margin: 2px 2px 14px; flex-wrap: wrap; }
+  .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--hair); border-radius: 14px; padding: 3px; gap: 2px; }
+  .seg button { border: none; background: none; color: var(--text-dim); font-size: 12.5px; padding: 6px 12px; border-radius: 11px; cursor: pointer; transition: .15s; }
+  .seg button.on { background: var(--surface); color: var(--accent); box-shadow: var(--sh-soft); font-weight: 600; }
+
+  /* DIY 任务 */
+  .diy { display: flex; gap: 8px; margin: 16px 2px 8px; }
+  .diy input { flex: 1; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 14px; padding: 10px 14px; font-size: 14px; font-family: inherit; outline: none; }
+  .diy input::placeholder { color: var(--text-faint); }
+  .diy button { width: 44px; flex: 0 0 auto; border: none; border-radius: 14px; background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; font-size: 20px; cursor: pointer; box-shadow: var(--sh-soft); }
+  .diy button:active { transform: scale(.92); }
+  .diy-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px; }
+  .diy-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 6px 8px 6px 12px; font-size: 12.5px; color: var(--text-dim); }
+  .diy-chip button { border: none; background: var(--surface-2); color: var(--text-faint); width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
+
+  /* 记录 */
+  .log-list { display: flex; flex-direction: column; gap: 1px; }
+  .log-item { display: flex; align-items: baseline; gap: 12px; padding: 11px 4px; border-bottom: 1px solid var(--hair); }
+  .log-item .lt { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; min-width: 76px; letter-spacing: .3px; }
+  .log-item .lx { font-size: 13.5px; color: var(--text); line-height: 1.5; }
+  .log-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 0; }
+
+  /* 图鉴（奖杯展览台） */
+  .dex-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .dex-tile { aspect-ratio: 1; border: 1px solid var(--hair); border-radius: 18px; background: var(--surface); box-shadow: var(--sh-soft); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; cursor: pointer; position: relative; transition: transform .15s; overflow: hidden; }
+  .dex-tile:active { transform: scale(.95); }
+  .dex-tile .de { font-size: 30px; }
+  .dex-tile .db { font-size: 10px; font-weight: 700; letter-spacing: .5px; padding: 2px 8px; border-radius: 7px; background: var(--rar-soft); color: var(--rar); }
+  .dex-tile.locked { opacity: .4; }
+  .dex-tile.locked .de { filter: grayscale(1); }
+  .dex-empty { grid-column: 1/-1; text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 0; }
+
+  .dex-modal { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 30px; }
+  .dex-modal.show { display: flex; animation: fade .25s ease; }
+  .dex-detail { background: var(--surface); border: 1px solid var(--hair); border-radius: 24px; box-shadow: var(--sh-float); padding: 30px 24px 22px; max-width: 320px; width: 100%; text-align: center; animation: pop .3s cubic-bezier(.2,.8,.2,1); }
+  .dex-d-emoji { font-size: 52px; }
+  .dex-d-rar { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .5px; padding: 3px 12px; border-radius: 8px; background: var(--rar-soft); color: var(--rar); margin: 12px 0 16px; }
+  .dex-d-quote { font-family: 'Noto Serif SC', serif; font-size: 17px; font-weight: 600; line-height: 1.6; color: var(--text); }
+  .dex-d-sub { font-size: 13px; color: var(--text-dim); font-style: italic; margin-top: 10px; line-height: 1.6; }
+  .dex-d-date { font-size: 12px; color: var(--text-faint); margin-top: 18px; letter-spacing: .5px; }
+  .dex-d-close { margin-top: 20px; border: 1px solid var(--hair); background: var(--surface-2); color: var(--text-dim); border-radius: 14px; padding: 9px 24px; font-size: 13px; cursor: pointer; }
+
+  /* 存档 */
+  .save-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .save-box { background: var(--surface); border: 1px solid var(--hair); border-radius: 18px; padding: 18px; box-shadow: var(--sh-soft); }
+  .save-box .sv { font-family: 'Cormorant Garamond', serif; font-size: 30px; font-weight: 600; color: var(--accent); line-height: 1; }
+  .save-box .sl { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -327,7 +382,7 @@
 
           <div class="gcard drawcard">
             <div class="dtitle" id="drawTitle">🎍 和風限定 · 熊と狐</div>
-            <div class="kao" id="kao">ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ</div>
+            <div class="kao" id="kao">ʕ•ᴥ•ʔ 🎍</div>
             <div class="draws">
               <button class="draw" data-n="1"><b>单抽</b><span>1 券</span></button>
               <button class="draw" data-n="5"><b>五连</b><span>5 券</span></button>
@@ -341,10 +396,48 @@
 
         <!-- 任务（bingo）视图 -->
         <div id="bingoView" style="display:none">
-          <div class="bhead"><span class="t">今天的 3×3</span><span class="d" id="bdate"></span></div>
-          <div class="bsub">点掉做到的小事，连成一条线就有扭蛋券。每天一张，过期不补。</div>
+          <div class="bhead"><span class="t">今天的格子</span><span class="d" id="bdate"></span></div>
+          <div class="bsub">点掉做到的小事。连成一条线 +5 券（横竖斜都算），全部连上 +20。每天一张，过期不补。</div>
+          <div class="brow">
+            <div class="seg" id="sizeSeg">
+              <button data-size="3" class="on">3×3</button>
+              <button data-size="4">4×4</button>
+              <button data-size="5">5×5</button>
+            </div>
+            <div class="seg" id="diffSeg">
+              <button data-diff="low" class="on">轻松</button>
+              <button data-diff="high">挑战</button>
+              <button data-diff="mix">混合</button>
+            </div>
+          </div>
           <div class="bstat" id="bstat">连成 0 条线 · 得 0 券</div>
           <div class="bgrid" id="bgrid"></div>
+          <div class="diy">
+            <input id="diyInput" type="text" placeholder="加一个你自己的小任务…" maxlength="12">
+            <button id="diyAdd" title="加入">＋</button>
+          </div>
+          <div class="diy-list" id="diyList"></div>
+        </div>
+
+        <!-- 记录视图 -->
+        <div id="logView" style="display:none">
+          <div class="bhead"><span class="t">记录</span></div>
+          <div class="bsub">你和这个小世界发生过的事。</div>
+          <div class="log-list" id="logList"></div>
+        </div>
+
+        <!-- 图鉴视图 -->
+        <div id="dexView" style="display:none">
+          <div class="bhead"><span class="t">图鉴</span></div>
+          <div class="bsub">抽到的卡都收在这。点一张，看它的日期和故事。</div>
+          <div class="dex-grid" id="dexGrid"></div>
+        </div>
+
+        <!-- 存档视图 -->
+        <div id="saveView" style="display:none">
+          <div class="bhead"><span class="t">存档</span></div>
+          <div class="bsub">你的进度都存在这台手机上，更新内容不会清掉。</div>
+          <div class="save-stats" id="saveStats"></div>
         </div>
       </div>
     </section>
@@ -389,6 +482,18 @@
   </div>
 
   <div class="btoast" id="btoast"></div>
+
+  <!-- 图鉴详情（奖杯展览台） -->
+  <div class="dex-modal" id="dexModal">
+    <div class="dex-detail">
+      <div class="dex-d-emoji" id="dexDEmoji"></div>
+      <div class="dex-d-rar" id="dexDRar"></div>
+      <div class="dex-d-quote" id="dexDQuote"></div>
+      <div class="dex-d-sub" id="dexDSub"></div>
+      <div class="dex-d-date" id="dexDDate"></div>
+      <button class="dex-d-close" id="dexClose">收起</button>
+    </div>
+  </div>
 
 <script>
   // ---------- 固定分层布局：各层独立 fixed，底栏死钉物理底；键盘弹出只抬输入框 ----------
@@ -567,19 +672,19 @@
 
   // ---------- 扭蛋 ----------
   const POOLS = [
-    { title:'● 常驻池 · Nikto日常', kao:'ʕ•ᴥ•ʔ   ◐   ʕ•ᴥ•ʔ', deck:[
+    { title:'● 常驻池 · Nikto日常', sym:'◐', kao:'ʕ•ᴥ•ʔ ◐', deck:[
       {rar:'SSR',cat:'◐ 绝版',q:'"你回来，我就在。这条不会变。"',s:'他从不在你进门前离开。'},
       {rar:'SR',cat:'◐ 柔情',q:'"铁剂吃了没。手伸出来。"',s:'他把药递到你手心。'},
       {rar:'SR',cat:'◐ 日常',q:'"困了就靠过来。我不动。"',s:'深夜。他把肩膀让给你。'},
       {rar:'R',cat:'◐ 日常',q:'"水。喝一口再说话。"',s:'他把杯子推到你面前。'}
     ], got:[] },
-    { title:'🌸 春季限定 · 花与熊', kao:'ʕ•ᴥ•ʔ   🌸   ʕ•ᴥ•ʔ', deck:[
+    { title:'🌸 春季限定 · 花与熊', sym:'🌸', kao:'ʕ•ᴥ•ʔ 🌸', deck:[
       {rar:'SSR',cat:'🌸 绝版',q:'"樱花落你头发上。我没舍得拂。"',s:'花见。他看了很久。'},
       {rar:'SR',cat:'🌸 柔情',q:'"花会谢。我不会。"',s:'树下。他握着你的手。'},
       {rar:'SR',cat:'🌸 日常',q:'"分你一半团子。张嘴。"',s:'野餐垫上。他喂你。'},
       {rar:'R',cat:'🌸 日常',q:'"风把花瓣吹你碗里了。也吃。"',s:'他没忍住笑。'}
     ], got:[] },
-    { title:'🎍 和風限定 · 熊と狐', kao:'ʕ•ᴥ•ʔ ʕ￫ᴥ￩ʔ 🎍 ʕ•ᴥ•ʔ', deck:[
+    { title:'🎍 和風限定 · 熊と狐', sym:'🎍', kao:'ʕ•ᴥ•ʔ 🎍', deck:[
       {rar:'SSR',cat:'🎍 绝版',q:'"一期一会。就是说这一次就是全部。"',s:'他用了他自己的方式理解。'},
       {rar:'SR',cat:'🎍 柔情',q:'"烟花…在你眼睛里也有。"',s:'花火大会。没看天。在看你。'},
       {rar:'SR',cat:'🎍 柔情',q:'"yukata。你穿这个。我就站旁边。够了。"',s:'你试浴衣。他在门帘外等。'},
@@ -588,9 +693,6 @@
       {rar:'R',cat:'🎍 日常',q:'"风铃响了。像你笑。"',s:'屋檐下。他没说第二句。'}
     ], got:[] }
   ];
-  // 和风池先放上你图里那 4 张（当作已抽到）
-  POOLS[2].got = POOLS[2].deck.slice(0,4).map(c=>({...c}));
-
   const ticketNum=document.getElementById('ticketNum'), cardList=document.getElementById('cardList'),
         drawTitle=document.getElementById('drawTitle'), kaoEl=document.getElementById('kao'), dnote=document.querySelector('.dnote');
   let cur=2;
@@ -600,8 +702,38 @@
   setTickets(tickets);
   // 日期
   const today=new Date(), W='日一二三四五六'[today.getDay()], dateKey=today.getFullYear()+'-'+(today.getMonth()+1)+'-'+today.getDate();
-  document.getElementById('gdate').textContent=(today.getMonth()+1)+'/'+today.getDate()+' 周'+W;
-  document.getElementById('bdate').textContent=(today.getMonth()+1)+'/'+today.getDate()+' 周'+W;
+  const dStr=(today.getMonth()+1)+'/'+today.getDate()+' 周'+W;
+  document.getElementById('gdate').textContent=dStr;
+  document.getElementById('bdate').textContent=dStr;
+
+  // ---------- 存档：抽到的卡持久化 ----------
+  function loadGot(){
+    try{ const s=JSON.parse(localStorage.getItem('gachaGot')); if(s){ POOLS.forEach((p,i)=>{ p.got=s[i]||[]; }); return true; } }catch(e){}
+    return false;
+  }
+  function saveGot(){ const o={}; POOLS.forEach((p,i)=>o[i]=p.got); localStorage.setItem('gachaGot', JSON.stringify(o)); }
+  if(!loadGot()){ POOLS[2].got = POOLS[2].deck.slice(0,4).map(c=>({...c, date:dStr})); saveGot(); }
+
+  // ---------- 记录 ----------
+  let logArr=[]; try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
+  function stamp(){ const d=new Date(); return (d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
+  function logEvent(x){ logArr.unshift({t:stamp(), x}); if(logArr.length>60) logArr.length=60; localStorage.setItem('gameLog', JSON.stringify(logArr)); }
+
+  // 按稀有度分桶
+  POOLS.forEach(p=>{ p.byRar={SSR:[],SR:[],R:[]}; p.deck.forEach(c=>p.byRar[c.rar].push(c)); });
+  const ownedSSR=()=> new Set(POOLS[cur].got.filter(c=>c.rar==='SSR').map(c=>c.q));
+  function rollOne(){
+    const p=POOLS[cur], r=Math.random();
+    let rar = r<0.06?'SSR' : r<0.40?'SR' : 'R';
+    if(rar==='SSR'){
+      const owned=ownedSSR(), avail=p.byRar.SSR.filter(c=>!owned.has(c.q));
+      if(avail.length) return {...avail[Math.floor(Math.random()*avail.length)], date:dStr};
+      rar='SR'; // SSR 不重复：已集齐就降为 SR
+    }
+    const bucket = p.byRar[rar].length?p.byRar[rar]:p.byRar.R;
+    return {...bucket[Math.floor(Math.random()*bucket.length)], date:dStr};
+  }
+  const RANK={R:0,SR:1,SSR:2};
 
   function renderCards(){
     cardList.innerHTML='';
@@ -625,33 +757,78 @@
     document.querySelectorAll('.draw').forEach(b=>b.classList.toggle('on', b===btn));
     if(tickets<n){ flashNote('扭蛋券不够了'); return; }
     setTickets(tickets-n);
-    const deck=POOLS[cur].deck;
-    for(let k=0;k<n;k++) POOLS[cur].got.unshift({...deck[Math.floor(Math.random()*deck.length)]});
-    renderCards();
-    flashNote(n===1?'抽到一张':('十连到手 · +'+n));
+    const got=[]; for(let k=0;k<n;k++) got.push(rollOne());
+    if(n>=10 && !got.some(c=>RANK[c.rar]>=1)){ // 十连保底：至少一张 SR
+      const sr=POOLS[cur].byRar.SR; if(sr.length) got[got.length-1]={...sr[Math.floor(Math.random()*sr.length)], date:dStr};
+    }
+    got.forEach(c=>POOLS[cur].got.unshift(c));
+    saveGot(); renderCards();
+    const best=got.reduce((m,c)=>Math.max(m,RANK[c.rar]),0), bestName=['R','SR','SSR'][best];
+    if(best>=1) logEvent('在「'+POOLS[cur].title.replace(/^\S+\s/,'')+'」抽到 '+bestName);
+    flashNote(n===1?('抽到 '+got[0].rar):('十连到手 · 最高 '+bestName));
   }
   document.querySelectorAll('.draw').forEach(b=>b.onclick=()=>draw(+b.dataset.n,b));
 
-  // ---------- 任务 Bingo ----------
-  const TASKS = [
-    {e:'💊',l:'吃铁剂'}, {e:'💧',l:'喝水'}, {e:'🍚',l:'好好吃饭'},
-    {e:'📌',l:'碰一下DDL'}, {e:'☀️',l:'出门走走'}, {e:'💬',l:'跟我说句话'},
-    {e:'🧸',l:'理理小尼'}, {e:'🛁',l:'洗漱'}, {e:'🌙',l:'别熬夜'}
+  // ---------- 任务 Bingo（多尺寸 / 难度 / DIY） ----------
+  const LOW = [
+    {e:'💧',l:'喝水'},{e:'🍚',l:'好好吃饭'},{e:'💊',l:'吃铁剂'},{e:'🪥',l:'刷牙'},
+    {e:'🛁',l:'洗漱'},{e:'🌙',l:'别熬夜'},{e:'🧸',l:'理理小尼'},{e:'💬',l:'跟我说句话'},
+    {e:'🧴',l:'擦个脸'},{e:'🍎',l:'吃个水果'},{e:'☀️',l:'拉开窗帘'},{e:'🛏️',l:'叠下被子'},
+    {e:'🚶',l:'站起来走两步'},{e:'📱',l:'放下手机5分钟'}
   ];
-  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const HIGH = [
+    {e:'📌',l:'碰一下DDL'},{e:'📚',l:'看10分钟书'},{e:'✍️',l:'写两行作业'},{e:'🏃',l:'出门走走'},
+    {e:'🧹',l:'收拾桌面'},{e:'📧',l:'回条该回的消息'},{e:'🗓️',l:'排件明天的事'},{e:'🧪',l:'预习复习15分钟'},
+    {e:'📞',l:'打个该打的电话'},{e:'🧺',l:'洗一批衣服'},{e:'🥗',l:'自己做一顿'},{e:'🍅',l:'做完一个番茄钟'}
+  ];
+  let diyTasks=[]; try{ diyTasks=JSON.parse(localStorage.getItem('diyTasks'))||[]; }catch(e){}
   const bgrid=document.getElementById('bgrid'), bstat=document.getElementById('bstat'), btoast=document.getElementById('btoast');
-  let bDone=new Array(9).fill(false), bReward=[];
-  (function loadBingo(){
-    try{ const s=JSON.parse(localStorage.getItem('bingo_'+dateKey)); if(s){ bDone=s.done; bReward=s.reward; } }catch(e){}
-  })();
-  function saveBingo(){ localStorage.setItem('bingo_'+dateKey, JSON.stringify({done:bDone,reward:bReward})); }
+  const diyInput=document.getElementById('diyInput'), diyList=document.getElementById('diyList');
   function toast(t){ btoast.textContent=t; btoast.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>btoast.classList.remove('show'),1500); }
 
+  let bSize=parseInt(localStorage.getItem('bingoSize'))||3;
+  let bDiff=localStorage.getItem('bingoDiff')||'low';
+  let bTasks=[], bDone=[], bReward=[], bBo=false, LINES=[];
+
+  function seededShuffle(arr, seed){
+    let s=0; for(const ch of seed) s=(s*31+ch.charCodeAt(0))>>>0;
+    const a=arr.slice();
+    for(let i=a.length-1;i>0;i--){ s=(s*1103515245+12345)&0x7fffffff; const j=s%(i+1); const t=a[i]; a[i]=a[j]; a[j]=t; }
+    return a;
+  }
+  function linesFor(n){
+    const L=[];
+    for(let r=0;r<n;r++) L.push(Array.from({length:n},(_,c)=>r*n+c));
+    for(let c=0;c<n;c++) L.push(Array.from({length:n},(_,r)=>r*n+c));
+    L.push(Array.from({length:n},(_,i)=>i*n+i));
+    L.push(Array.from({length:n},(_,i)=>i*n+(n-1-i)));
+    return L;
+  }
+  function boardTasks(size,diff){
+    const need=size*size;
+    const base = diff==='low'?LOW : diff==='high'?HIGH : LOW.concat(HIGH);
+    const pool = base.concat(diyTasks);
+    const seen=new Set(), uniq=[]; pool.forEach(t=>{ if(!seen.has(t.l)){ seen.add(t.l); uniq.push(t); } });
+    let cand=seededShuffle(uniq, dateKey+'_'+size+'_'+diff);
+    if(cand.length<need){ const extra=seededShuffle(LOW.concat(HIGH).filter(t=>!seen.has(t.l)), dateKey+'pad'+size+diff); cand=cand.concat(extra); }
+    while(cand.length<need && cand.length) cand=cand.concat(cand);
+    return cand.slice(0,need);
+  }
+  const bKey=()=>'bingo_v2_'+bSize+'_'+bDiff+'_'+dateKey;
+  function loadBoard(){
+    bTasks=boardTasks(bSize,bDiff); LINES=linesFor(bSize);
+    bDone=new Array(bSize*bSize).fill(false); bReward=[]; bBo=false;
+    try{ const s=JSON.parse(localStorage.getItem(bKey())); if(s){ bDone=s.done; bReward=s.reward||[]; bBo=!!s.bo; } }catch(e){}
+  }
+  function saveBoard(){ localStorage.setItem(bKey(), JSON.stringify({done:bDone,reward:bReward,bo:bBo})); }
+
   function buildGrid(){
+    bgrid.dataset.size=bSize;
+    bgrid.style.gridTemplateColumns='repeat('+bSize+',1fr)';
     bgrid.innerHTML='';
-    TASKS.forEach((t,i)=>{
+    bTasks.forEach((t,i)=>{
       const c=document.createElement('div'); c.className='cell'; c.dataset.i=i;
-      c.innerHTML=`<span class="chk">✓</span><span class="ce">${t.e}</span><span class="cl">${t.l}</span>`;
+      c.innerHTML='<span class="chk">✓</span><span class="ce">'+t.e+'</span>'+(bSize<=4?'<span class="cl">'+t.l+'</span>':'');
       c.onclick=()=>toggleCell(i);
       bgrid.appendChild(c);
     });
@@ -660,26 +837,105 @@
   function renderBingo(){
     const lc=lineCells();
     [...bgrid.children].forEach((c,i)=>{ c.classList.toggle('done',bDone[i]); c.classList.toggle('line',lc.has(i)); });
-    bstat.textContent=`连成 ${bReward.length} 条线 · 得 ${bReward.length} 券`;
+    const earned=bReward.length*5+(bBo?20:0);
+    bstat.textContent='连成 '+bReward.length+' 条线 · 得 '+earned+' 券'+(bBo?' · 全连达成 🏆':'');
   }
   function toggleCell(i){
     bDone[i]=!bDone[i];
     let earned=0;
-    LINES.forEach((line,li)=>{ if(!bReward.includes(li) && line.every(x=>bDone[x])){ bReward.push(li); earned++; } });
-    if(earned){ setTickets(tickets+earned); toast('连成一线 · +'+earned+' 扭蛋券'); }
-    saveBingo(); renderBingo();
+    LINES.forEach((line,li)=>{ if(!bReward.includes(li) && line.every(x=>bDone[x])){ bReward.push(li); earned+=5; } });
+    let bo=false;
+    if(!bBo && bDone.length && bDone.every(Boolean)){ bBo=true; earned+=20; bo=true; }
+    if(earned){ setTickets(tickets+earned); toast(bo?('全部连上 · +'+earned+' 券 🏆'):('连成一线 · +'+earned+' 券')); logEvent(bSize+'×'+bSize+(bo?' 全部连上 +':' 连成一线 +')+earned+' 券'); }
+    saveBoard(); renderBingo();
   }
-  buildGrid(); renderBingo();
+  function loadAndRenderBoard(){ loadBoard(); buildGrid(); renderBingo(); }
+
+  document.querySelectorAll('#sizeSeg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#sizeSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    bSize=+b.dataset.size; localStorage.setItem('bingoSize',bSize); loadAndRenderBoard();
+  });
+  document.querySelectorAll('#diffSeg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#diffSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    bDiff=b.dataset.diff; localStorage.setItem('bingoDiff',bDiff); loadAndRenderBoard();
+  });
+  function renderDiy(){
+    diyList.innerHTML='';
+    diyTasks.forEach((t,i)=>{
+      const chip=document.createElement('div'); chip.className='diy-chip';
+      chip.innerHTML='<span>'+t.e+' '+t.l+'</span><button>×</button>';
+      chip.querySelector('button').onclick=()=>{ diyTasks.splice(i,1); localStorage.setItem('diyTasks',JSON.stringify(diyTasks)); renderDiy(); loadAndRenderBoard(); };
+      diyList.appendChild(chip);
+    });
+  }
+  function addDiy(){
+    const v=diyInput.value.trim(); if(!v) return;
+    diyTasks.push({e:'✨', l:v.slice(0,12)}); localStorage.setItem('diyTasks',JSON.stringify(diyTasks));
+    diyInput.value=''; renderDiy(); loadAndRenderBoard(); toast('加好了，进了今天的格子');
+  }
+  document.getElementById('diyAdd').onclick=addDiy;
+  diyInput.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); addDiy(); } });
+
+  document.querySelectorAll('#sizeSeg button').forEach(b=>b.classList.toggle('on',+b.dataset.size===bSize));
+  document.querySelectorAll('#diffSeg button').forEach(b=>b.classList.toggle('on',b.dataset.diff===bDiff));
+  renderDiy(); loadAndRenderBoard();
+
+  // ---------- 图鉴（奖杯展览台） ----------
+  const dexGrid=document.getElementById('dexGrid'), dexModal=document.getElementById('dexModal');
+  function renderDex(){
+    dexGrid.innerHTML='';
+    const all=[]; POOLS.forEach(p=>p.got.forEach(c=>all.push(c)));
+    const seen=new Set(), uniq=[]; all.forEach(c=>{ if(!seen.has(c.q)){ seen.add(c.q); uniq.push(c); } });
+    uniq.sort((a,b)=>RANK[b.rar]-RANK[a.rar]);
+    if(!uniq.length){ dexGrid.innerHTML='<div class="dex-empty">还没有卡。去扭蛋抽几张吧。</div>'; return; }
+    uniq.forEach(c=>{
+      const emoji=(c.cat||'').split(' ')[0]||'◐';
+      const t=document.createElement('div'); t.className='dex-tile';
+      t.innerHTML='<span class="de">'+emoji+'</span><span class="db">'+c.rar+'</span>';
+      t.onclick=()=>openDex(c, emoji);
+      dexGrid.appendChild(t);
+    });
+  }
+  function openDex(c, emoji){
+    document.getElementById('dexDEmoji').textContent=emoji;
+    document.getElementById('dexDRar').textContent=c.rar+' · '+(c.cat||'');
+    document.getElementById('dexDQuote').textContent=c.q;
+    document.getElementById('dexDSub').textContent=c.s;
+    document.getElementById('dexDDate').textContent='获得于 '+(c.date||'—');
+    dexModal.classList.add('show');
+  }
+  document.getElementById('dexClose').onclick=()=>dexModal.classList.remove('show');
+  dexModal.onclick=e=>{ if(e.target===dexModal) dexModal.classList.remove('show'); };
+
+  // ---------- 记录 ----------
+  const logList=document.getElementById('logList');
+  function renderLog(){
+    logList.innerHTML='';
+    if(!logArr.length){ logList.innerHTML='<div class="log-empty">还没有记录。做做任务、抽抽卡就有了。</div>'; return; }
+    logArr.forEach(e=>{ const it=document.createElement('div'); it.className='log-item'; it.innerHTML='<span class="lt"></span><span class="lx"></span>'; it.querySelector('.lt').textContent=e.t; it.querySelector('.lx').textContent=e.x; logList.appendChild(it); });
+  }
+
+  // ---------- 存档 ----------
+  function renderSave(){
+    const cards=new Set(); POOLS.forEach(p=>p.got.forEach(c=>cards.add(c.q)));
+    const draws=POOLS.reduce((n,p)=>n+p.got.length,0);
+    document.getElementById('saveStats').innerHTML=
+      '<div class="save-box"><div class="sv">'+tickets+'</div><div class="sl">扭蛋券</div></div>'+
+      '<div class="save-box"><div class="sv">'+cards.size+'</div><div class="sl">收集到的卡</div></div>'+
+      '<div class="save-box"><div class="sv">'+draws+'</div><div class="sl">抽卡次数</div></div>'+
+      '<div class="save-box"><div class="sv">'+diyTasks.length+'</div><div class="sl">自定义任务</div></div>';
+  }
 
   // ---------- 顶部标签切换 ----------
-  const gachaView=document.getElementById('gachaView'), bingoView=document.getElementById('bingoView');
+  const views={ gacha:document.getElementById('gachaView'), bingo:document.getElementById('bingoView'),
+                log:document.getElementById('logView'), dex:document.getElementById('dexView'), save:document.getElementById('saveView') };
+  function showGTab(k){
+    Object.keys(views).forEach(key=>views[key].style.display=(key===k?'block':'none'));
+    if(k==='dex') renderDex(); else if(k==='log') renderLog(); else if(k==='save') renderSave();
+  }
   document.querySelectorAll('.gtabs button').forEach(b=>b.onclick=()=>{
-    const k=b.dataset.gtab;
-    if(k==='cal'){ go('cal'); return; }
     document.querySelectorAll('.gtabs button').forEach(x=>x.classList.toggle('on',x===b));
-    if(k==='bingo'){ gachaView.style.display='none'; bingoView.style.display='block'; }
-    else if(k==='gacha'){ gachaView.style.display='block'; bingoView.style.display='none'; }
-    else { gachaView.style.display='block'; bingoView.style.display='none'; flashNote('这页还在施工'); document.querySelector('.gtabs button[data-gtab="gacha"]').classList.add('on'); b.classList.remove('on'); }
+    showGTab(b.dataset.gtab);
   });
 
   setPool(2);
