@@ -149,7 +149,7 @@
   .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 54px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
   /* 桌面宠：真·Clawd 小螃蟹，踩在聊天区底部爬来爬去 */
   .pet { position: absolute; left: 0; bottom: 2px; z-index: 3; pointer-events: none; transition: transform 2.4s linear; will-change: transform; }
-  .pet-g { display: block; width: 56px; height: 56px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
+  .pet-g { display: block; width: 56px; height: 56px; object-fit: contain; image-rendering: pixelated; transform-origin: center; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
   .row.me { flex-direction: row-reverse; }
@@ -1049,7 +1049,7 @@
           }
         }
         pet.style.transition='none';
-        pet.style.transform=current==='none' ? 'translateX('+lastX+'px) scaleX(1)' : current;
+        pet.style.transform=current==='none' ? 'translateX('+lastX+'px)' : current;
         pet.offsetHeight;
         pet.style.transition='transform 2.4s linear';
       },
@@ -1068,7 +1068,8 @@
       const nx=8+Math.random()*Math.max(20, maxX-8);
       const dir=nx<lastX?-1:1;
       setPetPose('walk');
-      pet.style.transform='translateX('+nx+'px) scaleX('+dir+')';
+      if(petImg) petImg.style.transform='scaleX('+dir+')';
+      pet.style.transform='translateX('+nx+'px)';
       idleTimer=setTimeout(()=>{ if(!petBusy) setPetPose('idle'); },2400);
       lastX=nx;
     }
