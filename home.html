@@ -993,7 +993,7 @@
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petCtl && petCtl.fromType(false); }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
-  const SEND_WAIT=2800;        // 等你把话说完再回：分段发不会逐句回
+  const SEND_WAIT=600;         // 几乎即时回（只把同一口气里连发的几条并一下，不再等你 ~3 秒）
   function send(){
     const v=input.value.trim(); if(!v) return;
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
