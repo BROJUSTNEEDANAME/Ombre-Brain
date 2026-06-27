@@ -1025,7 +1025,7 @@
     busy=true;
     const combined=pending.join('\n'); pending=[];
     startThinking();
-    const outgoing = chatHistory.concat([{role:'user',content:combined}]).slice(-20);
+    const outgoing = chatHistory.concat([{role:'user',content:combined}]).slice(-24); // 上下文给足，和 Telegram 一致
     try{
       const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||'') }) });

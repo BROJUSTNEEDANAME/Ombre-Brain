@@ -1608,6 +1608,8 @@ async def api_chat(request):
         if _web_claude is None:
             _web_claude = AsyncAnthropic(api_key=api_key)
         model = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
+        # 回复预算：和 Telegram 一样给到 2000，别让网页版被挤短（还得留地方写 [think]/[emo]/[diary] 标签）
+        web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "2000"))
         mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
         system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
         messages = list(history)
@@ -1616,7 +1618,7 @@ async def api_chat(request):
         for _ in range(6):
             resp = await _web_claude.beta.messages.create(
                 model=model,
-                max_tokens=1024,
+                max_tokens=web_max_tokens,
                 betas=["mcp-client-2025-11-20"],
                 mcp_servers=[{"type": "url", "name": "ombre-brain", "url": mcp_url}],
                 tools=[{"type": "mcp_toolset", "mcp_server_name": "ombre-brain"}],
