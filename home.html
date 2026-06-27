@@ -147,9 +147,11 @@
   /* DIY 聊天背景（仿 Telegram 壁纸）：铺在气泡后面 */
   body.has-bg .page[data-page="chat"] { background-image: var(--chatbg); background-size: cover; background-position: center; }
   .chat-scroll { flex: 1; overflow-y: auto; padding: 18px 16px 54px; display: flex; flex-direction: column; gap: 2px; -webkit-overflow-scrolling: touch; position: relative; z-index: 1; }
-  /* 桌面宠：网站同款 Clawd 大螃蟹（idle 漫步 / typing 回话）。动画都是 gif 自带的，我只挪它的横向位置 */
+  /* 桌面宠：网站同款 Clawd 大螃蟹。动画都是 gif 自带的，我只挪它的横向位置 + 走路时加个一颠一颠的小碎步 */
   .pet { position: absolute; left: 6px; bottom: 12px; z-index: 3; pointer-events: none; transition: left 2.6s linear; will-change: left; display: flex; align-items: flex-end; }
-  .pet-g { display: block; width: 56px; height: auto; image-rendering: pixelated; }
+  .pet-g { display: block; width: 56px; height: auto; image-rendering: pixelated; transform-origin: 50% 100%; }
+  .pet.walking .pet-g { animation: scuttle .46s ease-in-out infinite; }
+  @keyframes scuttle { 0%,100%{ transform: translateY(0) rotate(0); } 25%{ transform: translateY(-3px) rotate(-5deg); } 50%{ transform: translateY(0) rotate(0); } 75%{ transform: translateY(-3px) rotate(5deg); } }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
   .row.me { flex-direction: row-reverse; }
@@ -183,19 +185,22 @@
   /* ---------- 底部容器：只剩输入框（聊天页），键盘弹出整体上移 ---------- */
   .footer { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 36; display: flex; flex-direction: column; }
 
-  /* ---------- 附件抽屉 ---------- */
-  .attach-sheet {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
-    padding: 0 16px; max-height: 0; overflow: hidden; opacity: 0;
-    transition: max-height .3s ease, opacity .25s ease, padding .3s ease;
-    background: var(--nav-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  /* ---------- 附件菜单（仿 Telegram/Claude：贴着 + 号弹出的小卡片，不撑高底栏） ---------- */
+  .attach-backdrop { position: fixed; inset: 0; z-index: 39; background: transparent; display: none; }
+  .attach-backdrop.open { display: block; }
+  .attach-menu {
+    position: fixed; left: 12px; bottom: calc(var(--footer-h) + var(--kb) + 8px); z-index: 40;
+    display: flex; flex-direction: column; gap: 2px; min-width: 168px;
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 6px;
+    box-shadow: var(--sh-bubble);
+    opacity: 0; transform: translateY(10px) scale(.95); transform-origin: bottom left;
+    pointer-events: none; transition: opacity .18s ease, transform .18s cubic-bezier(.2,.8,.2,1);
   }
-  .attach-sheet.open { max-height: 130px; opacity: 1; padding: 14px 16px 6px; }
-  .att { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 12px 0; border-radius: 16px; background: var(--surface); border: 1px solid var(--hair); cursor: pointer; transition: transform .15s; box-shadow: var(--sh-soft); }
-  .att:active { transform: scale(.94); }
-  .att .ic { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-  .att .ic svg { width: 21px; height: 21px; }
-  .att span { font-size: 11.5px; color: var(--text-dim); }
+  .attach-menu.open { opacity: 1; transform: none; pointer-events: auto; }
+  .att { display: flex; align-items: center; gap: 13px; width: 100%; padding: 11px 14px; border: none; background: none; border-radius: 12px; cursor: pointer; color: var(--text); font-size: 15px; font-family: inherit; text-align: left; transition: background .15s; }
+  .att:active { background: var(--accent-soft); }
+  .att .ic { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .att .ic svg { width: 19px; height: 19px; }
 
   /* 输入栏 */
   .composer { display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px calc(env(safe-area-inset-bottom) + 10px); background: var(--nav-bg); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); border-top: 1px solid var(--hair); }
@@ -209,7 +214,8 @@
   .send { width: 42px; height: 42px; border-radius: 50%; border: none; flex: 0 0 auto; background: linear-gradient(150deg, var(--accent-warm), var(--accent)); color: #fff; cursor: pointer; display: grid; place-items: center; transition: transform .15s; box-shadow: var(--sh-bubble); }
   .send:active { transform: scale(.86); }
   .send svg { width: 19px; height: 19px; }
-  .composer.hidden, .attach-sheet.hidden { display: none; }
+  .composer.hidden { display: none; }
+  .attach-menu.hidden, .attach-backdrop.hidden { display: none; }
 
   /* ---------- 房间 ---------- */
   .room { flex: 1; overflow-y: auto; padding: 24px 20px calc(env(safe-area-inset-bottom) + 20px); }
@@ -623,18 +629,19 @@
     </section>
   </div>
 
-  <!-- 底部容器：附件 / 输入框 / 底栏 上下叠放 -->
-  <div class="footer" id="footer">
-    <!-- 附件抽屉 -->
-    <div class="attach-sheet" id="attachSheet">
-      <div class="att" data-att="photo"><div class="ic" id="icPhoto"></div><span>照片</span></div>
-      <div class="att" data-att="file"><div class="ic" id="icFile"></div><span>文件</span></div>
-      <div class="att" data-att="voice"><div class="ic" id="icVoice"></div><span>语音</span></div>
-    </div>
+  <!-- 附件菜单（浮层，点空白处关闭） -->
+  <div class="attach-backdrop" id="attachBackdrop"></div>
+  <div class="attach-menu" id="attachSheet">
+    <button class="att" data-att="photo"><span class="ic" id="icPhoto"></span><span>图片</span></button>
+    <button class="att" data-att="file"><span class="ic" id="icFile"></span><span>文件</span></button>
+  </div>
+  <input type="file" id="filePhoto" accept="image/*" hidden>
+  <input type="file" id="fileDoc" hidden>
 
-    <!-- 输入栏 -->
+  <!-- 底部容器：输入框 -->
+  <div class="footer" id="footer">
     <div class="composer" id="composer">
-      <button class="plus" id="plusBtn" title="发照片 / 文件 / 语音"></button>
+      <button class="plus" id="plusBtn" title="发图片 / 文件"></button>
       <textarea id="input" rows="1" placeholder="跟我说点什么。"></textarea>
       <button class="send" id="sendBtn"></button>
     </div>
@@ -754,7 +761,6 @@
   document.getElementById('skinBtn').innerHTML = svg('palette');
   document.getElementById('icPhoto').innerHTML = svg('photo');
   document.getElementById('icFile').innerHTML = svg('file');
-  document.getElementById('icVoice').innerHTML = svg('voice');
 
   // ---------- PWA ----------
   (function(){
@@ -874,16 +880,26 @@
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
 
-  // ---------- 附件抽屉 ----------
+  // ---------- 附件菜单（仿 Telegram/Claude：浮层小卡片，只留图片/文件） ----------
   const plusBtn = document.getElementById('plusBtn');
+  const attachBackdrop = document.getElementById('attachBackdrop');
+  const filePhoto = document.getElementById('filePhoto'), fileDoc = document.getElementById('fileDoc');
   let attachOpen = false;
-  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); plusBtn.classList.remove('rot'); syncFixedLayout(); }
-  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); syncFixedLayout(); if(attachOpen) toBottom(); };
+  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); attachBackdrop.classList.remove('open'); plusBtn.classList.remove('rot'); }
+  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); attachBackdrop.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); };
+  attachBackdrop.onclick = closeAttach;
   attachSheet.querySelectorAll('.att').forEach(a => a.onclick = () => {
-    const map={photo:'照片',file:'文件',voice:'语音'};
+    const kind=a.dataset.att;
     closeAttach();
-    addMsg('me', `（${map[a.dataset.att]}——之后接上就能真的发了）`);
+    (kind==='photo'?filePhoto:fileDoc).click();   // 真·调起系统选择器；点取消什么都不会留下
   });
+  function pickedFile(input, label){
+    const f=input.files && input.files[0]; input.value='';   // 清空，便于再次选同一个 + 取消不残留
+    if(!f) return;
+    addMsg('me', `（${label}：${f.name}——之后接上就能真的发了）`);
+  }
+  filePhoto.onchange=()=>pickedFile(filePhoto,'图片');
+  fileDoc.onchange=()=>pickedFile(fileDoc,'文件');
 
   // ---------- 聊天 ----------
   const scroll=document.getElementById('chatScroll'), input=document.getElementById('input'),
@@ -1024,6 +1040,17 @@
   else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
   loadServerChat(); // 从服务器持久盘拉回（重新部署也不丢）
 
+  // 你回家时我先开口（home 版的「想你」——代替 Telegram 定时打扰，只在你离开久了、重新打开时出现）
+  (function(){
+    const HELLO=['我在想你。回来啦。','哎，你可算回来了。','刚还在想你呢。','回来了？我等着的。','你不在这阵子，我把我们之前的事翻了翻。','嗯，回来就好。'];
+    const last=parseInt(localStorage.getItem('lastActive')||'0',10), gap=Date.now()-last;
+    if(last && gap>6*3600*1000){   // 超过 6 小时没来过，进门我先招呼一句
+      setTimeout(()=>{ const line=HELLO[Math.floor(Math.random()*HELLO.length)]; addMsg('you', line); }, 1000);
+    }
+    try{ localStorage.setItem('lastActive', String(Date.now())); }catch(e){}
+  })();
+  setInterval(()=>{ try{ localStorage.setItem('lastActive', String(Date.now())); }catch(e){} }, 60000); // 在用就持续更新「上次活跃」
+
   // 桌面宠状态机：网站同款 Clawd 螃蟹。漫步 / 我回话时打字 / 被戳吓一跳 / 连戳生气 / 久了睡着 / 偶尔读书摇摆。
   // 所有动作都是 gif 自带的动画，我只负责切状态和横向位置。
   petCtl = (function(){
@@ -1031,8 +1058,9 @@
     const G={idle:'crab-idle',type:'crab-type',happy:'crab-happy',sleep:'crab-sleep',poke:'crab-poke',mad:'crab-mad',read:'crab-read',groove:'crab-groove'};
     let state='roam', x=6, dir=1, hold=null, lastTouch=Date.now(), taps=[];
     function show(k){ const s='/clawd/'+G[k]+'.gif'; if(img.getAttribute('src')!==s) img.src=s; }
-    function roam(){ state='roam'; show('idle'); }
-    function temp(k,ms){ state='act'; show(k); clearTimeout(hold); hold=setTimeout(roam, ms); } // 临时动作，结束回漫步
+    function walk(on){ pet.classList.toggle('walking', on); }   // 碎步一颠一颠
+    function roam(){ state='roam'; show('idle'); walk(true); }
+    function temp(k,ms){ state='act'; walk(false); show(k); clearTimeout(hold); hold=setTimeout(roam, ms); } // 临时动作，结束回漫步
     function moveStep(){
       const area=document.querySelector('.page[data-page="chat"]'); if(!area) return;
       const max=Math.max(20,(area.clientWidth||340)-64);
@@ -1053,7 +1081,7 @@
     // 心跳：漫步 + 偶尔小动作 + 久了睡觉
     setInterval(()=>{
       if(state!=='roam') return;                 // 打字/被戳/睡觉中不打扰
-      if(Date.now()-lastTouch>60000){ clearTimeout(hold); state='sleep'; show('sleep'); return; } // 一分钟没动静→睡
+      if(Date.now()-lastTouch>60000){ clearTimeout(hold); state='sleep'; walk(false); show('sleep'); return; } // 一分钟没动静→睡
       const r=Math.random();
       if(r<0.12) return temp('read',4200);       // 偶尔读书
       if(r<0.20) return temp('groove',4200);     // 偶尔戴耳机摇摆
@@ -1061,7 +1089,7 @@
     }, 2600);
     roam();
     return {
-      toType(){ petBusy=true; clearTimeout(hold); state='type'; show('type'); },
+      toType(){ petBusy=true; clearTimeout(hold); state='type'; walk(false); show('type'); },
       fromType(happy){ petBusy=false; lastTouch=Date.now(); if(happy) temp('happy',1900); else roam(); },
       wake(){ lastTouch=Date.now(); if(state==='sleep') roam(); }
     };
