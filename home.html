@@ -993,7 +993,7 @@
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petCtl && petCtl.fromType(false); }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
   let pending=[], debTimer=null, busy=false;
-  const SEND_WAIT=600;         // 几乎即时回（只把同一口气里连发的几条并一下，不再等你 ~3 秒）
+  const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
   function send(){
     const v=input.value.trim(); if(!v) return;
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
@@ -1032,7 +1032,12 @@
     }
   }
   sendBtn.onclick=send;
-  input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,110)+'px'; syncFixedLayout(); });
+  let lastInputH=0;
+  input.addEventListener('input',()=>{
+    input.style.height='auto';
+    const h=Math.min(input.scrollHeight,110); input.style.height=h+'px';
+    if(h!==lastInputH){ lastInputH=h; syncFixedLayout(); }   // 只在输入框高度真的变了才重排，打字才丝滑
+  });
   input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
 
   // 开场：有历史就恢复，没有就打个招呼（招呼不入库）
