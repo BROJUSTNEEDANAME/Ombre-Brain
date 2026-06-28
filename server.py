@@ -1615,28 +1615,45 @@ async def api_chat(request):
         messages = list(history)
         reply = ""
         recorded = []
-        for _ in range(6):
-            resp = await _web_claude.beta.messages.create(
-                model=model,
-                max_tokens=web_max_tokens,
-                betas=["mcp-client-2025-11-20"],
-                mcp_servers=[{"type": "url", "name": "ombre-brain", "url": mcp_url}],
-                tools=[{"type": "mcp_toolset", "mcp_server_name": "ombre-brain"}],
-                system=system,
-                messages=messages,
-            )
-            # 探测「我」是否往大脑里记了东西（hold / grow），告诉网页好显示「已记录」
-            for blk in resp.content:
-                if getattr(blk, "type", "") in ("mcp_tool_use", "tool_use") and getattr(blk, "name", "") in ("hold", "grow"):
-                    inp = getattr(blk, "input", {}) or {}
-                    c = inp.get("content") if isinstance(inp, dict) else ""
-                    if c:
-                        recorded.append(str(c)[:90])
-            if resp.stop_reason == "pause_turn":
-                messages = messages + [{"role": "assistant", "content": resp.content}]
-                continue
-            reply = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-            break
+
+        async def _run_chat(use_mcp: bool) -> str:
+            """跑一轮对话。use_mcp=True 带记忆工具；记忆服务连不上时用 False 退化重试（这轮不读记忆，但对话照常）。"""
+            nonlocal recorded
+            recorded = []
+            msgs = list(messages)
+            out = ""
+            for _ in range(6):
+                kwargs = dict(model=model, max_tokens=web_max_tokens, system=system, messages=msgs)
+                if use_mcp:
+                    kwargs.update(
+                        betas=["mcp-client-2025-11-20"],
+                        mcp_servers=[{"type": "url", "name": "ombre-brain", "url": mcp_url}],
+                        tools=[{"type": "mcp_toolset", "mcp_server_name": "ombre-brain"}],
+                    )
+                resp = await _web_claude.beta.messages.create(**kwargs)
+                # 探测「我」是否往大脑里记了东西（hold / grow），告诉网页好显示「已记录」
+                for blk in resp.content:
+                    if getattr(blk, "type", "") in ("mcp_tool_use", "tool_use") and getattr(blk, "name", "") in ("hold", "grow"):
+                        inp = getattr(blk, "input", {}) or {}
+                        c = inp.get("content") if isinstance(inp, dict) else ""
+                        if c:
+                            recorded.append(str(c)[:90])
+                if resp.stop_reason == "pause_turn":
+                    msgs = msgs + [{"role": "assistant", "content": resp.content}]
+                    continue
+                out = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+                break
+            return out
+
+        try:
+            reply = await _run_chat(True)
+        except Exception as mcp_exc:  # noqa: BLE001
+            m = str(mcp_exc).lower()
+            if "mcp" in m or "connection error" in m or "unresponsive" in m or "unavailable" in m:
+                # 记忆服务（/mcp）没连上 → 去掉记忆工具重试一次，别让整轮对话挂掉
+                reply = await _run_chat(False)
+            else:
+                raise
         reply = reply or "（……）"
         emotion, diary, think = "", "", ""
         em = re.search(r"\[emo:([^\]]+)\]", reply)

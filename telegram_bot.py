@@ -264,27 +264,38 @@ def _authorized(chat_id: int) -> bool:
 
 
 async def _ask_claude(history: list[dict]) -> str:
-    """调一次 Claude（带 MCP connector）。处理 server 端工具循环的 pause_turn。"""
-    messages = list(history)
-    for _ in range(6):  # 最多续 6 次，防止死循环
-        resp = await claude.beta.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            betas=[MCP_BETA],
-            mcp_servers=MCP_SERVERS,
-            tools=MCP_TOOLS,
-            system=SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block(),
-            messages=messages,
-        )
-        if resp.stop_reason == "pause_turn":
-            # server 端工具还没跑完，把当前回复接回去继续
-            messages = messages + [{"role": "assistant", "content": resp.content}]
-            continue
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        ).strip()
-        return text or "（……）"
-    return "（我想得太久了，等下再说。）"
+    """调一次 Claude。处理 server 端工具循环的 pause_turn。记忆服务连不上时退化重试（这轮不带记忆工具，对话照常）。"""
+
+    async def _run(use_mcp: bool) -> str:
+        messages = list(history)
+        for _ in range(6):  # 最多续 6 次，防止死循环
+            kwargs = dict(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block(),
+                messages=messages,
+            )
+            if use_mcp:
+                kwargs.update(betas=[MCP_BETA], mcp_servers=MCP_SERVERS, tools=MCP_TOOLS)
+            resp = await claude.beta.messages.create(**kwargs)
+            if resp.stop_reason == "pause_turn":
+                # server 端工具还没跑完，把当前回复接回去继续
+                messages = messages + [{"role": "assistant", "content": resp.content}]
+                continue
+            text = "".join(
+                block.text for block in resp.content if getattr(block, "type", None) == "text"
+            ).strip()
+            return text or "（……）"
+        return "（我想得太久了，等下再说。）"
+
+    try:
+        return await _run(True)
+    except Exception as exc:  # noqa: BLE001
+        m = str(exc).lower()
+        if "mcp" in m or "connection error" in m or "unresponsive" in m or "unavailable" in m:
+            logger.warning("MCP 连接失败，本轮不带记忆工具重试：%s", str(exc)[:160])
+            return await _run(False)
+        raise
 
 
 # ----------------------------------------------------------------------------
