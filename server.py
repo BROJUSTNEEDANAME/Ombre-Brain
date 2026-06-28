@@ -1607,7 +1607,11 @@ async def api_chat(request):
         from anthropic import AsyncAnthropic
         if _web_claude is None:
             _web_claude = AsyncAnthropic(api_key=api_key)
-        model = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
+        # 模型：网页可以传 model 切换（白名单内才认），否则用默认
+        _default_model = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
+        _allowed_models = {"claude-opus-4-6", "claude-sonnet-4-6"}
+        _req_model = str(body.get("model", "")).strip()
+        model = _req_model if _req_model in _allowed_models else _default_model
         # 回复预算：和 Telegram 一样给到 2000，别让网页版被挤短（还得留地方写 [think]/[emo]/[diary] 标签）
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "2000"))
         mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
