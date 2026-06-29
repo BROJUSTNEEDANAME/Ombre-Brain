@@ -1116,15 +1116,32 @@
     }
     petCtl && petCtl.fromType(true);
   }
+  // 带超时 + 自动重试的请求：冷启动/抖动时第一次断了，自动再试，真正连不上才放弃
+  async function postChat(body){
+    let lastErr;
+    for(let attempt=0; attempt<3; attempt++){
+      const ctrl=new AbortController();
+      const to=setTimeout(()=>ctrl.abort(), 90000);   // 单次最多等 90s（模型+记忆来回可能很慢）
+      try{
+        const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(body), signal:ctrl.signal });
+        clearTimeout(to);
+        if(!res.ok) throw new Error('http '+res.status);
+        return await res.json();
+      }catch(e){
+        clearTimeout(to); lastErr=e;
+        if(attempt<2){ if(thinkText) thinkText.textContent='网有点慢，再试一下…'; await sleep(1200*(attempt+1)); }
+      }
+    }
+    throw lastErr;
+  }
   // 核心：把一条用户消息发给大脑，处理回复。userApiContent 可以是字符串或富内容块数组（图片/文件）；
   // histText 是存进上下文的纯文字占位（图片/文件不存 base64，省 token）。
   async function requestReply(userApiContent, histText){
     startThinking();
     const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
     try{
-      const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), model:chatModel }) });
-      const data=await res.json();
+      const data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), model:chatModel });
       const reply=(data&&data.reply)||'（……）';
       await showReply(data);
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
