@@ -167,6 +167,9 @@ async def _tts(text: str) -> bytes:
 
 async def _send_reply(context, chat_id: int, reply: str, force_voice: bool = False) -> None:
     """统一发送：需要语音就发语音（失败退回文字），否则发文字。"""
+    # 防护：万一他还残留"连发"习惯打出 ‖，别让这个符号露出来——当换行处理，合成一条干净的消息
+    if "‖" in reply:
+        reply = "\n".join(s.strip() for s in reply.split("‖") if s.strip()) or reply
     want_voice = openai_client is not None and (force_voice or voice_mode.get(chat_id))
     if want_voice:
         try:
