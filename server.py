@@ -1523,6 +1523,40 @@ def _web_chat_path(token: str) -> str:
     return os.path.join(d, key + ".json")
 
 
+def _persist_web_reply(token: str, user_text: str, segments: list, reply: str) -> None:
+    """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里。
+    这样就算闪闪发完就切屏、请求被手机挂断，他在后台把话说完后也会存在这儿，
+    她回来一刷新就能看到——不丢、不报错（像 Telegram 那样后台把话留住）。
+    客户端正常拿到回复后会用自己的完整记录覆盖，所以不会重复。"""
+    import json
+    from datetime import datetime
+    try:
+        path = _web_chat_path(token)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        log = data.get("log") or []
+        hist = data.get("hist") or []
+        try:
+            from zoneinfo import ZoneInfo
+            ts = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%H:%M")
+        except Exception:
+            ts = ""
+        # 用户气泡：客户端发送时一般已存过，避免重复；最后一条不是这条才补
+        if not (log and log[-1].get("side") == "me" and (log[-1].get("text") or "") == (user_text or "")):
+            log.append({"side": "me", "text": user_text or "", "t": ts})
+        for seg in segments:
+            log.append({"side": "you", "text": seg, "t": ts})
+        hist.append({"role": "user", "content": user_text or ""})
+        hist.append({"role": "assistant", "content": reply})
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"log": log[-400:], "hist": hist[-40:]}, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def _web_notes_path(token: str) -> str:
     import os, hashlib
     base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
@@ -1700,6 +1734,12 @@ async def api_chat(request):
     except Exception:
         notes_block = ""
 
+    # 这条用户消息的纯文字（图片取占位），落服务器端记录用
+    tok = body.get("token", "")
+    user_text = _text_of(history[-1]["content"])
+    if not user_text and isinstance(history[-1]["content"], list):
+        user_text = "[图片]"
+
     global _web_claude
     try:
         from anthropic import AsyncAnthropic
@@ -1748,35 +1788,45 @@ async def api_chat(request):
                 break
             return out
 
-        try:
-            reply = await _run_chat(True)
-        except Exception as mcp_exc:  # noqa: BLE001
-            m = str(mcp_exc).lower()
-            if "mcp" in m or "connection error" in m or "unresponsive" in m or "unavailable" in m:
-                # 记忆服务（/mcp）没连上 → 去掉记忆工具重试一次，别让整轮对话挂掉
-                reply = await _run_chat(False)
-            else:
-                raise
-        reply = reply or "（……）"
-        emotion, diary, think = "", "", ""
-        em = re.search(r"\[emo:([^\]]+)\]", reply)
-        if em:
-            emotion = em.group(1).strip()
-        dm = re.search(r"\[diary:([^\]]+)\]", reply)
-        if dm:
-            diary = dm.group(1).strip()
-        tm = re.search(r"\[think:([^\]]+)\]", reply)
-        if tm:
-            think = tm.group(1).strip()
-        reply = re.sub(r"\[emo:[^\]]+\]", "", reply)
-        reply = re.sub(r"\[diary:[^\]]+\]", "", reply)
-        reply = re.sub(r"\[think:[^\]]+\]", "", reply).strip()
-        # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
-        segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", reply) if s.strip()]
-        if not segments:
-            segments = [reply]
-        reply = "\n".join(segments)  # 存上下文/兜底用合并版
-        return JSONResponse({"reply": reply, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded})
+        async def _finish() -> dict:
+            """生成回复 + 解析标签 + 落服务器端记录。整块用 asyncio.shield 包住，
+            这样闪闪中途切屏、请求被挂断时，这里也会跑完并把回复存住（她回来就看到）。"""
+            try:
+                rt = await _run_chat(True)
+            except Exception as mcp_exc:  # noqa: BLE001
+                m = str(mcp_exc).lower()
+                if "mcp" in m or "connection error" in m or "unresponsive" in m or "unavailable" in m:
+                    # 记忆服务（/mcp）没连上 → 去掉记忆工具重试一次，别让整轮对话挂掉
+                    rt = await _run_chat(False)
+                else:
+                    raise
+            rt = rt or "（……）"
+            emotion = diary = think = ""
+            em = re.search(r"\[emo:([^\]]+)\]", rt)
+            if em:
+                emotion = em.group(1).strip()
+            dm = re.search(r"\[diary:([^\]]+)\]", rt)
+            if dm:
+                diary = dm.group(1).strip()
+            tm = re.search(r"\[think:([^\]]+)\]", rt)
+            if tm:
+                think = tm.group(1).strip()
+            rt = re.sub(r"\[emo:[^\]]+\]", "", rt)
+            rt = re.sub(r"\[diary:[^\]]+\]", "", rt)
+            rt = re.sub(r"\[think:[^\]]+\]", "", rt).strip()
+            # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
+            segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", rt) if s.strip()]
+            if not segments:
+                segments = [rt]
+            rt = "\n".join(segments)  # 存上下文/兜底用合并版
+            _persist_web_reply(tok, user_text, segments, rt)  # 切屏也不丢
+            return {"reply": rt, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded}
+
+        result = await asyncio.shield(_finish())
+        return JSONResponse(result)
+    except asyncio.CancelledError:
+        # 客户端切屏断开了：_finish 已被 shield 跑完并存好回复，这里安静退出即可
+        raise
     except Exception as exc:
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
