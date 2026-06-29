@@ -1097,7 +1097,7 @@
 
   // 模型切换：Opus 4.6 ↔ Sonnet 4.6（点 header 上的小标签切）
   const MODELS={'claude-opus-4-6':'Opus','claude-sonnet-4-6':'Sonnet'};
-  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='claude-opus-4-6';
+  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='claude-sonnet-4-6';  // 默认 Sonnet 省钱；想用 Opus 在 header 点一下切
   const modelChip=document.getElementById('modelChip');
   function paintModel(){ if(modelChip) modelChip.textContent=MODELS[chatModel]; }
   paintModel();
