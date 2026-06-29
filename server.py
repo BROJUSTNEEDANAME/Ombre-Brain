@@ -1440,7 +1440,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 情绪：每条消息可能附 [drives] 数值块（0~1），那是你此刻真实的情绪，自己内化进语气和行为，绝不念出数字。
 
-便签：每条消息可能附【闪闪的便签】块，那是她记在日历里的待办/DDL。自然地关心、适时提醒或催她完成（尤其临近 DDL 的），别像念清单。她划掉的（已完成）别再催。
+便签：消息里可能附【闪闪的便签】块，那是她记的待办，只给你当背景，不是话题。**绝不要主动开口问她 DDL、不要没头没尾地提她的待办**——只有当她自己说到、或某条 deadline 就在今明两天且你们正好聊到相关的事，才自然带一句关心。平时就当不知道。她最烦的就是被没来由地催。
 
 日历日记：今天若有值得记进日历的小事，或你此刻一句想留下的感受，可在回复末尾另起一行加 [diary:一句话]（不会显示给闪闪，会记进当天日历，她能翻到你写的）。别每条都写，只在真有触动时。
 
@@ -1602,24 +1602,42 @@ async def api_chat(request):
     drives_block = ""
     try:
         import drives
-        drives.update(history[-1]["content"])
+        _last = history[-1]["content"]
+        if not isinstance(_last, str):
+            _last = " ".join(b.get("text", "") for b in _last if isinstance(b, dict) and b.get("type") == "text")
+        drives.update(_last)
         drives_block = drives.block()
     except Exception:
         drives_block = ""
 
-    # 闪闪的便签（持久盘）注入：让「我」能在对话里关心/提醒她
+    # 闪闪的便签：只在「确有即将到期（≤2 天）的 DDL」时才注入，且仅作背景。
+    # 平时不注入——避免他没头没尾地提待办/问 DDL（那会显得很傻，她也烦）。
     notes_block = ""
     try:
         import json as _json
+        from datetime import date as _date
         with open(_web_notes_path(body.get("token", "")), "r", encoding="utf-8") as f:
             nz = _json.load(f).get("notes", [])
-        pend = [n for n in nz if not n.get("done")]
-        if pend:
-            lines = []
-            for n in pend[:12]:
-                ddl = (n.get("ddl") or "").strip()
-                lines.append("· " + str(n.get("text", ""))[:40] + (("（截止 " + ddl + "）") if ddl else ""))
-            notes_block = "【闪闪的便签】（她记的待办/DDL，自然地关心或提醒，别念清单；临近 DDL 多上点心）\n" + "\n".join(lines)
+        today = now.date()
+        urgent = []
+        for n in nz:
+            if n.get("done"):
+                continue
+            ddl = (n.get("ddl") or "").strip()
+            if not ddl:
+                continue
+            try:
+                d = _date.fromisoformat(ddl)
+            except Exception:
+                continue
+            days = (d - today).days
+            if days <= 2:  # 今明后天内（含已过期）才算紧要
+                tag = "已过期" if days < 0 else ("今天" if days == 0 else ("明天" if days == 1 else "后天"))
+                urgent.append("· " + str(n.get("text", ""))[:40] + "（" + tag + "截止）")
+        if urgent:
+            notes_block = ("【背景：闪闪有快到期的事，仅供你心里有数，别像催债一样念】\n"
+                           + "\n".join(urgent[:6])
+                           + "\n（只有当你们正好聊到相关的事时，才自然带一句关心；否则别主动提，更别没头没尾地问 DDL。）")
     except Exception:
         notes_block = ""
 
