@@ -233,6 +233,21 @@
   .send svg { width: 19px; height: 19px; }
   .composer.hidden { display: none; }
   .attach-menu.hidden, .attach-backdrop.hidden { display: none; }
+  /* 发图前的预览小条（贴输入框上方，可去掉，可再配一句话一起发） */
+  .img-preview { display: none; align-items: center; gap: 9px; padding: 8px 14px 0; }
+  .img-preview img { width: 46px; height: 46px; border-radius: 10px; object-fit: cover; border: 1px solid var(--hair); }
+  .img-preview button { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--hair); background: var(--field-glass); color: var(--text-dim); cursor: pointer; font-size: 14px; line-height: 1; flex: 0 0 auto; }
+  .img-preview span { font-size: 12px; color: var(--text-dim); }
+  /* 头像/背景裁剪器：拖动选位置 + 滑杆缩放 */
+  .cropper { position: fixed; inset: 0; z-index: 95; background: rgba(0,0,0,.9); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 15px; padding: 24px; }
+  .cropper.show { display: flex; }
+  .cropper canvas { border-radius: 12px; box-shadow: 0 0 0 1px rgba(255,255,255,.18); touch-action: none; background: #111; max-width: 90vw; cursor: grab; }
+  .cropper canvas:active { cursor: grabbing; }
+  .crop-hint { color: #ddd; font-size: 13px; }
+  .cropper input[type=range] { width: 78%; max-width: 320px; accent-color: var(--accent); }
+  .crop-btns { display: flex; gap: 12px; }
+  .crop-btns button { border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08); color: #fff; padding: 10px 24px; border-radius: 12px; font-size: 15px; cursor: pointer; font-family: inherit; }
+  .crop-btns button.primary { background: var(--accent); border-color: var(--accent); }
 
   /* ---------- 房间 ---------- */
   .room { flex: 1; overflow-y: auto; padding: 24px 20px calc(env(safe-area-inset-bottom) + 20px); }
@@ -677,6 +692,7 @@
 
   <!-- 底部容器：输入框 -->
   <div class="footer" id="footer">
+    <div class="img-preview" id="imgPreview"></div>
     <div class="composer" id="composer">
       <button class="plus" id="plusBtn" title="发图片 / 文件"></button>
       <textarea id="input" rows="1" placeholder="跟我说点什么。"></textarea>
@@ -830,6 +846,60 @@
   mq.addEventListener('change', () => { if(mode==='auto') applyTheme(); });
   applyTheme();
 
+  // ---------- 通用裁剪器：拖动选位置 + 滑杆缩放，自己选要哪块（头像、背景共用） ----------
+  let _crop=null;
+  function _ensureCropper(){
+    if(_crop) return _crop;
+    const wrap=document.createElement('div'); wrap.className='cropper';
+    wrap.innerHTML='<div class="crop-hint">拖动选位置，滑杆缩放</div>'
+      +'<canvas></canvas>'
+      +'<input type="range" min="1" max="3" step="0.01" value="1">'
+      +'<div class="crop-btns"><button class="cancel">取消</button><button class="primary ok">完成</button></div>';
+    document.body.appendChild(wrap);
+    _crop={ wrap, canvas:wrap.querySelector('canvas'), zoom:wrap.querySelector('input'), ok:wrap.querySelector('.ok'), cancel:wrap.querySelector('.cancel') };
+    return _crop;
+  }
+  function openCropper(file, opts){
+    const r=new FileReader();
+    r.onload=()=>{ const img=new Image();
+      img.onload=()=>_runCropper(img, opts);
+      img.onerror=()=>alert('这张图打不开，换一张。');
+      img.src=r.result; };
+    r.onerror=()=>alert('读图失败，再试一次。');
+    r.readAsDataURL(file);
+  }
+  function _runCropper(img, opts){
+    const c=_ensureCropper(), aspect=opts.aspect||1, g=c.canvas.getContext('2d');
+    let VW=Math.min(320, Math.round(window.innerWidth*0.9)), VH=Math.round(VW/aspect);
+    const maxVH=Math.round(window.innerHeight*0.58);
+    if(VH>maxVH){ VH=maxVH; VW=Math.round(VH*aspect); }
+    c.canvas.width=VW; c.canvas.height=VH;
+    const cover=Math.max(VW/img.width, VH/img.height);
+    let scale=cover, ox=(VW-img.width*scale)/2, oy=(VH-img.height*scale)/2;
+    c.zoom.value='1';
+    function clamp(){ ox=Math.min(0, Math.max(VW-img.width*scale, ox)); oy=Math.min(0, Math.max(VH-img.height*scale, oy)); }
+    function draw(){ clamp(); g.clearRect(0,0,VW,VH); g.drawImage(img, ox,oy, img.width*scale, img.height*scale); }
+    draw();
+    c.zoom.oninput=()=>{ const ns=cover*(parseFloat(c.zoom.value)||1), cx=VW/2, cy=VH/2;
+      ox=cx-(cx-ox)*(ns/scale); oy=cy-(cy-oy)*(ns/scale); scale=ns; draw(); };
+    let drag=false, lx=0, ly=0;
+    function pt(e){ const r=c.canvas.getBoundingClientRect(); return { x:(e.clientX-r.left)*(VW/r.width), y:(e.clientY-r.top)*(VH/r.height) }; }
+    c.canvas.onpointerdown=(e)=>{ drag=true; const p=pt(e); lx=p.x; ly=p.y; c.canvas.setPointerCapture&&c.canvas.setPointerCapture(e.pointerId); };
+    c.canvas.onpointermove=(e)=>{ if(!drag) return; const p=pt(e); ox+=p.x-lx; oy+=p.y-ly; lx=p.x; ly=p.y; draw(); };
+    c.canvas.onpointerup=c.canvas.onpointercancel=()=>{ drag=false; };
+    function close(){ c.wrap.classList.remove('show'); }
+    c.cancel.onclick=close;
+    c.ok.onclick=()=>{
+      const outW=opts.outW||VW, outH=Math.round(outW/aspect);
+      const sx=(0-ox)/scale, sy=(0-oy)/scale, sw=VW/scale, sh=VH/scale;
+      const o=document.createElement('canvas'); o.width=outW; o.height=outH;
+      o.getContext('2d').drawImage(img, sx,sy,sw,sh, 0,0,outW,outH);
+      let url; try{ url=o.toDataURL('image/jpeg',0.85); }catch(e){ alert('裁剪失败，换张图。'); return; }
+      close(); opts.onDone(url);
+    };
+    c.wrap.classList.add('show');
+  }
+
   // ---------- DIY 头像（点顶部头像换图，存本地，气泡同步） ----------
   const avatarBtn=document.getElementById('avatarBtn'), avatarFile=document.getElementById('avatarFile');
   function applyAvatar(url){
@@ -839,23 +909,11 @@
   applyAvatar(localStorage.getItem('avatar')||'');
   avatarBtn.onclick=()=>avatarFile.click();
   avatarFile.onchange=()=>{
-    const f=avatarFile.files&&avatarFile.files[0]; if(!f) return;
-    const r=new FileReader();
-    r.onload=()=>{
-      const img=new Image();
-      img.onload=()=>{
-        const S=160, cv=document.createElement('canvas'); cv.width=S; cv.height=S;
-        const g=cv.getContext('2d');
-        const m=Math.min(img.width,img.height), sx=(img.width-m)/2, sy=(img.height-m)/2;
-        g.drawImage(img, sx,sy,m,m, 0,0,S,S);
-        let url; try{ url=cv.toDataURL('image/jpeg',0.85); }catch(e){ return; }
-        try{ localStorage.setItem('avatar',url); }catch(e){}
-        applyAvatar(url);
-      };
-      img.src=r.result;
-    };
-    r.readAsDataURL(f);
-    avatarFile.value='';
+    const f=avatarFile.files&&avatarFile.files[0]; avatarFile.value=''; if(!f) return;
+    openCropper(f, { aspect:1, outW:320, onDone:(url)=>{
+      try{ localStorage.setItem('avatar',url); }catch(e){ alert('这张图太大了，换张小一点的。'); return; }
+      applyAvatar(url);
+    }});
   };
 
   // ---------- DIY 聊天背景（仿 Telegram 壁纸；入口在「外观」面板里） ----------
@@ -863,17 +921,12 @@
   function applyBg(url){ if(url){ document.documentElement.style.setProperty('--chatbg','url("'+url+'")'); document.body.classList.add('has-bg'); } else document.body.classList.remove('has-bg'); }
   applyBg(localStorage.getItem('chatBg')||'');
   bgFile.onchange=()=>{
-    const f=bgFile.files&&bgFile.files[0]; if(!f) return;
-    const r=new FileReader();
-    r.onload=()=>{ const img=new Image(); img.onload=()=>{
-      const MAX=820, sc=Math.min(1, MAX/Math.max(img.width,img.height));
-      const w=Math.max(1,Math.round(img.width*sc)), h=Math.max(1,Math.round(img.height*sc));
-      const cv=document.createElement('canvas'); cv.width=w; cv.height=h; cv.getContext('2d').drawImage(img,0,0,w,h);
-      let url; try{ url=cv.toDataURL('image/jpeg',0.82); }catch(e){ return; }
+    const f=bgFile.files&&bgFile.files[0]; bgFile.value=''; if(!f) return;
+    const aspect=Math.max(0.4, Math.min(1, window.innerWidth/Math.max(1,window.innerHeight)));
+    openCropper(f, { aspect:aspect, outW:Math.round(1280*aspect), onDone:(url)=>{
       try{ localStorage.setItem('chatBg',url); }catch(e){ alert('这张图太大了，换张小一点的。'); return; }
       applyBg(url);
-    }; img.src=r.result; };
-    r.readAsDataURL(f); bgFile.value='';
+    }});
   };
 
   // ---------- 外观 / 皮肤（预设套装 + 自定义主题色/气泡色） ----------
@@ -969,6 +1022,19 @@
   function readTextFile(file){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(String(r.result||'')); r.onerror=()=>res(''); r.readAsText(file); }); }
   const TEXT_EXT=/\.(txt|md|markdown|csv|json|log|js|ts|py|html|css|xml|yaml|yml|sh|java|c|cpp|go|rs|rb|sql|ini|conf|tex)$/i;
 
+  // 待发的图：选/拍后先挂着，让闪闪再配一句话一起发（不再一选就发、不再硬塞固定文案）
+  let pendingImg=null;
+  const imgPreview=document.getElementById('imgPreview');
+  function showImgPreview(){
+    if(!pendingImg){ imgPreview.style.display='none'; imgPreview.innerHTML=''; if(typeof syncFixedLayout==='function') syncFixedLayout(); return; }
+    imgPreview.style.display='flex'; imgPreview.innerHTML='';
+    const im=document.createElement('img'); im.src=pendingImg.dataUrl;
+    const x=document.createElement('button'); x.textContent='×'; x.title='去掉'; x.onclick=()=>{ pendingImg=null; showImgPreview(); };
+    const tip=document.createElement('span'); tip.textContent='图片就绪，可以再配一句话一起发';
+    imgPreview.append(im, x, tip);
+    if(typeof syncFixedLayout==='function') syncFixedLayout();
+  }
+
   async function pickedFile(input, kind){
     const f=input.files && input.files[0]; input.value='';
     if(!f) return;
@@ -976,13 +1042,8 @@
     if(isImg){
       const img=await downscaleImage(f, 1568);
       if(!img){ addMsg('me','（这张图我没读出来，换一张试试。）'); return; }
-      addMsg('me', '', img.dataUrl);                       // 图片气泡（存本地，重开还在）
-      const media = 'image/jpeg';
-      sendRich(
-        [ {type:'image', source:{type:'base64', media_type:media, data:img.b64}},
-          {type:'text', text:'（闪闪发来一张图，看看是什么、有什么想说的。）'} ],
-        '[图片]'
-      );
+      pendingImg={ dataUrl:img.dataUrl, b64:img.b64 };   // 先挂着，等她（可配文字）发
+      showImgPreview(); input.focus();
       return;
     }
     if(TEXT_EXT.test(f.name) && f.size <= 200*1024){       // 文本类文件：读正文给他看
@@ -1148,7 +1209,22 @@
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
   function send(){
-    const v=input.value.trim(); if(!v) return;
+    const v=input.value.trim();
+    // 有待发的图：图 + 你配的那句话一起发（光发图也行）
+    if(pendingImg){
+      const img=pendingImg; pendingImg=null; showImgPreview();
+      closeAttach();
+      addMsg('me', v, img.dataUrl);            // 气泡：图 + 文字说明
+      input.value=''; input.style.height='auto';
+      const blocks=[];
+      if(v) blocks.push({type:'text', text:v});
+      blocks.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data:img.b64}});
+      petCtl && petCtl.wake();
+      setEmotion(pick(['想靠近你','安定','心疼你','害羞']));
+      sendRich(blocks, v ? (v+' ［图片］') : '［图片］');
+      return;
+    }
+    if(!v) return;
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
     pending.push(v);
     petCtl && petCtl.wake(); // 你一说话，它就醒过来
