@@ -1678,7 +1678,7 @@ async def api_chat(request):
     for m in raw:
         if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
             history.append({"role": m["role"], "content": _norm_content(m.get("content"))})
-    history = history[-20:]
+    history = history[-14:]
     if not history or history[-1]["role"] != "user":
         return JSONResponse({"error": "no user message"}, status_code=400)
 
@@ -1754,7 +1754,13 @@ async def api_chat(request):
         # 给到 4000；想收紧用 OMBRE_WEB_MAX_TOKENS 覆盖。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
         mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
-        system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
+        # 省 token：把固定不变的大人设单独缓存（prompt cache），动态部分（时间/情绪/便签）放后面不缓存。
+        # 这样同一条消息里的多轮工具来回、以及短时间内的多条消息，大人设都按缓存价(1/10)走，不每轮全价重发。
+        _dyn = now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
+        system = [
+            {"type": "text", "text": _WEB_SYSTEM, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": _dyn},
+        ]
         messages = list(history)
         reply = ""
         recorded = []
@@ -1765,7 +1771,7 @@ async def api_chat(request):
             recorded = []
             msgs = list(messages)
             out = ""
-            for _ in range(9):  # 留足轮次：他可能连记好几条（hold/grow）再回话，别中途被截断
+            for _ in range(3):  # 限轮次省钱：工具来回越多，前面的大坨内容(人设+breath结果)就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, system=system, messages=msgs)
                 if use_mcp:
                     kwargs.update(
