@@ -1559,11 +1559,32 @@ async def api_chat(request):
     if not api_key:
         return JSONResponse({"reply": "（我这边还没接上线——服务器还没配 ANTHROPIC_API_KEY。等闪闪配好我就能说话了。）", "emotion": "空"})
 
+    def _norm_content(c):
+        # 字符串原样；列表则只放行 text / image 块（图片识别），其余丢弃，防止乱传
+        if isinstance(c, list):
+            blocks = []
+            for b in c:
+                if not isinstance(b, dict):
+                    continue
+                t = b.get("type")
+                if t == "text":
+                    blocks.append({"type": "text", "text": str(b.get("text", ""))[:14000]})
+                elif t == "image":
+                    src = b.get("source") or {}
+                    if isinstance(src, dict) and src.get("type") == "base64" and src.get("data") and src.get("media_type"):
+                        blocks.append({"type": "image", "source": {
+                            "type": "base64",
+                            "media_type": str(src.get("media_type")),
+                            "data": str(src.get("data")),
+                        }})
+            return blocks or [{"type": "text", "text": ""}]
+        return str(c or "")[:4000]
+
     raw = body.get("messages") or []
     history = []
     for m in raw:
         if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
-            history.append({"role": m["role"], "content": str(m.get("content", ""))[:4000]})
+            history.append({"role": m["role"], "content": _norm_content(m.get("content"))})
     history = history[-20:]
     if not history or history[-1]["role"] != "user":
         return JSONResponse({"error": "no user message"}, status_code=400)
