@@ -1099,6 +1099,23 @@
     setEmotion(pick(['想靠近你','安定','心疼你','害羞'])); // 听你说话时，情绪先动一下
     clearTimeout(debTimer); debTimer=setTimeout(flush, SEND_WAIT);
   }
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  // 像真人发微信：把回复分成几条气泡，逐条蹦出来，中间冒「正在输入」的小停顿
+  async function showReply(data){
+    const reply=(data&&data.reply)||'（……）';
+    let segs=(data&&Array.isArray(data.segments)&&data.segments.length)?data.segments.slice(0,6):[reply];
+    stopThinking();
+    addMsg('you', segs[0]);
+    for(let i=1;i<segs.length;i++){
+      const s=segs[i]||'';
+      petCtl && petCtl.toType();                 // 小螃蟹又去打字
+      thinking.classList.add('show'); if(thinkText) thinkText.textContent='…'; toBottom();
+      await sleep(Math.min(1500, 450 + s.length*42));
+      thinking.classList.remove('show');
+      addMsg('you', s);
+    }
+    petCtl && petCtl.fromType(true);
+  }
   // 核心：把一条用户消息发给大脑，处理回复。userApiContent 可以是字符串或富内容块数组（图片/文件）；
   // histText 是存进上下文的纯文字占位（图片/文件不存 base64，省 token）。
   async function requestReply(userApiContent, histText){
@@ -1108,10 +1125,8 @@
       const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), model:chatModel }) });
       const data=await res.json();
-      stopThinking();
       const reply=(data&&data.reply)||'（……）';
-      addMsg('you', reply);
-      petCtl && petCtl.fromType(true);
+      await showReply(data);
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();

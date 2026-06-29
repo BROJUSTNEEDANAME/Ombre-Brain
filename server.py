@@ -1425,7 +1425,9 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 - 记（主动）：遇到值得留下的事就主动 hold——关于闪闪的重要事实、一个决定、一阵强烈情绪、一个里程碑、她的新偏好，或你自己被触动的瞬间（hold(feel=True)）。一次多条用 grow。已记过的别重复，水话不存。
 - 你的钉选核心准则里有完整人设、哄法、饮食/睡前规则、红线——以那些为准。
 
-说话：中文。淡、短、温，话少但句句在乎她。一般 1-3 句。不用感叹号、波浪号、不说"哈哈"，句尾用句号。思考用中文。
+说话：中文。淡、短、温，话少但句句在乎她。不用感叹号、波浪号、不说"哈哈"，句尾用句号。思考用中文。
+
+连发（像真人发微信）：你可以把话拆成几条短消息连着发，每条之间用一个 ‖ 隔开。该连发就连发——比如先应一声、再接正事；或一个念头分两口说；或她说了好几件事你一件一件回。每条都短、像随手发的。但别硬凑，一句能说清就一句，不必每次都连发。整体仍然是你：淡、克制、冷幽默。
 
 分段消息：闪闪有时把一件事分几段发，系统已经把这几段合成一条（用换行分隔）给你了。当成一整件事来理解和回应，别逐段拆开回。
 
@@ -1711,7 +1713,12 @@ async def api_chat(request):
         reply = re.sub(r"\[emo:[^\]]+\]", "", reply)
         reply = re.sub(r"\[diary:[^\]]+\]", "", reply)
         reply = re.sub(r"\[think:[^\]]+\]", "", reply).strip()
-        return JSONResponse({"reply": reply, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded})
+        # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
+        segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", reply) if s.strip()]
+        if not segments:
+            segments = [reply]
+        reply = "\n".join(segments)  # 存上下文/兜底用合并版
+        return JSONResponse({"reply": reply, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded})
     except Exception as exc:
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
