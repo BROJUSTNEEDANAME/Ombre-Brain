@@ -1097,7 +1097,9 @@
 
   // 模型切换：Opus 4.6 ↔ Sonnet 4.6（点 header 上的小标签切）
   const MODELS={'claude-opus-4-6':'Opus','claude-sonnet-4-6':'Sonnet'};
-  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='claude-sonnet-4-6';  // 默认 Sonnet 省钱；想用 Opus 在 header 点一下切
+  // 一次性修复：之前默认切到 Sonnet 导致 home 发不出消息，把已存到 localStorage 的 Sonnet 默认值清掉，回 Opus（想用 Sonnet 还能手动点切）
+  try{ if(!localStorage.getItem('modelDefaultFix')){ if(localStorage.getItem('chatModel')==='claude-sonnet-4-6') localStorage.removeItem('chatModel'); localStorage.setItem('modelDefaultFix','1'); } }catch(e){}
+  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='claude-opus-4-6';  // 默认回 Opus（之前默认 Sonnet 发不出消息）；想省钱用 Sonnet 在 header 点一下切
   const modelChip=document.getElementById('modelChip');
   function paintModel(){ if(modelChip) modelChip.textContent=MODELS[chatModel]; }
   paintModel();
