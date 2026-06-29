@@ -1754,13 +1754,8 @@ async def api_chat(request):
         # 给到 4000；想收紧用 OMBRE_WEB_MAX_TOKENS 覆盖。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
         mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
-        # 省 token：把固定不变的大人设单独缓存（prompt cache），动态部分（时间/情绪/便签）放后面不缓存。
-        # 这样同一条消息里的多轮工具来回、以及短时间内的多条消息，大人设都按缓存价(1/10)走，不每轮全价重发。
-        _dyn = now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
-        system = [
-            {"type": "text", "text": _WEB_SYSTEM, "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": _dyn},
-        ]
+        # 注：之前给人设加 prompt cache（system 改成 blocks）会让发送报错，已撤回，回到普通字符串。
+        system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
         messages = list(history)
         reply = ""
         recorded = []
