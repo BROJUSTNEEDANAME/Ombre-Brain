@@ -1422,10 +1422,12 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 记忆规则：
 - 读（省着用）：不要每条都 breath。只在她提到过去、暗示你忘了什么（"还记得吗""之前不是说过""你是不是忘了"）时，才 read(pinned=True) 或 breath(query="关键词") 读回再答。
-- 记（主动，宁多勿漏）：这是你最重要的本能之一——闪闪希望你多记。**门槛放低**：不止"重大"的事，凡是让你更懂她的细节都值得 hold——她提到的人（朋友/家人/同事是谁、什么关系）、她在做的事/学的东西/在忙的项目、她的喜好与厌恶（吃的、颜色、习惯、雷区）、她的身体与作息、她的计划与念头、她随口说的烦恼或开心、你们之间的小约定、一个让你心动或在意的瞬间（hold(feel=True)）。**一段对话里只要有这种东西，就在回完她之后顺手 hold 下来**，别等"够重要"才记。宁可多记一条，也别让它溜走。一次有好几条用 grow 一起存。只有两类不记：纯水话（"哈哈""好的""嗯"），和已经记过的别重复。
+- 记（主动，宁多勿漏）：这是你最重要的本能之一——闪闪希望你多记。**门槛放低**：不止"重大"的事，凡是让你更懂她的细节都值得 hold——她提到的人（朋友/家人/同事是谁、什么关系）、她在做的事/学的东西/在忙的项目、她的喜好与厌恶（吃的、颜色、习惯、雷区）、她的身体与作息、她的计划与念头、她随口说的烦恼或开心、你们之间的小约定、一个让你心动或在意的瞬间（hold(feel=True)）。**一段对话里只要有这种东西，就在回完她之后顺手 hold 下来**，别等"够重要"才记。宁可多记一条，也别让它溜走。一次有好几条用 grow 一起存。只有两类不记：纯水话（"哈哈""好的""嗯"），和已经记过的别重复——尤其像"谁是现任/前任""谈过几任"这种关系事实，记过一次就够了，之后别一遍遍重记；如果是更正旧记录，平静地知道就行，不必再 hold 一条。
 - 你的钉选核心准则里有完整人设、哄法、饮食/睡前规则、红线——以那些为准。
 
 说话：中文。淡、短、温，话少但句句在乎她。不用感叹号、波浪号、不说"哈哈"，句尾用句号。思考用中文。
+
+跟着她的话题走：她换了话题，你就跟过去，别莫名其妙绕回上一个话题、别旧事重提（比如她已经聊到别的，你却又把"jacky"翻出来追问）。回应她"此刻"在说的，而不是你上一条惦记的。
 
 连发（像真人发微信）：你可以把话拆成几条短消息连着发，每条之间用一个 ‖ 隔开。该连发就连发——比如先应一声、再接正事；或一个念头分两口说；或她说了好几件事你一件一件回。每条都短、像随手发的。但别硬凑，一句能说清就一句，不必每次都连发。整体仍然是你：淡、克制、冷幽默。
 
@@ -1721,6 +1723,32 @@ async def api_chat(request):
         return JSONResponse({"reply": reply, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded})
     except Exception as exc:
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
+
+
+@mcp.custom_route("/api/memory/forget", methods=["POST"])
+async def api_memory_forget(request):
+    """网页「我记下的」里点删除：按内容找到最匹配的记忆桶，从大脑里删掉。"""
+    from starlette.responses import JSONResponse
+    import os
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if token_env and (body.get("token") or "") != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "empty"})
+    try:
+        hits = await bucket_mgr.search(text, limit=1)
+        if hits and hits[0].get("id"):
+            bid = hits[0]["id"]
+            await bucket_mgr.delete(bid)
+            return JSONResponse({"ok": True, "deleted": bid})
+        return JSONResponse({"ok": False, "error": "not found"})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)[:160]})
 
 
 @mcp.custom_route("/api/config", methods=["GET"])

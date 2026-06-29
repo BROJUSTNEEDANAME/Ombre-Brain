@@ -172,7 +172,7 @@
   .bimg { display: block; max-width: 220px; max-height: 280px; width: auto; border-radius: 15px; object-fit: cover; }
   .bubble.has-img .btxt { padding: 6px 10px 3px; }
   .time { font-size: 10px; color: var(--text-faint); margin: 4px 5px 0; letter-spacing: .5px; }
-  .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 13px; margin: 9px 0 3px; animation: pop .3s ease; }
+  .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 14px; margin: 9px 0 3px; animation: pop .3s ease; box-shadow: var(--sh-soft); }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
   /* 思考池 */
@@ -429,6 +429,8 @@
   .brain-item { display: flex; align-items: flex-start; gap: 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 14px; padding: 11px 13px; box-shadow: var(--sh-soft); }
   .brain-item .bt { flex: 1; font-size: 13.5px; line-height: 1.55; color: var(--text); }
   .brain-item .bk { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; margin-top: 2px; }
+  .brain-item .bdel { flex: 0 0 auto; border: none; background: none; color: var(--text-faint); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; margin-top: -1px; }
+  .brain-item .bdel:active { transform: scale(.85); color: var(--accent); }
   .brain-empty { font-size: 13px; color: var(--text-faint); padding: 22px 2px; }
   .cal-toggle { width: 100%; margin-top: 24px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 14px; padding: 13px 16px; cursor: pointer; box-shadow: var(--sh-soft); font-size: 14px; font-weight: 600; font-family: 'Noto Serif SC', serif; }
   .cal-toggle .ct-arrow { color: var(--text-faint); transition: transform .25s; font-size: 13px; }
@@ -1044,19 +1046,27 @@
   // 我记下的（脑子/仓库）
   let brainLog={}; try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
   function recordBrain(text){
-    addMsg('sys','📌 已记入记忆 · '+text);
+    addMsg('sys','📌 已记录');                         // 气泡里只写「已记录」，详情去「我记下的」看
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
-    (brainLog[k]=brainLog[k]||[]).push({text, t:now()});
+    const list=(brainLog[k]=brainLog[k]||[]);
+    if(list.some(r=>(r.text||'').trim()===text.trim())) return;  // 同一天同样的别重复进列表
+    list.push({text, t:now()});
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(typeof renderBrain==='function') renderBrain();
+  }
+  async function forgetBrain(text){
+    // 从「我记下的」列表删除，并请求服务器从大脑里删掉对应记忆
+    Object.keys(brainLog).forEach(k=>{ brainLog[k]=brainLog[k].filter(r=>(r.text||'').trim()!==text.trim()); if(!brainLog[k].length) delete brainLog[k]; });
+    localStorage.setItem('brainLog',JSON.stringify(brainLog)); renderBrain();
+    try{ await fetch('/api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
   }
   function renderBrain(){
     const el=document.getElementById('brainList'); if(!el) return;
     const all=[]; Object.keys(brainLog).forEach(k=>brainLog[k].forEach(r=>all.push({k, text:r.text})));
-    const items=all.slice(-20).reverse();
+    const items=all.slice(-30).reverse();
     if(!items.length){ el.innerHTML='<div class="brain-empty">还没记下什么。聊几句，有值得留的我就记了。</div>'; return; }
     el.innerHTML='';
-    items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span>'; d.querySelector('.bt').textContent=r.text; el.appendChild(d); });
+    items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span><button class="bdel" title="删掉这条记忆">×</button>'; d.querySelector('.bt').textContent=r.text; d.querySelector('.bdel').onclick=()=>{ if(confirm('从他脑子里删掉这条记忆？')) forgetBrain(r.text); }; el.appendChild(d); });
   }
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
