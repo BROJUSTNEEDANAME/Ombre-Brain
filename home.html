@@ -1242,15 +1242,7 @@
     segs=segs.map(s=>(s||'').trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
     if(!segs.length) return;                       // 全是重复 → 一句都不发，避免复读
     stopThinking();
-    addMsg('you', segs[0]);
-    for(let i=1;i<segs.length;i++){
-      const s=segs[i];
-      petCtl && petCtl.toType();                 // 小螃蟹又去打字
-      thinking.classList.add('show'); if(thinkText) thinkText.textContent='…'; toBottom();
-      await sleep(Math.min(1500, 450 + s.length*42));
-      thinking.classList.remove('show');
-      addMsg('you', s);
-    }
+    segs.forEach(s=>addMsg('you', s));             // 一次性把几条气泡全发出来，不再逐条停顿（去掉拖慢的间隔）
     petCtl && petCtl.fromType(true);
   }
   // 带超时的请求。只在「很快就失败」（请求根本没到、服务器没处理）时重试一次，避免重复生成/重复说。
@@ -1275,10 +1267,21 @@
   }
   // 核心：把一条用户消息发给大脑，处理回复。userApiContent 可以是字符串或富内容块数组（图片/文件）；
   // histText 是存进上下文的纯文字占位（图片/文件不存 base64，省 token）。
-  let inFlight=false;
+  let inFlight=false, recoverOnReturn=false, lastHiddenAt=0;
+  // 切屏/熄屏会让浏览器挂起在途请求。但服务器会在后台把回复算完、存住（像 Telegram），
+  // 所以回前台时不重发（省钱、不重复），而是去服务器把他存好的回复捞回来。
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden){ lastHiddenAt=Date.now(); }
+    else if(recoverOnReturn){
+      recoverOnReturn=false; stopThinking();
+      loadServerChat();                 // 他在后台存好的回复，捞回来
+      setTimeout(loadServerChat, 4000); // 万一服务器还没生成完，过几秒再捞一次
+    }
+  });
   async function requestReply(userApiContent, histText){
     if(inFlight) return;            // 防重入：同一时刻只允许一条在途，杜绝重复请求/重复说
     inFlight=true;
+    const reqStart=Date.now();
     startThinking();
     const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
     try{
@@ -1294,7 +1297,14 @@
       if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
     }catch(e){
       stopThinking();
-      addMsg('you','（我这边断了一下，网不好。再说一次。）');
+      const wasBackgrounded = document.hidden || lastHiddenAt>=reqStart;   // 这次请求期间切过屏
+      if(wasBackgrounded){
+        // 切屏被挂断：他在后台会把回复存到服务器，别重发，回来捞即可
+        if(document.hidden){ recoverOnReturn=true; }     // 还在后台 → 回前台时捞
+        else { loadServerChat(); setTimeout(loadServerChat, 4000); }  // 已回前台 → 直接捞
+      } else {
+        addMsg('you','（我这边断了一下，网不好。再说一次。）');     // 真·网络问题才报错
+      }
     } finally {
       inFlight=false;
     }
