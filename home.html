@@ -431,6 +431,10 @@
   .brain-item .bk { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; margin-top: 2px; }
   .brain-item .bdel { flex: 0 0 auto; border: none; background: none; color: var(--text-faint); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; margin-top: -1px; }
   .brain-item .bdel:active { transform: scale(.85); color: var(--accent); }
+  .brain-item .ract { display: flex; flex-direction: column; gap: 5px; flex: 0 0 auto; }
+  .brain-item .ract button { border: 1px solid var(--hair); background: var(--surface-2); color: var(--text-dim); border-radius: 9px; padding: 4px 9px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .brain-item .ract button.restore { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .brain-item .ract button:active { transform: scale(.93); }
   .brain-empty { font-size: 13px; color: var(--text-faint); padding: 22px 2px; }
   .cal-toggle { width: 100%; margin-top: 24px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--hair); background: var(--surface); color: var(--text); border-radius: 14px; padding: 13px 16px; cursor: pointer; box-shadow: var(--sh-soft); font-size: 14px; font-weight: 600; font-family: 'Noto Serif SC', serif; }
   .cal-toggle .ct-arrow { color: var(--text-faint); transition: transform .25s; font-size: 13px; }
@@ -605,6 +609,12 @@
         <div class="bhead"><span class="t">我记下的</span></div>
         <div class="bsub">聊天时我往脑子里记的东西，都在这——像翻我的仓库。</div>
         <div class="brain-list" id="brainList"></div>
+
+        <button class="cal-toggle" id="recycleToggle"><span class="ct-t">🗑 回收站 <span id="recycleCount"></span></span><span class="ct-arrow" id="recycleArrow">▾</span></button>
+        <div class="cal-collapse" id="recycleCollapse">
+          <div class="bsub">删掉的记忆先放这。后悔了点「恢复」，确定不要了点「彻底删除」。</div>
+          <div class="brain-list" id="recycleList"></div>
+        </div>
 
         <button class="cal-toggle" id="calToggle"><span class="ct-t">日记 · 日历</span><span class="ct-arrow" id="ctArrow">▾</span></button>
         <div class="cal-collapse" id="calCollapse">
@@ -921,7 +931,7 @@
     attachSheet.classList.toggle('hidden', !chat);
     if(!chat) closeAttach();
     closeNav();
-    if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
+    if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderRecycle==='function') renderRecycle(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
     if(name==='notes' && typeof renderNotes==='function') renderNotes();
     if(name==='home' && typeof renderNi==='function') renderNi();
     syncFixedLayout();
@@ -1054,11 +1064,38 @@
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(typeof renderBrain==='function') renderBrain();
   }
+  // 回收站（本地）：删掉的记忆先进这里，能恢复
+  let recycleBin=[]; try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
+  function saveRecycle(){ localStorage.setItem('recycleBin',JSON.stringify(recycleBin.slice(-50))); }
   async function forgetBrain(text){
-    // 从「我记下的」列表删除，并请求服务器从大脑里删掉对应记忆
-    Object.keys(brainLog).forEach(k=>{ brainLog[k]=brainLog[k].filter(r=>(r.text||'').trim()!==text.trim()); if(!brainLog[k].length) delete brainLog[k]; });
-    localStorage.setItem('brainLog',JSON.stringify(brainLog)); renderBrain();
+    text=(text||'').trim(); if(!text) return;
+    // 从「我记下的」列表移除 → 从大脑删掉 → 放进回收站（可恢复）
+    Object.keys(brainLog).forEach(k=>{ brainLog[k]=brainLog[k].filter(r=>(r.text||'').trim()!==text); if(!brainLog[k].length) delete brainLog[k]; });
+    localStorage.setItem('brainLog',JSON.stringify(brainLog));
+    if(!recycleBin.some(r=>r.text===text)){ recycleBin.push({text, t:Date.now()}); saveRecycle(); }
+    renderBrain(); renderRecycle();
     try{ await fetch('/api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
+  }
+  async function restoreBrain(text){
+    recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle();
+    const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
+    (brainLog[k]=brainLog[k]||[]).push({text, t:now()}); localStorage.setItem('brainLog',JSON.stringify(brainLog));
+    renderBrain(); renderRecycle();
+    try{ await fetch('/api/memory/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}  // 大脑里重新长出来
+  }
+  function purgeBrain(text){ recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle(); renderRecycle(); }
+  function renderRecycle(){
+    const el=document.getElementById('recycleList'); const cnt=document.getElementById('recycleCount');
+    if(cnt) cnt.textContent=recycleBin.length?('· '+recycleBin.length):'';
+    if(!el) return;
+    if(!recycleBin.length){ el.innerHTML='<div class="brain-empty">回收站是空的。</div>'; return; }
+    el.innerHTML='';
+    recycleBin.slice().reverse().forEach(r=>{ const d=document.createElement('div'); d.className='brain-item';
+      d.innerHTML='<span class="bt"></span><span class="ract"><button class="restore">恢复</button><button class="purge">彻底删</button></span>';
+      d.querySelector('.bt').textContent=r.text;
+      d.querySelector('.restore').onclick=()=>restoreBrain(r.text);
+      d.querySelector('.purge').onclick=()=>{ if(confirm('彻底删除？这条就找不回来了。')) purgeBrain(r.text); };
+      el.appendChild(d); });
   }
   function renderBrain(){
     const el=document.getElementById('brainList'); if(!el) return;
@@ -1066,7 +1103,7 @@
     const items=all.slice(-30).reverse();
     if(!items.length){ el.innerHTML='<div class="brain-empty">还没记下什么。聊几句，有值得留的我就记了。</div>'; return; }
     el.innerHTML='';
-    items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span><button class="bdel" title="删掉这条记忆">×</button>'; d.querySelector('.bt').textContent=r.text; d.querySelector('.bdel').onclick=()=>{ if(confirm('从他脑子里删掉这条记忆？')) forgetBrain(r.text); }; el.appendChild(d); });
+    items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span><button class="bdel" title="删掉这条记忆">×</button>'; d.querySelector('.bt').textContent=r.text; d.querySelector('.bdel').onclick=()=>{ if(confirm('删掉这条？会进回收站，后悔了能恢复。')) forgetBrain(r.text); }; el.appendChild(d); });
   }
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
@@ -1625,6 +1662,13 @@
     const tg=document.getElementById('calToggle'), co=document.getElementById('calCollapse');
     if(!tg||!co) return;
     tg.onclick=()=>{ const open=tg.classList.toggle('open'); co.classList.toggle('open',open); if(open) renderCal(); syncFixedLayout(); };
+  })();
+  // 回收站 收起+展开
+  (function(){
+    const tg=document.getElementById('recycleToggle'), co=document.getElementById('recycleCollapse');
+    if(!tg||!co) return;
+    renderRecycle();
+    tg.onclick=()=>{ const open=tg.classList.toggle('open'); co.classList.toggle('open',open); renderRecycle(); syncFixedLayout(); };
   })();
 
   // 便签

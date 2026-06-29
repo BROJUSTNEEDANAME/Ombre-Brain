@@ -1751,6 +1751,28 @@ async def api_memory_forget(request):
         return JSONResponse({"ok": False, "error": str(e)[:160]})
 
 
+@mcp.custom_route("/api/memory/restore", methods=["POST"])
+async def api_memory_restore(request):
+    """回收站点「恢复」：按原文在大脑里重新长出一条记忆（复用 hold 自动打标入库）。"""
+    from starlette.responses import JSONResponse
+    import os
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if token_env and (body.get("token") or "") != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "empty"})
+    try:
+        await hold(content=text)
+        return JSONResponse({"ok": True})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(e)[:160]})
+
+
 @mcp.custom_route("/api/config", methods=["GET"])
 async def api_config_get(request):
     """Get current runtime config (safe fields only, API key masked)."""
