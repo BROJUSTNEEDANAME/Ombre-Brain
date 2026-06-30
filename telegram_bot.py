@@ -598,8 +598,10 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
-        # 每 5 分钟查一次（她沉默就每 ~15 分钟找她一次、越来越急；预设文案不烧 token）
-        app.job_queue.run_repeating(check_inactivity, interval=300, first=300)
+        # 沉默时每 ~15 分钟主动找她的「找她」推送：默认关掉（闪闪嫌烦）。
+        # 想再打开就设环境变量 OMBRE_NUDGE=1。
+        if os.environ.get("OMBRE_NUDGE", "").strip() in ("1", "true", "True", "yes"):
+            app.job_queue.run_repeating(check_inactivity, interval=300, first=300)
         # 每天夜里 4 点自己做梦，消化记忆
         app.job_queue.run_daily(nightly_dream, time=dtime(hour=4, tzinfo=USER_TZ))
         # 每天上午 10 点查一次，只在特殊日子主动找她

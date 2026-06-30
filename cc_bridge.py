@@ -56,6 +56,10 @@ sessions: dict[int, str] = {}
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
     """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。"""
     cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
+    # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
+    _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
+    if _model:
+        cmd += ["--model", _model]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(message)
