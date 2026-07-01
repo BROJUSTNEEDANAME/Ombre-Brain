@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
 from telegram.constants import ChatAction
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -147,15 +148,31 @@ def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]
     return chunks
 
 
+async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
+    """发一条消息，遇到网络/超时失败就重试几次，别让长回复中途丢。"""
+    for attempt in range(retries):
+        try:
+            await message.reply_text(text)
+            return
+        except (TelegramError, asyncio.TimeoutError) as e:
+            if attempt == retries - 1:
+                logger.warning("发送失败（已重试 %s 次）: %s", retries, e)
+                return
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
-    await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
+    try:
+        await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
+    except Exception:  # noqa: BLE001
+        pass  # typing 指示器失败不影响正事
     reply, sid = await run_cc(message, sessions.get(cid))
     if sid:
         sessions[cid] = sid
     for chunk in _split_for_telegram(reply):
-        await update.message.reply_text(chunk)
+        await _reply_with_retry(update.message, chunk)
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -239,7 +256,16 @@ def _keepalive() -> None:
 def main() -> None:
     threading.Thread(target=_start_health_server, daemon=True).start()
     threading.Thread(target=_keepalive, daemon=True).start()
-    app: Application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app: Application = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .pool_timeout(30)
+        .get_updates_read_timeout(30)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
