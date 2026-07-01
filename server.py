@@ -430,19 +430,42 @@ async def breath(
 
     # --- Vector similarity channel: find semantically related buckets ---
     # --- 向量相似度通道：找到语义相关的桶 ---
-    matched_ids = {b["id"] for b in matches}
+    # --- RRF 融合：把关键词通道和向量通道按「各自排名」融合，而不是简单拼接 ---
+    # Reciprocal Rank Fusion：两个通道都靠前的桶浮到最顶，单通道强命中也仍能出现。
+    # 修正老问题：以前向量结果只是接在关键词后面、不重排，导致 0.95 相似度的
+    # 语义命中排在勉强及格的关键词命中后面。k=60 是 RRF 常用常数。
+    RRF_K = 60
+    rrf: dict[str, float] = {}
+    by_id: dict[str, dict] = {}
+    # 关键词通道排名（matches 已按分数降序）
+    for rank, b in enumerate(matches):
+        rid = b["id"]
+        rrf[rid] = rrf.get(rid, 0.0) + 1.0 / (RRF_K + rank + 1)
+        by_id[rid] = b
+    # 向量通道排名
     try:
         vector_results = await embedding_engine.search_similar(query, top_k=max(max_results, 20))
-        for bucket_id, sim_score in vector_results:
-            if bucket_id not in matched_ids and sim_score > 0.5:
-                bucket = await bucket_mgr.get(bucket_id)
-                if bucket:
-                    bucket["score"] = round(sim_score * 100, 2)
-                    bucket["vector_match"] = True
-                    matches.append(bucket)
-                    matched_ids.add(bucket_id)
+        for rank, (bucket_id, sim_score) in enumerate(vector_results):
+            if sim_score <= 0.5:
+                continue
+            rrf[bucket_id] = rrf.get(bucket_id, 0.0) + 1.0 / (RRF_K + rank + 1)
+            if bucket_id not in by_id:
+                b = await bucket_mgr.get(bucket_id)
+                if b:
+                    b["vector_match"] = True  # 纯向量捞出的标「语义关联」
+                    by_id[bucket_id] = b
+                else:
+                    rrf.pop(bucket_id, None)
     except Exception as e:
         logger.warning(f"Vector search failed, using keyword only / 向量搜索失败: {e}")
+    # 按融合分重排，产出最终 matches
+    matches = []
+    for rid in sorted(rrf, key=lambda i: rrf[i], reverse=True):
+        b = by_id.get(rid)
+        if b is None:
+            continue
+        b["score"] = round(rrf[rid] * 1000, 2)  # 展示用，放大好读
+        matches.append(b)
 
     results = []
     token_used = 0
