@@ -119,6 +119,45 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("好，重新开一段。")
 
 
+def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]:
+    """把长回复切成 <=limit 的多段。尽量在段落/换行/句末标点处断开，
+    避免长剧情被拦腰截断，读起来更顺。实在找不到断点才硬切。"""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    rest = text
+    seps = ("\n\n", "\n", "。", "！", "？", "…", "”", ". ", "! ", "? ")
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = -1
+        for sep in seps:
+            idx = window.rfind(sep)
+            if idx > limit * 0.5:  # 断点别太靠前，否则切得太碎
+                cut = idx + len(sep)
+                break
+        if cut <= 0:
+            cut = limit  # 没有合适的自然断点，硬切
+        chunks.append(rest[:cut].strip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                   cid: int, message: str) -> None:
+    """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
+    await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
+    reply, sid = await run_cc(message, sessions.get(cid))
+    if sid:
+        sessions[cid] = sid
+    for chunk in _split_for_telegram(reply):
+        await update.message.reply_text(chunk)
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not ALLOWED_CHAT_IDS:
@@ -128,13 +167,40 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if cid not in ALLOWED_CHAT_IDS:
         return
+    await _respond(update, context, cid, update.message.text)
 
-    await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
-    reply, sid = await run_cc(update.message.text, sessions.get(cid))
-    if sid:
-        sessions[cid] = sid
-    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(reply[i : i + TELEGRAM_MSG_LIMIT])
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """收到图片：下载下来，让 cc 用 Read 工具看图后回应。带配文一起传。"""
+    cid = update.effective_chat.id
+    if not ALLOWED_CHAT_IDS:
+        await update.message.reply_text(
+            f"还没锁定使用者。你的 chat id 是 {cid}，填进 ALLOWED_CHAT_IDS 再来聊。"
+        )
+        return
+    if cid not in ALLOWED_CHAT_IDS:
+        return
+
+    photo = update.message.photo[-1]  # 最大尺寸那张
+    img_dir = os.path.join(CC_WORKDIR, ".tg_images")
+    os.makedirs(img_dir, exist_ok=True)
+    path = os.path.join(img_dir, f"{photo.file_unique_id}.jpg")
+    try:
+        tg_file = await context.bot.get_file(photo.file_id)
+        await tg_file.download_to_drive(path)
+    except Exception:  # noqa: BLE001
+        logger.exception("下载图片失败")
+        await update.message.reply_text("（图片没收着，再发一次。）")
+        return
+
+    caption = (update.message.caption or "").strip()
+    msg = (
+        f"[闪闪发来一张图片，已保存在：{path}。"
+        f"请用 Read 工具打开看这张图，然后自然地回应她，别念文件路径。]"
+    )
+    if caption:
+        msg += f"\n她的配文：{caption}"
+    await _respond(update, context, cid, msg)
 
 
 def _start_health_server() -> None:
@@ -177,6 +243,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

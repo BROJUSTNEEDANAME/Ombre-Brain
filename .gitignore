@@ -24,3 +24,6 @@ telegram_state.json
 ios-app/node_modules/
 ios-app/ios/
 ios-app/package-lock.json
+
+# Telegram 收到的图片（bot 运行态，不入库）
+.tg_images/
