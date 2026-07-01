@@ -1,0 +1,28 @@
+# Ombre Brain 记忆大脑 —— systemd 常驻服务（跑在 VPS 上，取代 Render）
+# 安装：
+#   sudo cp ~/Ombre-Brain/migrate/ombre-brain.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ombre-brain
+# 看日志： sudo journalctl -u ombre-brain -f
+#
+# 前提：仓库在 /home/ombre/Ombre-Brain，虚拟环境在其下 .venv，
+#      环境变量写在 /home/ombre/Ombre-Brain/.env.brain（见 README_MIGRATION.md）。
+[Unit]
+Description=Ombre Brain memory MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ombre
+WorkingDirectory=/home/ombre/Ombre-Brain
+EnvironmentFile=/home/ombre/Ombre-Brain/.env.brain
+ExecStart=/home/ombre/Ombre-Brain/.venv/bin/python server.py
+Restart=always
+RestartSec=3
+# 崩溃频繁时别无限狂重启
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

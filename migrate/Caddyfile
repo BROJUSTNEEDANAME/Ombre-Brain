@@ -1,0 +1,29 @@
+# Caddy 反代 —— 给大脑加一把锁（放在 Tailscale Funnel 后面）
+#
+# 作用：
+#   1. 只放行带「密钥前缀」的 MCP 流量，其余一律 404 ——
+#      把 /api/buckets 等「无鉴权、能拖走全部记忆」的接口彻底挡在公网外。
+#   2. Tailscale Funnel 负责对外 HTTPS，这里只在本机 8080 上听明文 HTTP。
+#
+# 链路： 公网 --HTTPS(Funnel)--> 127.0.0.1:8080 (Caddy) --> 127.0.0.1:8000 (大脑)
+#
+# 使用：
+#   1. 生成一个长随机密钥：  openssl rand -hex 16
+#   2. 把下面的 REPLACE_WITH_SECRET 全部替换成那串密钥
+#   3. sudo cp Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
+#   4. claude.ai 连接器地址填： https://<你的机器>.<tailnet>.ts.net/REPLACE_WITH_SECRET/mcp
+#
+# 注：密钥就是你的「钥匙」——只有知道完整地址的人（你 + claude.ai 连接器）能进。
+#     以后想「换锁」，改这里的密钥 + claude.ai 连接器地址即可。
+
+:8080 {
+	# 带密钥前缀的才转发给大脑（handle_path 会自动剥掉前缀，转发成 /mcp）
+	handle_path /REPLACE_WITH_SECRET/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# 其它所有路径（包括裸的 /api/buckets、/mcp）一律拒绝
+	handle {
+		respond "not found" 404
+	}
+}
