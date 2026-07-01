@@ -2293,6 +2293,11 @@ if __name__ == "__main__":
 
             threading.Thread(target=_start_backfill, daemon=True).start()
 
-        uvicorn.run(_app, host="0.0.0.0", port=8000)
+        # streamable-http/sse 真正的监听点：读 OMBRE_HOST/OMBRE_PORT。
+        # VPS 上前面挂了 Caddy/Funnel，设 OMBRE_HOST=127.0.0.1 让大脑只监听本机，
+        # 8000 不裸露公网（这台 VPS 没防火墙，硬绑 0.0.0.0 会让 /api 全网可达）。
+        _bind_host = os.environ.get("OMBRE_HOST", "0.0.0.0")
+        _bind_port = int(os.environ.get("OMBRE_PORT", "8000"))
+        uvicorn.run(_app, host=_bind_host, port=_bind_port)
     else:
         mcp.run(transport=transport)
