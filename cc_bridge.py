@@ -19,9 +19,11 @@ Telegram ↔ Claude Code 桥
 """
 
 import asyncio
+import glob
 import json
 import logging
 import os
+import tarfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -44,6 +46,10 @@ CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
 TELEGRAM_MSG_LIMIT = 4096
 TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))  # 她的时区（太平洋 PDT）
+# /backup 用：记忆目录 + 备份存放处（保留最近几份）
+BUCKETS_DIR = os.environ.get("OMBRE_BUCKETS_DIR", os.path.join(CC_WORKDIR, "buckets"))
+BACKUP_DIR = os.environ.get("OMBRE_BACKUP_DIR", os.path.expanduser("~/ombre-backups"))
+BACKUP_KEEP = int(os.environ.get("OMBRE_BACKUP_KEEP", "14"))
 
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
@@ -187,6 +193,61 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await _reply_with_retry(update.message, chunk)
 
 
+def _do_backup():
+    """把记忆桶（Markdown + SQLite）打包，保留最近 BACKUP_KEEP 份。返回文件路径。"""
+    if not os.path.isdir(BUCKETS_DIR):
+        return None
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    from datetime import datetime as _dt
+    stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(BACKUP_DIR, f"buckets-{stamp}.tar.gz")
+    with tarfile.open(dest, "w:gz") as tar:
+        tar.add(BUCKETS_DIR, arcname="buckets")
+        _data = os.path.expanduser("~/ombre-data")
+        if os.path.isdir(_data):  # 老功能时期留下的数据（DDL/流水账）也一并保下
+            tar.add(_data, arcname="ombre-data")
+    old = sorted(glob.glob(os.path.join(BACKUP_DIR, "buckets-*.tar.gz")), reverse=True)
+    for f in old[BACKUP_KEEP:]:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    logger.info("记忆已备份 -> %s", os.path.basename(dest))
+    return dest
+
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/backup —— 立刻打包记忆并把文件发到这个对话（异地留档，她的底牌）。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    await update.message.reply_text("在打包记忆…")
+    try:
+        path = _do_backup()
+    except Exception:  # noqa: BLE001
+        logger.exception("备份失败")
+        await update.message.reply_text("（打包出了岔子，稍后再试。）")
+        return
+    if not path:
+        await update.message.reply_text("没找到记忆目录，备份没做成。")
+        return
+    size_mb = os.path.getsize(path) / 1024 / 1024
+    if size_mb >= 49:  # Telegram bot 文件上限约 50MB
+        await update.message.reply_text(
+            f"备份已存到服务器（{size_mb:.0f}MB，太大发不动 Telegram）。"
+        )
+        return
+    try:
+        with open(path, "rb") as f:
+            await context.bot.send_document(
+                chat_id=cid, document=f, filename=os.path.basename(path),
+                caption="🗄 记忆备份——下载存好，这是你的底牌。",
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("发送备份失败")
+        await update.message.reply_text(f"备份已存服务器（{size_mb:.0f}MB），但发送失败了，稍后再试 /backup。")
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not ALLOWED_CHAT_IDS:
@@ -281,6 +342,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
