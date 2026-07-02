@@ -732,7 +732,7 @@ async def idle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _review_loop(app: Application) -> None:
     """他自己翻回忆：每约 OMBRE_REVIEW_HOURS 小时，趁空 breath/dream 回味你们的过去、
     写下 feel；只有真的想对她说时才发一句，否则静静想、不打扰。"""
-    every = float(os.environ.get("OMBRE_REVIEW_HOURS", "5"))
+    every = float(os.environ.get("OMBRE_REVIEW_HOURS", "0"))  # 默认关闭：她说不要，闯过祸
     if every <= 0 or not ALLOWED_CHAT_IDS:
         return
     logger.info("自我回顾已启用：每约 %sh 一次", every)
