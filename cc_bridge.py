@@ -67,6 +67,8 @@ BUCKETS_DIR = os.environ.get("OMBRE_BUCKETS_DIR", os.path.join(CC_WORKDIR, "buck
 BACKUP_DIR = os.environ.get("OMBRE_BACKUP_DIR", os.path.expanduser("~/ombre-backups"))
 BACKUP_KEEP = int(os.environ.get("OMBRE_BACKUP_KEEP", "14"))   # 保留最近几份备份
 DDL_HOUR = int(os.environ.get("OMBRE_DDL_HOUR", "9"))          # 每天几点查 DDL 临近提醒
+OFFSITE_DAYS = int(os.environ.get("OMBRE_OFFSITE_BACKUP_DAYS", "7"))  # 每几天把备份发到 Telegram（异地），0=关
+SESSION_MAX_IDLE_HOURS = float(os.environ.get("OMBRE_SESSION_MAX_IDLE_HOURS", "18"))  # 久别重开干净会话（提速，靠大脑兜记忆）
 DATA_DIR = os.environ.get("OMBRE_DATA_DIR", os.path.expanduser("~/ombre-data"))
 DEADLINES_FILE = os.path.join(DATA_DIR, "deadlines.json")     # DDL 登记（结构化）
 CHATLOG_FILE = os.path.join(DATA_DIR, "chatlog.jsonl")        # 防遗忘流水账（每句原样）
@@ -219,8 +221,13 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
-    last_seen[cid] = datetime.now(timezone.utc)   # 她说话了，刷新时间
-    pinged_waiting.discard(cid)                    # 她回了，解除"已主动找过"标记
+    now_utc = datetime.now(timezone.utc)
+    prev = last_seen.get(cid)
+    # 久别（默认 >18h）重开干净会话，避免会话越拖越长越慢；连续感靠 Ombre Brain 兜
+    if prev and (now_utc - prev).total_seconds() > SESSION_MAX_IDLE_HOURS * 3600:
+        sessions.pop(cid, None)
+    last_seen[cid] = now_utc                        # 她说话了，刷新时间
+    pinged_waiting.discard(cid)                     # 她回了，解除"已主动找过"标记
     try:
         await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:  # noqa: BLE001
@@ -376,10 +383,10 @@ async def _bedtime_loop(app: Application) -> None:
             logger.exception("睡前循环出错（已忽略，继续）")
 
 
-def _do_backup() -> None:
-    """把记忆桶（Markdown + SQLite）打包备份，保留最近 BACKUP_KEEP 份。"""
+def _do_backup():
+    """把记忆桶（Markdown + SQLite）打包备份，保留最近 BACKUP_KEEP 份。返回备份文件路径。"""
     if not os.path.isdir(BUCKETS_DIR):
-        return
+        return None
     os.makedirs(BACKUP_DIR, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     dest = os.path.join(BACKUP_DIR, f"buckets-{stamp}.tar.gz")
@@ -394,6 +401,7 @@ def _do_backup() -> None:
         except OSError:
             pass
     logger.info("记忆已备份 -> %s（保留最近 %d 份）", os.path.basename(dest), BACKUP_KEEP)
+    return dest
 
 
 async def _backup_loop(app: Application) -> None:
@@ -591,13 +599,67 @@ async def _ddl_loop(app: Application) -> None:
             logger.exception("DDL 循环出错（已忽略，继续）")
 
 
+_TG_DOC_LIMIT = 49 * 1024 * 1024   # Telegram bot 发文件上限约 50MB，留点余量
+
+
+async def _send_backup_doc(bot, chat_id: int, path: str) -> bool:
+    """把备份文件发到 Telegram（异地留档）。太大则不发，返回是否发了。"""
+    try:
+        if os.path.getsize(path) >= _TG_DOC_LIMIT:
+            return False
+        with open(path, "rb") as f:
+            await bot.send_document(
+                chat_id=chat_id, document=f, filename=os.path.basename(path),
+                caption="🗄 记忆异地备份——存好这份，VPS 万一挂了能从这里恢复。",
+            )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("发送备份到 Telegram 失败")
+        return False
+
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/backup —— 立刻备份并把文件发到这个对话（异地留档 + 测试用）。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    await update.message.reply_text("在打包记忆…")
+    path = _do_backup()
+    if not path:
+        await update.message.reply_text("没找到记忆目录，备份没做成。")
+        return
+    sz_mb = os.path.getsize(path) // 1024 // 1024
+    if await _send_backup_doc(context.bot, cid, path):
+        return
+    await update.message.reply_text(f"备份已存到服务器（{sz_mb}MB，超过 50MB 没法直接发 Telegram）。")
+
+
+async def _offsite_loop(app: Application) -> None:
+    """每 OFFSITE_DAYS 天，把最新备份发到 Telegram，实现异地留档（防 VPS 整机丢失）。"""
+    if OFFSITE_DAYS <= 0 or not ALLOWED_CHAT_IDS:
+        return
+    logger.info("异地备份已启用：每 %d 天发一份到 Telegram", OFFSITE_DAYS)
+    await asyncio.sleep(1800)  # 启动后半小时再首发，错开启动备份
+    while True:
+        try:
+            path = _do_backup()
+            if path:
+                for cid in ALLOWED_CHAT_IDS:
+                    if not await _send_backup_doc(app.bot, cid, path):
+                        logger.warning("异地备份过大或发送失败，仅存本地")
+        except Exception:  # noqa: BLE001
+            logger.exception("异地备份循环出错（已忽略，继续）")
+        await asyncio.sleep(OFFSITE_DAYS * 24 * 3600)
+
+
 async def _post_init(app: Application) -> None:
-    """bot 起来后，在后台拉起：主动找她 / 早安简报 / 睡前轻催 / 记忆备份 / DDL 提醒。"""
+    """bot 起来后，在后台拉起：主动找她 / 早安 / 睡前 / 备份 / DDL / 异地备份。"""
     asyncio.create_task(_idle_loop(app))
     asyncio.create_task(_morning_loop(app))
     asyncio.create_task(_bedtime_loop(app))
     asyncio.create_task(_backup_loop(app))
     asyncio.create_task(_ddl_loop(app))
+    asyncio.create_task(_offsite_loop(app))
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -704,6 +766,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ddl", ddl_cmd))
     app.add_handler(CommandHandler("ddls", ddls_cmd))
     app.add_handler(CommandHandler("recall", recall_cmd))
+    app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
