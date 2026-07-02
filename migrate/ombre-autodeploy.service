@@ -1,0 +1,18 @@
+# Ombre Brain 自动部署（一次性任务，由 timer 定时触发）
+# 安装：
+#   sudo cp ~/Ombre-Brain/migrate/ombre-autodeploy.{service,timer} /etc/systemd/system/
+#   sudo chmod +x ~/Ombre-Brain/migrate/autodeploy.sh
+#   # 让 root 能对 ombre 拥有的仓库跑 git（否则报 dubious ownership）：
+#   sudo git config --global --add safe.directory /home/ombre/Ombre-Brain
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ombre-autodeploy.timer
+# 看日志： journalctl -t ombre-autodeploy -n 30 --no-pager
+[Unit]
+Description=Ombre Brain auto-deploy (pull latest branch & restart services)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/home/ombre/Ombre-Brain/migrate/autodeploy.sh

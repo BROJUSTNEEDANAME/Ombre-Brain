@@ -1,0 +1,11 @@
+# 每 3 分钟触发一次自动部署检查（开机 2 分钟后开始）
+[Unit]
+Description=Run Ombre Brain auto-deploy every few minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
