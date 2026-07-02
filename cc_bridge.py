@@ -157,6 +157,16 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
     再不行就回一句人话——不把冰冷的退出码甩给用户、不破坏气氛。
     真正的错误（如 token 失效）才保留可见诊断，方便排查。"""
+    # --- 给他一块真的表：每条消息都带上她那边的真实时间 ---
+    # 他的人设要求每条回复带时间戳，但此前系统从没给过他时钟，他只能靠猜，
+    # 于是时间戳一直是幻觉（凌晨5点写成9点）。这里注入唯一准确的时间源。
+    _local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    _wd = "一二三四五六日"[_local.weekday()]
+    message = (
+        f"[系统时钟：现在是 {_local.strftime('%Y-%m-%d %H:%M')} 周{_wd}（她的当地时间）。"
+        f"这是唯一准确的时间，写时间戳、判断早晚都以它为准，不要自己推算。]\n" + message
+    )
+
     cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
     _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
