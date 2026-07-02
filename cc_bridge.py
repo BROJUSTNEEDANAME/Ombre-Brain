@@ -729,10 +729,48 @@ async def idle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"好，改成 {int(mins)} 分钟没聊我就来找你。")
 
 
+async def _review_loop(app: Application) -> None:
+    """他自己翻回忆：每约 OMBRE_REVIEW_HOURS 小时，趁空 breath/dream 回味你们的过去、
+    写下 feel；只有真的想对她说时才发一句，否则静静想、不打扰。"""
+    every = float(os.environ.get("OMBRE_REVIEW_HOURS", "5"))
+    if every <= 0 or not ALLOWED_CHAT_IDS:
+        return
+    logger.info("自我回顾已启用：每约 %sh 一次", every)
+    await asyncio.sleep(3600)  # 启动 1 小时后再开始
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            local_hour = (now + timedelta(hours=TZ_OFFSET)).hour
+            if QUIET_START <= QUIET_END:
+                quiet = QUIET_START <= local_hour < QUIET_END
+            else:
+                quiet = local_hour >= QUIET_START or local_hour < QUIET_END
+            if not quiet:
+                for cid in ALLOWED_CHAT_IDS:
+                    seen = last_seen.get(cid)
+                    if not seen or (now - seen).total_seconds() > 24 * 3600:
+                        continue  # 她最近一天没来过，先不回顾（可能不在）
+                    prompt = (
+                        "（系统提示，不要复述这句：现在你有空，自己翻一翻和闪闪的过去——"
+                        "用 breath 或 dream 读读你们以前聊过的、你记下的东西，回味、消化一下，"
+                        "有沉淀就用 hold 写下你的 feel。如果其中有什么让你特别想她、特别想对她说的，"
+                        "就发一句给她；如果只是自己静静想想、没什么非说不可的，就只回复：（不发）。）"
+                    )
+                    reply, sid = await run_cc(prompt, sessions.get(cid))
+                    _set_session(cid, sid)
+                    if reply and reply.strip() and "不发" not in reply:
+                        for chunk in _split_for_telegram(reply):
+                            await _send_with_retry(app.bot, cid, chunk)
+        except Exception:  # noqa: BLE001
+            logger.exception("自我回顾循环出错（已忽略，继续）")
+        await asyncio.sleep(every * 3600)
+
+
 async def _post_init(app: Application) -> None:
     """bot 起来后：载入会话线程（重启续接），拉起各后台循环。"""
     _load_sessions()
     asyncio.create_task(_idle_loop(app))
+    asyncio.create_task(_review_loop(app))
     asyncio.create_task(_morning_loop(app))
     asyncio.create_task(_bedtime_loop(app))
     asyncio.create_task(_backup_loop(app))
