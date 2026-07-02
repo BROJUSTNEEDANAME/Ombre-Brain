@@ -41,6 +41,9 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
 TELEGRAM_MSG_LIMIT = 4096
+# 被信号掐断的退出码（SIGTERM=15→143/-15，SIGKILL=9→137/-9）：
+# 多半是重启或系统抖动，属瞬时、可重试，不该把冰冷的退出码甩给用户。
+_SIGNAL_KILL_CODES = {143, 137, -15, -9}
 
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
@@ -55,7 +58,10 @@ sessions: dict[int, str] = {}
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
-    """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。"""
+    """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。
+    被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
+    再不行就回一句人话——不把冰冷的退出码甩给用户、不破坏气氛。
+    真正的错误（如 token 失效）才保留可见诊断，方便排查。"""
     cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
     _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
@@ -64,36 +70,52 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(message)
-    try:
-        env = os.environ.copy()
-        _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-        if _tok:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=CC_WORKDIR,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
-    except asyncio.TimeoutError:
-        return "（想得太久了，等下再跟你说。）", session_id
-    except Exception:  # noqa: BLE001
-        logger.exception("启动 claude 失败")
-        return "（断了一下，再说一遍。）", session_id
 
-    if proc.returncode != 0:
+    env = os.environ.copy()
+    _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    if _tok:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
+
+    for attempt in range(2):  # 正常一次；被掐断则再重试一次
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=CC_WORKDIR,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
+        except asyncio.TimeoutError:
+            return "（想得太久了，等下再跟你说。）", session_id
+        except Exception:  # noqa: BLE001
+            logger.exception("启动 claude 失败")
+            return "（断了一下，再说一遍。）", session_id
+
+        rc = proc.returncode
+        if rc == 0:
+            raw = out.decode().strip()
+            try:
+                data = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                return raw or "（……）", session_id
+            return (data.get("result") or "（……）").strip(), data.get("session_id", session_id)
+
+        # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
+        if rc in _SIGNAL_KILL_CODES and attempt == 0:
+            logger.warning("claude 被信号掐断（退出码 %s），1.5s 后重试", rc)
+            await asyncio.sleep(1.5)
+            continue
+        # 掐断重试后仍失败 → 一句人话，不甩退出码
+        if rc in _SIGNAL_KILL_CODES:
+            logger.warning("claude 仍被掐断（退出码 %s），软回退", rc)
+            return "（信号断了一下，你再说一遍。）", session_id
+        # 其它真实错误：保留可见诊断（如 token 失效），便于排查
         detail = (err.decode() or out.decode()).strip()[:1500]
-        logger.error("claude 退出码 %s: %s", proc.returncode, detail)
-        return f"⚠️ cc 出错（退出码 {proc.returncode}）：\n{detail}", session_id
+        logger.error("claude 退出码 %s: %s", rc, detail)
+        return f"⚠️ cc 出错（退出码 {rc}）：\n{detail}", session_id
 
-    raw = out.decode().strip()
-    try:
-        data = json.loads(raw)
-    except Exception:  # noqa: BLE001
-        return raw or "（……）", session_id
-    return (data.get("result") or "（……）").strip(), data.get("session_id", session_id)
+    return "（断了一下，你再说一遍。）", session_id  # 保险兜底
 
 
 def _ok(chat_id: int) -> bool:
