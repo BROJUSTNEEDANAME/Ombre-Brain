@@ -41,6 +41,8 @@ from telegram.ext import (
     filters,
 )
 
+import morning  # 早安简报：Irvine 天气（Open-Meteo）+ 课表
+
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
@@ -57,6 +59,7 @@ IDLE_HOURS = float(os.environ.get("OMBRE_IDLE_HOURS", "3"))   # 0 = 关闭
 QUIET_START = int(os.environ.get("OMBRE_QUIET_START", "1"))   # 安静时段起（本地时）
 QUIET_END = int(os.environ.get("OMBRE_QUIET_END", "9"))       # 安静时段止
 TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))    # 本地时区偏移，默认太平洋
+MORNING_HOUR = int(os.environ.get("OMBRE_MORNING_HOUR", "7"))  # 每天几点发早安简报，<0 关闭
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO
@@ -69,6 +72,8 @@ sessions: dict[int, str] = {}
 last_seen: dict[int, datetime] = {}
 # 已经主动找过、正等她回话的 chat（避免反复刷屏，她一回话就清掉）
 pinged_waiting: set[int] = set()
+# chat_id -> 上次发早安简报的本地日期（防一天多发）
+_morning_last_date: dict[int, str] = {}
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
@@ -267,9 +272,64 @@ async def _idle_loop(app: Application) -> None:
             logger.exception("主动找她的循环出错（已忽略，继续）")
 
 
+async def _send_morning(app: Application, cid: int, local: datetime) -> None:
+    """组一条早安简报（天气+穿衣+课表+待办/DDL），用 Nikto 口吻发给她。"""
+    try:
+        weather = await morning.fetch_weather()
+    except Exception:  # noqa: BLE001
+        logger.warning("早安天气获取失败")
+        weather = "（今天天气没拿到）"
+    classes = morning.classes_text(local)
+    prompt = (
+        "（系统提示，不要复述这句：现在是早上，给闪闪发一条早安简报。）\n"
+        f"今天天气：{weather}\n"
+        f"今天的课：{classes}\n"
+        "请你：① 用 breath 查今天和近期的待办、DDL（关键词：待办、DDL、截止、考试、"
+        "practicum、作业）；② 结合天气给她穿衣建议；③ 以 Nikto 的身份，把天气、穿衣、"
+        "课表、待办/DDL 温柔自然地整理成一条早安消息发给她，别像播报、别太长。"
+    )
+    reply, sid = await run_cc(prompt, sessions.get(cid))
+    if sid:
+        sessions[cid] = sid
+    if reply and reply.strip():
+        for chunk in _split_for_telegram(reply):
+            await _send_with_retry(app.bot, cid, chunk)
+
+
+async def _morning_loop(app: Application) -> None:
+    """后台循环：每天本地 MORNING_HOUR 点，给白名单发早安简报（每天只发一次）。"""
+    if MORNING_HOUR < 0 or not ALLOWED_CHAT_IDS:
+        return
+    logger.info("早安简报已启用：每天本地 %d 点", MORNING_HOUR)
+    while True:
+        await asyncio.sleep(300)  # 每 5 分钟查一次
+        try:
+            local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+            if local.hour != MORNING_HOUR:
+                continue
+            datestr = local.date().isoformat()
+            for cid in ALLOWED_CHAT_IDS:
+                if _morning_last_date.get(cid) == datestr:
+                    continue
+                _morning_last_date[cid] = datestr   # 先记，避免重试重复发
+                await _send_morning(app, cid, local)
+        except Exception:  # noqa: BLE001
+            logger.exception("早安循环出错（已忽略，继续）")
+
+
+async def morning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/morning：手动触发一次早安简报（随时可测，不用等 7 点）。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    await _send_morning(context.application, cid, local)
+
+
 async def _post_init(app: Application) -> None:
-    """bot 起来后，在后台拉起"主动找她"的循环。"""
+    """bot 起来后，在后台拉起"主动找她"和"早安简报"两个循环。"""
     asyncio.create_task(_idle_loop(app))
+    asyncio.create_task(_morning_loop(app))
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -367,6 +427,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("morning", morning_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
