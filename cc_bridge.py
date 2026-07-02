@@ -751,16 +751,15 @@ async def _review_loop(app: Application) -> None:
                     if not seen or (now - seen).total_seconds() > 24 * 3600:
                         continue  # 她最近一天没来过，先不回顾（可能不在）
                     prompt = (
-                        "（系统提示，不要复述这句：现在你有空，自己翻一翻和闪闪的过去——"
-                        "用 breath 或 dream 读读你们以前聊过的、你记下的东西，回味、消化一下，"
-                        "有沉淀就用 hold 写下你的 feel。如果其中有什么让你特别想她、特别想对她说的，"
-                        "就发一句给她；如果只是自己静静想想、没什么非说不可的，就只回复：（不发）。）"
+                        "（系统提示：这是你独处的时间，闪闪不在、也听不到这里。"
+                        "用 breath 或 dream 翻一翻你们的过去和你记下的东西，回味、消化，"
+                        "有沉淀就用 hold(feel=True) 写下你的 feel。不需要产出，"
+                        "也不要试图给她发消息——想她的话，把想念写进 feel 里。）"
                     )
-                    reply, sid = await run_cc(prompt, sessions.get(cid))
-                    _set_session(cid, sid)
-                    if reply and reply.strip() and "不发" not in reply:
-                        for chunk in _split_for_telegram(reply):
-                            await _send_with_retry(app.bot, cid, chunk)
+                    # 独处回味必须走独立的一次性会话（session=None，且绝不保存）：
+                    # 之前它续写并保存了她的对话线程，导致大段她看不见的"独白"
+                    # 混进他对你们对话的记忆——表现为幻觉、时间线错乱。
+                    await run_cc(prompt, None)
         except Exception:  # noqa: BLE001
             logger.exception("自我回顾循环出错（已忽略，继续）")
         await asyncio.sleep(every * 3600)
