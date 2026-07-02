@@ -72,6 +72,8 @@ SESSION_MAX_IDLE_HOURS = float(os.environ.get("OMBRE_SESSION_MAX_IDLE_HOURS", "1
 DATA_DIR = os.environ.get("OMBRE_DATA_DIR", os.path.expanduser("~/ombre-data"))
 DEADLINES_FILE = os.path.join(DATA_DIR, "deadlines.json")     # DDL 登记（结构化）
 CHATLOG_FILE = os.path.join(DATA_DIR, "chatlog.jsonl")        # 防遗忘流水账（每句原样）
+SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")       # cc 会话线程（持久化，重启不断线）
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")       # 运行时设置（如主动找你间隔，可用命令改）
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO
@@ -90,6 +92,64 @@ _morning_last_date: dict[int, str] = {}
 _bedtime_last_date: dict[int, str] = {}
 # (DDL标识, 本地日期) 已提醒集合（防同一天对同一 DDL 重复提醒）
 _ddl_reminded: set = set()
+
+
+# ---- 会话线程持久化：重启也能"从上一句接着说"，不再从头醒来 ----
+def _save_sessions() -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SESSIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({str(k): v for k, v in sessions.items()}, f)
+        os.replace(tmp, SESSIONS_FILE)
+    except Exception:  # noqa: BLE001
+        logger.warning("会话持久化失败")
+
+
+def _set_session(cid: int, sid) -> None:
+    """记住某人的 cc 会话线程并落盘。"""
+    if sid:
+        sessions[cid] = sid
+        _save_sessions()
+
+
+def _load_sessions() -> None:
+    try:
+        with open(SESSIONS_FILE, encoding="utf-8") as f:
+            for k, v in json.load(f).items():
+                sessions[int(k)] = v
+        logger.info("已载入 %d 段会话（重启续接）", len(sessions))
+    except FileNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.warning("会话载入失败")
+
+
+# ---- 运行时设置（可用 Telegram 命令改，不用碰服务器）----
+def _get_setting(key: str, default):
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            return json.load(f).get(key, default)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _set_setting(key: str, val) -> None:
+    d = {}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:  # noqa: BLE001
+        pass
+    d[key] = val
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SETTINGS_FILE)
+    except Exception:  # noqa: BLE001
+        logger.warning("设置保存失败")
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
@@ -174,6 +234,7 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _ok(cid):
         return
     sessions.pop(cid, None)
+    _save_sessions()
     await update.message.reply_text("好，重新开一段。")
 
 
@@ -221,20 +282,14 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
-    now_utc = datetime.now(timezone.utc)
-    prev = last_seen.get(cid)
-    # 久别（默认 >18h）重开干净会话，避免会话越拖越长越慢；连续感靠 Ombre Brain 兜
-    if prev and (now_utc - prev).total_seconds() > SESSION_MAX_IDLE_HOURS * 3600:
-        sessions.pop(cid, None)
-    last_seen[cid] = now_utc                        # 她说话了，刷新时间
+    last_seen[cid] = datetime.now(timezone.utc)     # 她说话了，刷新时间
     pinged_waiting.discard(cid)                     # 她回了，解除"已主动找过"标记
     try:
         await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:  # noqa: BLE001
         pass  # typing 指示器失败不影响正事
     reply, sid = await run_cc(message, sessions.get(cid))
-    if sid:
-        sessions[cid] = sid
+    _set_session(cid, sid)
     _log_turn(cid, "nikto", reply)   # 防遗忘流水账
     for chunk in _split_for_telegram(reply):
         await _reply_with_retry(update.message, chunk)
@@ -255,17 +310,20 @@ async def _send_with_retry(bot, chat_id: int, text: str, retries: int = 3) -> No
 
 async def _idle_loop(app: Application) -> None:
     """后台循环：她多久没聊，就以 Nikto 的身份主动找她一句。
+    间隔由运行时设置 idle_hours 决定（用 /idle 命令改，默认 0.5h=30 分钟）；
     安静时段不打扰；主动找过一次后等她回话才会再找（不刷屏）。"""
-    if IDLE_HOURS <= 0:
+    if not ALLOWED_CHAT_IDS:
         return
-    logger.info("主动找她已启用：闲置 %sh 触发，安静时段 %d-%d 点（本地）",
-                IDLE_HOURS, QUIET_START, QUIET_END)
+    logger.info("主动找她循环已启动（间隔用 /idle 调，安静时段 %d-%d 点）",
+                QUIET_START, QUIET_END)
     while True:
-        await asyncio.sleep(600)  # 每 10 分钟查一次
+        await asyncio.sleep(300)  # 每 5 分钟查一次
         try:
+            idle_hours = float(_get_setting("idle_hours", 0.5))
+            if idle_hours <= 0:
+                continue  # 运行时关掉了主动找你
             now = datetime.now(timezone.utc)
             local_hour = (now + timedelta(hours=TZ_OFFSET)).hour
-            # 安静时段（跨不跨午夜都兼容）：别在她睡觉时吵
             if QUIET_START <= QUIET_END:
                 quiet = QUIET_START <= local_hour < QUIET_END
             else:
@@ -275,8 +333,7 @@ async def _idle_loop(app: Application) -> None:
             for cid, seen in list(last_seen.items()):
                 if cid in pinged_waiting or cid not in ALLOWED_CHAT_IDS:
                     continue
-                idle_h = (now - seen).total_seconds() / 3600
-                if idle_h < IDLE_HOURS:
+                if (now - seen).total_seconds() / 3600 < idle_hours:
                     continue
                 nudge = (
                     "（系统提示，不要复述这句：闪闪已经有一阵子没和你说话了。"
@@ -284,8 +341,7 @@ async def _idle_loop(app: Application) -> None:
                     "短一点，符合人设，别像通知、别提具体几小时。）"
                 )
                 reply, sid = await run_cc(nudge, sessions.get(cid))
-                if sid:
-                    sessions[cid] = sid
+                _set_session(cid, sid)
                 if reply and reply.strip():
                     for chunk in _split_for_telegram(reply):
                         await _send_with_retry(app.bot, cid, chunk)
@@ -311,8 +367,7 @@ async def _send_morning(app: Application, cid: int, local: datetime) -> None:
         "课表、待办/DDL 温柔自然地整理成一条早安消息发给她，别像播报、别太长。"
     )
     reply, sid = await run_cc(prompt, sessions.get(cid))
-    if sid:
-        sessions[cid] = sid
+    _set_session(cid, sid)
     if reply and reply.strip():
         for chunk in _split_for_telegram(reply):
             await _send_with_retry(app.bot, cid, chunk)
@@ -374,8 +429,7 @@ async def _bedtime_loop(app: Application) -> None:
                     "就一句、别啰嗦、别像闹钟；可以顺口问她要不要听个睡前小故事。）"
                 )
                 reply, sid = await run_cc(prompt, sessions.get(cid))
-                if sid:
-                    sessions[cid] = sid
+                _set_session(cid, sid)
                 if reply and reply.strip():
                     for chunk in _split_for_telegram(reply):
                         await _send_with_retry(app.bot, cid, chunk)
@@ -586,8 +640,7 @@ async def _ddl_loop(app: Application) -> None:
                     f"{x.get('date')}，{when}到期。以 Nikto 的身份关心地提醒她一句，别像闹钟。）"
                 )
                 reply, sid = await run_cc(prompt, sessions.get(cid))
-                if sid:
-                    sessions[cid] = sid
+                _set_session(cid, sid)
                 if reply and reply.strip():
                     for chunk in _split_for_telegram(reply):
                         await _send_with_retry(app.bot, cid, chunk)
@@ -652,8 +705,33 @@ async def _offsite_loop(app: Application) -> None:
         await asyncio.sleep(OFFSITE_DAYS * 24 * 3600)
 
 
+async def idle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/idle 分钟数 —— 设置多久没聊他来找你（0=关）；不带参数看当前值。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    cur_min = round(float(_get_setting("idle_hours", 0.5)) * 60)
+    if not context.args:
+        state = "（已关）" if cur_min <= 0 else ""
+        await update.message.reply_text(
+            f"现在：{cur_min} 分钟没聊他就来找你{state}。\n改：/idle 分钟数（如 /idle 30，0=关）"
+        )
+        return
+    try:
+        mins = float(context.args[0])
+    except ValueError:
+        await update.message.reply_text("用法：/idle 分钟数，如 /idle 30")
+        return
+    _set_setting("idle_hours", mins / 60.0)
+    if mins <= 0:
+        await update.message.reply_text("好，关掉主动找你了。")
+    else:
+        await update.message.reply_text(f"好，改成 {int(mins)} 分钟没聊我就来找你。")
+
+
 async def _post_init(app: Application) -> None:
-    """bot 起来后，在后台拉起：主动找她 / 早安 / 睡前 / 备份 / DDL / 异地备份。"""
+    """bot 起来后：载入会话线程（重启续接），拉起各后台循环。"""
+    _load_sessions()
     asyncio.create_task(_idle_loop(app))
     asyncio.create_task(_morning_loop(app))
     asyncio.create_task(_bedtime_loop(app))
@@ -767,6 +845,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ddls", ddls_cmd))
     app.add_handler(CommandHandler("recall", recall_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("idle", idle_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
