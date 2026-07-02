@@ -10,24 +10,26 @@ set -uo pipefail
 
 REPO="${OMBRE_REPO_DIR:-/home/ombre/Ombre-Brain}"
 BRANCH="${OMBRE_DEPLOY_BRANCH:-claude/ombre-brain-archive-7ha6xf}"
-
-cd "$REPO" || exit 1
+export HOME=/root
+# 每条 git 都内联 safe.directory，不依赖 systemd 环境里的 HOME/gitconfig，
+# 彻底避免 root 操作 ombre 仓库时的 "dubious ownership" 静默失败（之前就卡在这）。
+GIT="git -c safe.directory=$REPO -C $REPO"
 
 # 拉远端（匿名读公开仓库即可，不需要登录）
-git fetch origin "$BRANCH" -q 2>/dev/null || exit 0
+$GIT fetch origin "$BRANCH" -q 2>/dev/null || exit 0
 
-LOCAL=$(git rev-parse HEAD 2>/dev/null || echo "")
-REMOTE=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
+LOCAL=$($GIT rev-parse HEAD 2>/dev/null || echo "")
+REMOTE=$($GIT rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
 [ -z "$REMOTE" ] && exit 0
 [ "$LOCAL" = "$REMOTE" ] && exit 0   # 没有新提交
 
 logger -t ombre-autodeploy "发现更新 ${LOCAL:0:7} -> ${REMOTE:0:7}，开始部署"
-git reset --hard "origin/$BRANCH" -q || { git reset --hard "$LOCAL" -q 2>/dev/null; exit 1; }
+$GIT reset --hard "origin/$BRANCH" -q || { $GIT reset --hard "$LOCAL" -q 2>/dev/null; exit 1; }
 
 # 语法自检：新代码 Python 编译不过就回滚，绝不上线坏代码
-if ! python3 -m compileall -q ./*.py 2>/dev/null; then
+if ! python3 -m compileall -q "$REPO"/*.py 2>/dev/null; then
     logger -t ombre-autodeploy "新代码语法检查失败，回滚到 ${LOCAL:0:7}"
-    git reset --hard "$LOCAL" -q 2>/dev/null
+    $GIT reset --hard "$LOCAL" -q 2>/dev/null
     exit 1
 fi
 
