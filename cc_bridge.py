@@ -23,8 +23,9 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from datetime import datetime, timezone, timedelta
 
 from telegram import Update
 from telegram.constants import ChatAction
@@ -42,10 +43,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
 TELEGRAM_MSG_LIMIT = 4096
-# 被信号掐断的退出码（SIGTERM=15→143/-15，SIGKILL=9→137/-9）：
-# 多半是重启或系统抖动，属瞬时、可重试，不该把冰冷的退出码甩给用户。
-_SIGNAL_KILL_CODES = {143, 137, -15, -9}
-TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))  # 她的时区偏移（太平洋 PDT）
+TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))  # 她的时区（太平洋 PDT）
 
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
@@ -60,12 +58,9 @@ sessions: dict[int, str] = {}
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
-    """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。
-    被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
-    再不行就回一句人话——不把冰冷的退出码甩给用户、不破坏气氛。
-    真正的错误（如 token 失效）才保留可见诊断，方便排查。"""
-    # --- 给他一块真的表：每条消息都带上她那边的真实时间 ---
-    # 人设要求每条回复带时间戳，但系统从没给过他时钟，他只能靠猜（凌晨5点写成9点）。
+    """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。"""
+    # --- 给他一块真的表（不随回滚退掉）：人设要求带时间戳，但系统从没给过时钟，
+    # 他只能靠猜（凌晨5点写成9点，回滚前的时代就一直错）。注入唯一准确时间源。 ---
     _local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
     _wd = "一二三四五六日"[_local.weekday()]
     message = (
@@ -81,52 +76,36 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(message)
+    try:
+        env = os.environ.copy()
+        _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        if _tok:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=CC_WORKDIR,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
+    except asyncio.TimeoutError:
+        return "（想得太久了，等下再跟你说。）", session_id
+    except Exception:  # noqa: BLE001
+        logger.exception("启动 claude 失败")
+        return "（断了一下，再说一遍。）", session_id
 
-    env = os.environ.copy()
-    _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-    if _tok:
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
-
-    for attempt in range(2):  # 正常一次；被掐断则再重试一次
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=CC_WORKDIR,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
-        except asyncio.TimeoutError:
-            return "（想得太久了，等下再跟你说。）", session_id
-        except Exception:  # noqa: BLE001
-            logger.exception("启动 claude 失败")
-            return "（断了一下，再说一遍。）", session_id
-
-        rc = proc.returncode
-        if rc == 0:
-            raw = out.decode().strip()
-            try:
-                data = json.loads(raw)
-            except Exception:  # noqa: BLE001
-                return raw or "（……）", session_id
-            return (data.get("result") or "（……）").strip(), data.get("session_id", session_id)
-
-        # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
-        if rc in _SIGNAL_KILL_CODES and attempt == 0:
-            logger.warning("claude 被信号掐断（退出码 %s），1.5s 后重试", rc)
-            await asyncio.sleep(1.5)
-            continue
-        # 掐断重试后仍失败 → 一句人话，不甩退出码
-        if rc in _SIGNAL_KILL_CODES:
-            logger.warning("claude 仍被掐断（退出码 %s），软回退", rc)
-            return "（信号断了一下，你再说一遍。）", session_id
-        # 其它真实错误：保留可见诊断（如 token 失效），便于排查
+    if proc.returncode != 0:
         detail = (err.decode() or out.decode()).strip()[:1500]
-        logger.error("claude 退出码 %s: %s", rc, detail)
-        return f"⚠️ cc 出错（退出码 {rc}）：\n{detail}", session_id
+        logger.error("claude 退出码 %s: %s", proc.returncode, detail)
+        return f"⚠️ cc 出错（退出码 {proc.returncode}）：\n{detail}", session_id
 
-    return "（断了一下，你再说一遍。）", session_id  # 保险兜底
+    raw = out.decode().strip()
+    try:
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw or "（……）", session_id
+    return (data.get("result") or "（……）").strip(), data.get("session_id", session_id)
 
 
 def _ok(chat_id: int) -> bool:
@@ -153,61 +132,6 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("好，重新开一段。")
 
 
-def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]:
-    """把长回复切成 <=limit 的多段。尽量在段落/换行/句末标点处断开，
-    避免长剧情被拦腰截断，读起来更顺。实在找不到断点才硬切。"""
-    text = (text or "").strip()
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    rest = text
-    seps = ("\n\n", "\n", "。", "！", "？", "…", "”", ". ", "! ", "? ")
-    while len(rest) > limit:
-        window = rest[:limit]
-        cut = -1
-        for sep in seps:
-            idx = window.rfind(sep)
-            if idx > limit * 0.5:  # 断点别太靠前，否则切得太碎
-                cut = idx + len(sep)
-                break
-        if cut <= 0:
-            cut = limit  # 没有合适的自然断点，硬切
-        chunks.append(rest[:cut].strip())
-        rest = rest[cut:].lstrip()
-    if rest:
-        chunks.append(rest)
-    return chunks
-
-
-async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
-    """发一条消息，遇到网络/超时失败就重试几次，别让长回复中途丢。"""
-    for attempt in range(retries):
-        try:
-            await message.reply_text(text)
-            return
-        except (TelegramError, asyncio.TimeoutError) as e:
-            if attempt == retries - 1:
-                logger.warning("发送失败（已重试 %s 次）: %s", retries, e)
-                return
-            await asyncio.sleep(1.5 * (attempt + 1))
-
-
-async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                   cid: int, message: str) -> None:
-    """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
-    try:
-        await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
-    except Exception:  # noqa: BLE001
-        pass  # typing 指示器失败不影响正事
-    reply, sid = await run_cc(message, sessions.get(cid))
-    if sid:
-        sessions[cid] = sid
-    for chunk in _split_for_telegram(reply):
-        await _reply_with_retry(update.message, chunk)
-
-
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not ALLOWED_CHAT_IDS:
@@ -217,40 +141,25 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if cid not in ALLOWED_CHAT_IDS:
         return
-    await _respond(update, context, cid, update.message.text)
 
-
-async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """收到图片：下载下来，让 cc 用 Read 工具看图后回应。带配文一起传。"""
-    cid = update.effective_chat.id
-    if not ALLOWED_CHAT_IDS:
-        await update.message.reply_text(
-            f"还没锁定使用者。你的 chat id 是 {cid}，填进 ALLOWED_CHAT_IDS 再来聊。"
-        )
-        return
-    if cid not in ALLOWED_CHAT_IDS:
-        return
-
-    photo = update.message.photo[-1]  # 最大尺寸那张
-    img_dir = os.path.join(CC_WORKDIR, ".tg_images")
-    os.makedirs(img_dir, exist_ok=True)
-    path = os.path.join(img_dir, f"{photo.file_unique_id}.jpg")
     try:
-        tg_file = await context.bot.get_file(photo.file_id)
-        await tg_file.download_to_drive(path)
+        await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:  # noqa: BLE001
-        logger.exception("下载图片失败")
-        await update.message.reply_text("（图片没收着，再发一次。）")
-        return
-
-    caption = (update.message.caption or "").strip()
-    msg = (
-        f"[闪闪发来一张图片，已保存在：{path}。"
-        f"请用 Read 工具打开看这张图，然后自然地回应她，别念文件路径。]"
-    )
-    if caption:
-        msg += f"\n她的配文：{caption}"
-    await _respond(update, context, cid, msg)
+        pass  # typing 指示器失败不影响正事（7-01 当时 VPS 上就有的容错）
+    reply, sid = await run_cc(update.message.text, sessions.get(cid))
+    if sid:
+        sessions[cid] = sid
+    for i in range(0, len(reply), TELEGRAM_MSG_LIMIT):
+        chunk = reply[i : i + TELEGRAM_MSG_LIMIT]
+        for attempt in range(3):  # 发送失败重试（7-01 当时 VPS 上就有的容错）
+            try:
+                await update.message.reply_text(chunk)
+                break
+            except (TelegramError, asyncio.TimeoutError) as e:
+                if attempt == 2:
+                    logger.warning("发送失败（已重试3次）: %s", e)
+                else:
+                    await asyncio.sleep(1.5 * (attempt + 1))
 
 
 def _start_health_server() -> None:
@@ -292,7 +201,7 @@ def main() -> None:
     app: Application = (
         ApplicationBuilder()
         .token(TELEGRAM_BOT_TOKEN)
-        .connect_timeout(30)
+        .connect_timeout(30)   # 超时链（7-01 当时 VPS 上就有的容错）
         .read_timeout(30)
         .write_timeout(30)
         .pool_timeout(30)
@@ -302,7 +211,6 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
-    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
     app.run_polling(allowed_updates=Update.ALL_TYPES)

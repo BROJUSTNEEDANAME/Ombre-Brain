@@ -40,7 +40,6 @@ import random
 import logging
 import asyncio
 import httpx
-from datetime import datetime
 
 
 # --- Ensure same-directory modules can be imported ---
@@ -54,7 +53,7 @@ from dehydrator import Dehydrator
 from decay_engine import DecayEngine
 from embedding_engine import EmbeddingEngine
 from import_memory import ImportEngine
-from utils import load_config, setup_logging, strip_wikilinks, count_tokens_approx, parse_time_range
+from utils import load_config, setup_logging, strip_wikilinks, count_tokens_approx
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
@@ -431,88 +430,19 @@ async def breath(
 
     # --- Vector similarity channel: find semantically related buckets ---
     # --- 向量相似度通道：找到语义相关的桶 ---
-    # --- RRF 融合：把关键词通道和向量通道按「各自排名」融合，而不是简单拼接 ---
-    # Reciprocal Rank Fusion：两个通道都靠前的桶浮到最顶，单通道强命中也仍能出现。
-    # 修正老问题：以前向量结果只是接在关键词后面、不重排，导致 0.95 相似度的
-    # 语义命中排在勉强及格的关键词命中后面。k=60 是 RRF 常用常数。
-    RRF_K = 60
-    rrf: dict[str, float] = {}
-    by_id: dict[str, dict] = {}
-    # 关键词通道排名（matches 已按分数降序）
-    for rank, b in enumerate(matches):
-        rid = b["id"]
-        rrf[rid] = rrf.get(rid, 0.0) + 1.0 / (RRF_K + rank + 1)
-        by_id[rid] = b
-    # 向量通道排名
+    matched_ids = {b["id"] for b in matches}
     try:
         vector_results = await embedding_engine.search_similar(query, top_k=max(max_results, 20))
-        for rank, (bucket_id, sim_score) in enumerate(vector_results):
-            if sim_score <= 0.5:
-                continue
-            rrf[bucket_id] = rrf.get(bucket_id, 0.0) + 1.0 / (RRF_K + rank + 1)
-            if bucket_id not in by_id:
-                b = await bucket_mgr.get(bucket_id)
-                if b:
-                    b["vector_match"] = True  # 纯向量捞出的标「语义关联」
-                    by_id[bucket_id] = b
-                else:
-                    rrf.pop(bucket_id, None)
+        for bucket_id, sim_score in vector_results:
+            if bucket_id not in matched_ids and sim_score > 0.5:
+                bucket = await bucket_mgr.get(bucket_id)
+                if bucket:
+                    bucket["score"] = round(sim_score * 100, 2)
+                    bucket["vector_match"] = True
+                    matches.append(bucket)
+                    matched_ids.add(bucket_id)
     except Exception as e:
         logger.warning(f"Vector search failed, using keyword only / 向量搜索失败: {e}")
-    # 按融合分重排，产出最终 matches
-    matches = []
-    for rid in sorted(rrf, key=lambda i: rrf[i], reverse=True):
-        b = by_id.get(rid)
-        if b is None:
-            continue
-        b["score"] = round(rrf[rid] * 1000, 2)  # 展示用，放大好读
-        matches.append(b)
-
-    # --- 时间检索：查询含"上周/昨天/三月"等 → 该时段记忆提权，并补入纯时间问法漏掉的 ---
-    try:
-        _trange = parse_time_range(query)
-    except Exception:  # noqa: BLE001
-        _trange = None
-    if _trange:
-        _ts, _te = _trange
-
-        def _bucket_dt(meta):
-            for _k in ("source_date", "created", "last_active"):
-                _v = meta.get(_k)
-                if _v:
-                    try:
-                        return datetime.fromisoformat(str(_v)[:19])
-                    except (ValueError, TypeError):
-                        continue
-            return None
-
-        _existing = {b["id"] for b in matches}
-        # 已在结果里、且落在时段内的 → 大幅提权
-        for b in matches:
-            bd = _bucket_dt(b.get("metadata", {}))
-            if bd and _ts <= bd <= _te:
-                b["score"] = round(b.get("score", 0) + 100.0, 2)
-                b["time_hit"] = True
-        # 纯时间问法（关键词/向量没捞到）→ 补入该时段最近的桶，至多 15 条
-        try:
-            _all = await bucket_mgr.list_all(include_archive=False)
-        except Exception:  # noqa: BLE001
-            _all = []
-        _in_range = []
-        for b in _all:
-            if b["id"] in _existing:
-                continue
-            bd = _bucket_dt(b.get("metadata", {}))
-            if bd and _ts <= bd <= _te:
-                b["_dt"] = bd
-                _in_range.append(b)
-        _in_range.sort(key=lambda x: x["_dt"], reverse=True)
-        for b in _in_range[:15]:
-            b.pop("_dt", None)
-            b["score"] = 100.0
-            b["time_hit"] = True
-            matches.append(b)
-        matches.sort(key=lambda b: b.get("score", 0), reverse=True)
 
     results = []
     token_used = 0
@@ -2340,11 +2270,12 @@ if __name__ == "__main__":
 
             threading.Thread(target=_start_backfill, daemon=True).start()
 
-        # streamable-http/sse 真正的监听点：读 OMBRE_HOST/OMBRE_PORT。
-        # VPS 上前面挂了 Caddy/Funnel，设 OMBRE_HOST=127.0.0.1 让大脑只监听本机，
-        # 8000 不裸露公网（这台 VPS 没防火墙，硬绑 0.0.0.0 会让 /api 全网可达）。
-        _bind_host = os.environ.get("OMBRE_HOST", "0.0.0.0")
-        _bind_port = int(os.environ.get("OMBRE_PORT", "8000"))
-        uvicorn.run(_app, host=_bind_host, port=_bind_port)
+        # 安全修复（不随回滚退掉）：读 OMBRE_HOST/OMBRE_PORT，VPS 上设 127.0.0.1
+        # 只监听本机——否则这台无防火墙的 VPS 会把 8000/API 裸露到公网。
+        uvicorn.run(
+            _app,
+            host=os.environ.get("OMBRE_HOST", "0.0.0.0"),
+            port=int(os.environ.get("OMBRE_PORT", "8000")),
+        )
     else:
         mcp.run(transport=transport)

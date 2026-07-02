@@ -62,9 +62,6 @@ class BucketManager:
         self.archive_dir = os.path.join(self.base_dir, "archive")
         self.feel_dir = os.path.join(self.base_dir, "feel")
         self.fuzzy_threshold = config.get("matching", {}).get("fuzzy_threshold", 50)
-        # jieba 词级 BM25 关键词检索（中文召回更准）；置 False 退回纯字符级 fuzz
-        self.bm25_enabled = config.get("matching", {}).get("bm25", True)
-        self._tok_cache: dict = {}  # 分词进程内缓存：hash(text) -> tokens
         self.max_results = config.get("matching", {}).get("max_results", 5)
 
         # --- Wikilink config / 双链配置 ---
@@ -478,32 +475,13 @@ class BucketManager:
 
         # --- Layer 2: weighted multi-dim ranking ---
         # --- 第二层：多维加权精排 ---
-        # jieba 词级 BM25 预备：查询分词 + 在候选集上算 IDF（稀有词权重高），
-        # 顺手缓存每个候选的 token 集供逐桶复用。这是中文关键词召回的关键。
-        q_set = set(self._jieba_tokens(query))
-        idf: dict[str, float] = {}
-        cand_tokens: list = []
-        if q_set and self.bm25_enabled:
-            n_docs = len(candidates)
-            df = {t: 0 for t in q_set}
-            for b in candidates:
-                toks = self._bucket_tokens(b)
-                cand_tokens.append(toks)
-                for t in q_set:
-                    if t in toks:
-                        df[t] += 1
-            for t in q_set:
-                idf[t] = math.log(1.0 + (n_docs - df[t] + 0.5) / (df[t] + 0.5))
-        else:
-            cand_tokens = [None] * len(candidates)
-
         scored = []
-        for bucket, b_tokens in zip(candidates, cand_tokens):
+        for bucket in candidates:
             meta = bucket.get("metadata", {})
 
             try:
-                # Dim 1: topic relevance (jieba BM25 融合字符级 fuzz, 0~1)
-                topic_score = self._calc_topic_score(query, bucket, q_set, b_tokens, idf)
+                # Dim 1: topic relevance (fuzzy text, 0~1)
+                topic_score = self._calc_topic_score(query, bucket)
 
                 # Dim 2: emotion resonance (coordinate distance, 0~1)
                 emotion_score = self._calc_emotion_score(
@@ -557,60 +535,6 @@ class BucketManager:
         return scored[:limit]
 
     # ---------------------------------------------------------
-    # jieba 分词工具（中文词级 BM25 检索用）
-    # ---------------------------------------------------------
-    _STOP_TOKENS = frozenset({
-        "的", "了", "是", "我", "你", "他", "她", "它", "在", "和", "也", "都",
-        "就", "不", "有", "这", "那", "们", "着", "与", "及", "把", "被", "让",
-        "又", "还", "很", "去", "做", "会", "要", "个", "啊", "呢", "吧", "吗",
-        " ", "\n", "\t", "，", "。", "、", "！", "？", "：", "；",
-        "（", "）", "“", "”", "‘", "’", "…", "-",
-    })
-
-    def _jieba_tokens(self, text: str) -> list[str]:
-        """jieba 分词 + 去停用词（英文小写化），带进程内缓存。
-        jieba 异常时降级到「英文词 + 中文字符二元组」，保证永不报错。"""
-        text = (text or "").strip()
-        if not text:
-            return []
-        key = hash(text)
-        cached = self._tok_cache.get(key)
-        if cached is not None:
-            return cached
-        try:
-            toks = [
-                t.lower() for t in jieba.lcut(text)
-                if t.strip() and t not in self._STOP_TOKENS
-            ]
-        except Exception:  # noqa: BLE001
-            low = text.lower()
-            toks = re.findall(r"[a-z0-9]+", low)
-            cjk = re.findall(r"[一-鿿]", low)
-            toks += ["".join(p) for p in zip(cjk, cjk[1:])]
-        if len(self._tok_cache) > 5000:
-            self._tok_cache.clear()
-        self._tok_cache[key] = toks
-        return toks
-
-    def _bucket_tokens(self, bucket: dict) -> set:
-        """一个桶可检索文本（名/域/标签/正文前1000字）的 token 集，带缓存。"""
-        meta = bucket.get("metadata", {})
-        parts = [
-            meta.get("name", ""),
-            " ".join(meta.get("domain", []) or []),
-            " ".join(meta.get("tags", []) or []),
-            (bucket.get("content", "") or "")[:1000],
-        ]
-        return set(self._jieba_tokens(" \n ".join(parts)))
-
-    def _bucket_field_tokens(self, meta: dict) -> set:
-        """name/domain/tags 的 token 集（标题类字段，命中额外加权）。"""
-        parts = [meta.get("name", "")]
-        parts += list(meta.get("domain", []) or [])
-        parts += list(meta.get("tags", []) or [])
-        return set(self._jieba_tokens(" \n ".join(p for p in parts if p)))
-
-    # ---------------------------------------------------------
     # Strong textual hit on a bucket's name / tags / domain.
     # Used to keep pinned buckets reachable by pure keyword search.
     # 桶的 name/tag/domain 上是否有强文本命中——用于让钉选桶纯关键词可达。
@@ -624,23 +548,13 @@ class BucketManager:
     # name(×3) + domain(×2.5) + tags(×2) + body(×1)
     # 文本相关性子分：桶名(×3) + 主题域(×2.5) + 标签(×2) + 正文(×1)
     # ---------------------------------------------------------
-    def _calc_topic_score(
-        self,
-        query: str,
-        bucket: dict,
-        q_set: set = None,
-        b_tokens: set = None,
-        idf: dict = None,
-    ) -> float:
+    def _calc_topic_score(self, query: str, bucket: dict) -> float:
         """
         Calculate text dimension relevance score (0~1).
-        计算文本维度的相关性得分。融合两路、取 max（加法式：只增召回，不丢任何现有匹配）：
-          A) 字符级 rapidfuzz（保底，中英通用）
-          B) jieba 词级 BM25-lite（稀有词 IDF 加权，中文召回更准）
+        计算文本维度的相关性得分。
         """
         meta = bucket.get("metadata", {})
 
-        # --- A) 字符级 fuzz（保底，永远算）---
         name_score = fuzz.partial_ratio(query, meta.get("name", "")) * 3
         domain_score = (
             max(
@@ -657,23 +571,8 @@ class BucketManager:
             * 2
         )
         content_score = fuzz.partial_ratio(query, bucket.get("content", "")[:1000]) * self.content_weight
-        fuzz_score = (name_score + domain_score + tag_score + content_score) / (
-            100 * (3 + 2.5 + 2 + self.content_weight)
-        )
 
-        # --- B) jieba 词级 BM25-lite（有查询分词与 IDF 时才算）---
-        if q_set and idf:
-            if b_tokens is None:
-                b_tokens = self._bucket_tokens(bucket)
-            matched = q_set & b_tokens
-            if matched:
-                strong = self._bucket_field_tokens(meta)  # 标题类字段命中额外加权
-                hit = sum(idf.get(t, 0.0) * (1.6 if t in strong else 1.0) for t in matched)
-                denom = sum(idf.get(t, 0.0) * 1.6 for t in q_set) or 1.0
-                bm25_score = min(1.0, hit / denom)
-                return max(fuzz_score, bm25_score)
-
-        return fuzz_score
+        return (name_score + domain_score + tag_score + content_score) / (100 * (3 + 2.5 + 2 + self.content_weight))
 
     # ---------------------------------------------------------
     # Emotion resonance sub-score:
