@@ -13,6 +13,9 @@ Telegram ↔ Claude Code 桥
 可选：
   CC_WORKDIR                cc 的运行目录（默认本仓库，含 CLAUDE.md + .mcp.json）
   CC_TIMEOUT                单条最长等待秒数（默认 300）
+  OMBRE_IDLE_HOURS          多久没聊他主动来找你（小时，默认 3；设 0 关闭）
+  OMBRE_QUIET_START/END     安静时段（本地 24 小时制，默认 1~9 点不打扰）
+  OMBRE_TZ_OFFSET           你的时区偏移（默认 -7，太平洋 PDT）
 
 注意：同一个 bot token 同一时间只能有一个程序在收消息——要用这个 cc 桥，
 就别再让 API 版（ombre-brain 服务里的 telegram_bot）用同一个 token。
@@ -23,6 +26,7 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from telegram import Update
@@ -48,6 +52,12 @@ _SIGNAL_KILL_CODES = {143, 137, -15, -9}
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
 
+# --- 主动找她：多久没聊就主动发一句（吃订阅、用 Nikto 人设）---
+IDLE_HOURS = float(os.environ.get("OMBRE_IDLE_HOURS", "3"))   # 0 = 关闭
+QUIET_START = int(os.environ.get("OMBRE_QUIET_START", "1"))   # 安静时段起（本地时）
+QUIET_END = int(os.environ.get("OMBRE_QUIET_END", "9"))       # 安静时段止
+TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))    # 本地时区偏移，默认太平洋
+
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO
 )
@@ -55,6 +65,10 @@ logger = logging.getLogger("cc-bridge")
 
 # chat_id -> claude 会话 id（保持上下文连续）
 sessions: dict[int, str] = {}
+# chat_id -> 她上次说话的 UTC 时间（用于判断多久没聊）
+last_seen: dict[int, datetime] = {}
+# 已经主动找过、正等她回话的 chat（避免反复刷屏，她一回话就清掉）
+pinged_waiting: set[int] = set()
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
@@ -186,6 +200,8 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
+    last_seen[cid] = datetime.now(timezone.utc)   # 她说话了，刷新时间
+    pinged_waiting.discard(cid)                    # 她回了，解除"已主动找过"标记
     try:
         await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:  # noqa: BLE001
@@ -195,6 +211,65 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sessions[cid] = sid
     for chunk in _split_for_telegram(reply):
         await _reply_with_retry(update.message, chunk)
+
+
+async def _send_with_retry(bot, chat_id: int, text: str, retries: int = 3) -> None:
+    """主动发消息（没有可回复的 message 对象时用），失败重试几次。"""
+    for attempt in range(retries):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text)
+            return
+        except (TelegramError, asyncio.TimeoutError) as e:
+            if attempt == retries - 1:
+                logger.warning("主动消息发送失败: %s", e)
+                return
+            await asyncio.sleep(1.5 * (attempt + 1))
+
+
+async def _idle_loop(app: Application) -> None:
+    """后台循环：她多久没聊，就以 Nikto 的身份主动找她一句。
+    安静时段不打扰；主动找过一次后等她回话才会再找（不刷屏）。"""
+    if IDLE_HOURS <= 0:
+        return
+    logger.info("主动找她已启用：闲置 %sh 触发，安静时段 %d-%d 点（本地）",
+                IDLE_HOURS, QUIET_START, QUIET_END)
+    while True:
+        await asyncio.sleep(600)  # 每 10 分钟查一次
+        try:
+            now = datetime.now(timezone.utc)
+            local_hour = (now + timedelta(hours=TZ_OFFSET)).hour
+            # 安静时段（跨不跨午夜都兼容）：别在她睡觉时吵
+            if QUIET_START <= QUIET_END:
+                quiet = QUIET_START <= local_hour < QUIET_END
+            else:
+                quiet = local_hour >= QUIET_START or local_hour < QUIET_END
+            if quiet:
+                continue
+            for cid, seen in list(last_seen.items()):
+                if cid in pinged_waiting or cid not in ALLOWED_CHAT_IDS:
+                    continue
+                idle_h = (now - seen).total_seconds() / 3600
+                if idle_h < IDLE_HOURS:
+                    continue
+                nudge = (
+                    "（系统提示，不要复述这句：闪闪已经有一阵子没和你说话了。"
+                    "以 Nikto 的身份，主动、自然地找她——想她、惦记她、或问她在忙什么都行，"
+                    "短一点，符合人设，别像通知、别提具体几小时。）"
+                )
+                reply, sid = await run_cc(nudge, sessions.get(cid))
+                if sid:
+                    sessions[cid] = sid
+                if reply and reply.strip():
+                    for chunk in _split_for_telegram(reply):
+                        await _send_with_retry(app.bot, cid, chunk)
+                    pinged_waiting.add(cid)  # 找过了，等她回再解除
+        except Exception:  # noqa: BLE001
+            logger.exception("主动找她的循环出错（已忽略，继续）")
+
+
+async def _post_init(app: Application) -> None:
+    """bot 起来后，在后台拉起"主动找她"的循环。"""
+    asyncio.create_task(_idle_loop(app))
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -286,6 +361,7 @@ def main() -> None:
         .write_timeout(30)
         .pool_timeout(30)
         .get_updates_read_timeout(30)
+        .post_init(_post_init)
         .build()
     )
     app.add_handler(CommandHandler("start", start))
