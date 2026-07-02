@@ -40,6 +40,7 @@ import random
 import logging
 import asyncio
 import httpx
+from datetime import datetime
 
 
 # --- Ensure same-directory modules can be imported ---
@@ -53,7 +54,7 @@ from dehydrator import Dehydrator
 from decay_engine import DecayEngine
 from embedding_engine import EmbeddingEngine
 from import_memory import ImportEngine
-from utils import load_config, setup_logging, strip_wikilinks, count_tokens_approx
+from utils import load_config, setup_logging, strip_wikilinks, count_tokens_approx, parse_time_range
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
@@ -466,6 +467,52 @@ async def breath(
             continue
         b["score"] = round(rrf[rid] * 1000, 2)  # 展示用，放大好读
         matches.append(b)
+
+    # --- 时间检索：查询含"上周/昨天/三月"等 → 该时段记忆提权，并补入纯时间问法漏掉的 ---
+    try:
+        _trange = parse_time_range(query)
+    except Exception:  # noqa: BLE001
+        _trange = None
+    if _trange:
+        _ts, _te = _trange
+
+        def _bucket_dt(meta):
+            for _k in ("source_date", "created", "last_active"):
+                _v = meta.get(_k)
+                if _v:
+                    try:
+                        return datetime.fromisoformat(str(_v)[:19])
+                    except (ValueError, TypeError):
+                        continue
+            return None
+
+        _existing = {b["id"] for b in matches}
+        # 已在结果里、且落在时段内的 → 大幅提权
+        for b in matches:
+            bd = _bucket_dt(b.get("metadata", {}))
+            if bd and _ts <= bd <= _te:
+                b["score"] = round(b.get("score", 0) + 100.0, 2)
+                b["time_hit"] = True
+        # 纯时间问法（关键词/向量没捞到）→ 补入该时段最近的桶，至多 15 条
+        try:
+            _all = await bucket_mgr.list_all(include_archive=False)
+        except Exception:  # noqa: BLE001
+            _all = []
+        _in_range = []
+        for b in _all:
+            if b["id"] in _existing:
+                continue
+            bd = _bucket_dt(b.get("metadata", {}))
+            if bd and _ts <= bd <= _te:
+                b["_dt"] = bd
+                _in_range.append(b)
+        _in_range.sort(key=lambda x: x["_dt"], reverse=True)
+        for b in _in_range[:15]:
+            b.pop("_dt", None)
+            b["score"] = 100.0
+            b["time_hit"] = True
+            matches.append(b)
+        matches.sort(key=lambda b: b.get("score", 0), reverse=True)
 
     results = []
     token_used = 0

@@ -15,7 +15,7 @@ import uuid
 import yaml
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def load_config(config_path: str = None) -> dict:
@@ -231,3 +231,116 @@ def now_iso() -> str:
     返回当前时间的 ISO 格式字符串。
     """
     return datetime.now().isoformat(timespec="seconds")
+
+
+# =============================================================
+# 中文自然语言时间解析（时间检索用）
+# 把"上周/昨天/三月/N天前"等 → 具体日期范围 (start, end)
+# =============================================================
+_CN_NUM = {"零": 0, "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_to_int(s: str):
+    """把 '三' '十' '十五' '3' 等转成 int；失败返回 None。"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    if s in _CN_NUM:
+        return _CN_NUM[s]
+    if "十" in s:  # 十几 / 二十 / 二十三
+        left, _, right = s.partition("十")
+        tens = _CN_NUM.get(left, 1) if left else 1
+        ones = _CN_NUM.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return None
+
+
+def parse_time_range(query: str, now: datetime = None):
+    """从中文查询里解析时间表达 → (起, 止) datetime；解析不到返回 None。
+    支持：今天/昨天/前天/大前天、这周/上周/上上周、这个月/上个月、今年/去年、
+    N天前/N周前/N个月前、X月(如三月/3月)、X月X日。按日期粒度。"""
+    if not query:
+        return None
+    now = now or datetime.now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def span(d0, d1):
+        return (d0.replace(hour=0, minute=0, second=0, microsecond=0),
+                d1.replace(hour=23, minute=59, second=59, microsecond=0))
+
+    def month_span(year, month):
+        start = datetime(year, month, 1)
+        if month == 12:
+            end = datetime(year, 12, 31, 23, 59, 59)
+        else:
+            end = datetime(year, month + 1, 1) - timedelta(seconds=1)
+        return (start, end)
+
+    q = query
+
+    # --- 相对天 ---
+    if "大前天" in q:
+        d = today - timedelta(days=3); return span(d, d)
+    if "前天" in q:
+        d = today - timedelta(days=2); return span(d, d)
+    if "昨天" in q or "昨晚" in q or "昨夜" in q:
+        d = today - timedelta(days=1); return span(d, d)
+    if "今天" in q or "今早" in q or "今晚" in q or "今日" in q:
+        return span(today, today)
+    m = re.search(r"([0-9一二两三四五六七八九十]+)\s*天前", q)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n is not None:
+            d = today - timedelta(days=n); return span(d, d)
+
+    # --- 周（周一为一周起点）---
+    this_week = (today - timedelta(days=today.weekday()))
+    if "上上周" in q or "上上个星期" in q:
+        s = this_week - timedelta(days=14); return span(s, s + timedelta(days=6))
+    if "上周" in q or "上个星期" in q or "上礼拜" in q:
+        s = this_week - timedelta(days=7); return span(s, s + timedelta(days=6))
+    if "这周" in q or "本周" in q or "这个星期" in q or "这礼拜" in q:
+        return span(this_week, this_week + timedelta(days=6))
+    m = re.search(r"([0-9一二两三四五六七八九十]+)\s*周前", q)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n is not None:
+            s = this_week - timedelta(days=7 * n); return span(s, s + timedelta(days=6))
+
+    # --- 月 ---
+    if "上个月" in q or "上月" in q:
+        y, mo = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
+        return month_span(y, mo)
+    if "这个月" in q or "本月" in q:
+        return month_span(now.year, now.month)
+    m = re.search(r"([0-9一二两三四五六七八九十]+)\s*个?月前", q)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n is not None:
+            total = (now.year * 12 + now.month - 1) - n
+            return month_span(total // 12, total % 12 + 1)
+    # 具体 X月 / X月X日
+    m = re.search(r"([0-9一二三四五六七八九十]+)\s*月(?:份)?(?:\s*([0-9一二三四五六七八九十]+)\s*[日号])?", q)
+    if m:
+        mo = _cn_to_int(m.group(1))
+        if mo and 1 <= mo <= 12:
+            year = now.year if mo <= now.month else now.year - 1  # 未来的月默认去年
+            if m.group(2):
+                day = _cn_to_int(m.group(2))
+                if day and 1 <= day <= 31:
+                    try:
+                        d = datetime(year, mo, day); return span(d, d)
+                    except ValueError:
+                        pass
+            return month_span(year, mo)
+
+    # --- 年 ---
+    if "去年" in q:
+        return (datetime(now.year - 1, 1, 1), datetime(now.year - 1, 12, 31, 23, 59, 59))
+    if "今年" in q:
+        return (datetime(now.year, 1, 1), datetime(now.year, 12, 31, 23, 59, 59))
+
+    return None
