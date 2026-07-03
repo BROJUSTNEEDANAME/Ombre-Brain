@@ -1137,14 +1137,14 @@
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(!recycleBin.some(r=>r.text===text)){ recycleBin.push({text, t:Date.now()}); saveRecycle(); }
     renderBrain(); renderRecycle();
-    try{ await fetch('/api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
+    try{ await fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
   }
   async function restoreBrain(text){
     recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle();
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     (brainLog[k]=brainLog[k]||[]).push({text, t:now()}); localStorage.setItem('brainLog',JSON.stringify(brainLog));
     renderBrain(); renderRecycle();
-    try{ await fetch('/api/memory/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}  // 大脑里重新长出来
+    try{ await fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/memory/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}  // 大脑里重新长出来
   }
   function purgeBrain(text){ recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle(); renderRecycle(); }
   function renderRecycle(){
@@ -1175,11 +1175,11 @@
   let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem('chatLog'))||[]; }catch(e){}
   function saveChat(){
     try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){}
-    try{ fetch('/api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
+    try{ fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
   async function loadServerChat(){
     try{
-      const res=await fetch('/api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const res=await fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const data=await res.json();
       if(data && Array.isArray(data.log) && data.log.length && data.log.length>=chatLog.length){
         chatLog=data.log; chatHistory=Array.isArray(data.hist)?data.hist:chatHistory;
@@ -1254,7 +1254,7 @@
       const ctrl=new AbortController();
       const to=setTimeout(()=>ctrl.abort(), 90000);   // 单次最多等 90s（模型+记忆来回可能很慢）
       try{
-        const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+        const res=await fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body), signal:ctrl.signal });
         clearTimeout(to);
         if(!res.ok) throw new Error('http '+res.status);
@@ -1761,7 +1761,7 @@
 
   // 便签
   let notes=[]; try{ notes=JSON.parse(localStorage.getItem('notes'))||[]; }catch(e){}
-  function saveNotes(){ localStorage.setItem('notes',JSON.stringify(notes)); try{ fetch('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),notes})}); }catch(e){} }
+  function saveNotes(){ localStorage.setItem('notes',JSON.stringify(notes)); try{ fetch(location.pathname.replace(/\/home\/?$/,'')+'/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),notes})}); }catch(e){} }
   function renderNotes(){
     const el=document.getElementById('noteList'); el.innerHTML='';
     notes.slice().sort((a,b)=>(a.done-b.done)||((a.ddl||'9999')>(b.ddl||'9999')?1:-1)).forEach(n=>{
