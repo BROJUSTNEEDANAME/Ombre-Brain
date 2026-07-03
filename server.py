@@ -47,6 +47,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from bucket_manager import BucketManager
 from dehydrator import Dehydrator
@@ -75,6 +76,12 @@ mcp = FastMCP(
     "Ombre Brain",
     host=os.environ.get("OMBRE_HOST", "0.0.0.0"),
     port=int(os.environ.get("OMBRE_PORT", "8000")),
+    # 关掉 MCP SDK 新版默认开启的 DNS-rebinding Host 校验：
+    # 它只认本机 Host，而 Caddy 透传的是公网域名 → 421 → claude.ai 误入 OAuth 注册 → 连接器加不上。
+    # 安全不受影响：大脑只绑 127.0.0.1，公网入口由 Caddy 密钥前缀把守，这层校验本就是冗余的。
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    ),
 )
 
 
