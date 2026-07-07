@@ -1162,6 +1162,188 @@ async def dream() -> str:
 
 
 # =============================================================
+# REST API — LLM-agnostic tool endpoints
+# REST API — 不绑定任何 LLM 的工具接口
+#
+# 这些端点把 Ombre Brain 的 7 个记忆工具暴露为普通 HTTP 接口，
+# 任何 LLM（OpenAI / Gemini / Deepseek / 本地模型）都可以通过
+# function calling 调用。
+#
+# POST /api/tools/breath   — 浮现/检索记忆
+# POST /api/tools/hold     — 存储单条记忆
+# POST /api/tools/grow     — 日记归档（自动拆分多桶）
+# POST /api/tools/trace    — 修改/删除记忆
+# POST /api/tools/pulse    — 系统状态 + 记忆列表
+# POST /api/tools/read     — 按 ID 精确读取
+# POST /api/tools/dream    — 做梦（消化最近记忆）
+# GET  /api/tools/schema   — 返回工具定义（OpenAI function calling 格式）
+# =============================================================
+
+_TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "breath",
+            "description": "检索/浮现记忆。不传query或传空=自动浮现,有query=关键词检索。domain='feel'读取feel。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "关键词检索（空=浮现模式）", "default": ""},
+                    "max_tokens": {"type": "integer", "description": "返回总token上限", "default": 10000},
+                    "domain": {"type": "string", "description": "话题领域，逗号分隔；'feel'=读取feel", "default": ""},
+                    "valence": {"type": "number", "description": "情感效价0~1(-1忽略)", "default": -1},
+                    "arousal": {"type": "number", "description": "情感唤醒度0~1(-1忽略)", "default": -1},
+                    "max_results": {"type": "integer", "description": "最大返回条数", "default": 20},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "hold",
+            "description": "存储单条记忆。feel=true存你的第一人称感受。pinned=true创建永久钉选桶。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "记忆内容"},
+                    "tags": {"type": "string", "description": "标签，逗号分隔", "default": ""},
+                    "importance": {"type": "integer", "description": "重要度1-10", "default": 5},
+                    "pinned": {"type": "boolean", "description": "钉选为核心准则", "default": False},
+                    "feel": {"type": "boolean", "description": "存为第一人称感受", "default": False},
+                    "source_bucket": {"type": "string", "description": "被消化的源记忆桶ID", "default": ""},
+                    "valence": {"type": "number", "description": "你的感受0~1", "default": -1},
+                    "arousal": {"type": "number", "description": "唤醒度0~1", "default": -1},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grow",
+            "description": "日记归档，自动拆分为多桶。适合一大段内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "日记/长段内容"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "trace",
+            "description": "修改记忆元数据。resolved=1沉底,pinned=1钉选,delete=true删除。只传需改的。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bucket_id": {"type": "string", "description": "记忆桶ID"},
+                    "name": {"type": "string", "default": ""},
+                    "domain": {"type": "string", "default": ""},
+                    "valence": {"type": "number", "default": -1},
+                    "arousal": {"type": "number", "default": -1},
+                    "importance": {"type": "integer", "default": -1},
+                    "tags": {"type": "string", "default": ""},
+                    "resolved": {"type": "integer", "description": "1=沉底 0=激活 -1=不改", "default": -1},
+                    "pinned": {"type": "integer", "description": "1=钉选 0=取消 -1=不改", "default": -1},
+                    "digested": {"type": "integer", "description": "1=隐藏 0=取消 -1=不改", "default": -1},
+                    "content": {"type": "string", "description": "替换桶正文", "default": ""},
+                    "delete": {"type": "boolean", "default": False},
+                },
+                "required": ["bucket_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pulse",
+            "description": "系统状态+记忆桶列表。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_archive": {"type": "boolean", "default": False},
+                    "verbose": {"type": "boolean", "description": "附正文预览+embedding状态", "default": False},
+                    "pinned_only": {"type": "boolean", "description": "只列钉选桶", "default": False},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "按ID精确读取桶内容。pinned=true读所有钉选桶。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bucket_ids": {"type": "string", "description": "桶ID，逗号分隔，最多10个", "default": ""},
+                    "max_tokens": {"type": "integer", "default": 8000},
+                    "pinned": {"type": "boolean", "description": "读所有钉选桶", "default": False},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dream",
+            "description": "做梦——读取最近记忆桶供自省。读完可trace(resolved=1)放下或hold(feel=true)写感受。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+_TOOL_DISPATCH = {
+    "breath": breath,
+    "hold": hold,
+    "grow": grow,
+    "trace": trace,
+    "pulse": pulse,
+    "read": read,
+    "dream": dream,
+}
+
+
+@mcp.custom_route("/api/tools/schema", methods=["GET"])
+async def api_tools_schema(request):
+    """返回所有记忆工具的定义，OpenAI function calling 格式。
+    任何 LLM 都可以直接用这个 schema 注册 tools。"""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"tools": _TOOLS_SCHEMA})
+
+
+@mcp.custom_route("/api/tools/{tool_name}", methods=["POST"])
+async def api_tools_call(request):
+    """通用工具调用入口：POST /api/tools/<name> + JSON body = 参数。
+    返回 {"result": "工具输出文本"}。"""
+    from starlette.responses import JSONResponse
+    tool_name = request.path_params.get("tool_name", "")
+    fn = _TOOL_DISPATCH.get(tool_name)
+    if not fn:
+        return JSONResponse(
+            {"error": f"unknown tool: {tool_name}", "available": list(_TOOL_DISPATCH.keys())},
+            status_code=404,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        result = await fn(**body)
+        return JSONResponse({"result": result})
+    except TypeError as e:
+        return JSONResponse({"error": f"bad parameters: {e}"}, status_code=400)
+    except Exception as e:
+        logger.error(f"REST tool {tool_name} failed: {e}")
+        return JSONResponse({"error": str(e)[:500]}, status_code=500)
+
+
+# =============================================================
 # Dashboard API endpoints (for lightweight Web UI)
 # 仪表板 API（轻量 Web UI 用）
 # =============================================================

@@ -31,7 +31,7 @@ import logging
 import re
 import shutil
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -761,6 +761,19 @@ class BucketManager:
     # Internal: load bucket data from .md file
     # 内部：从 .md 文件加载桶数据
     # ---------------------------------------------------------
+    @staticmethod
+    def _normalize_meta_value(value):
+        """YAML frontmatter 有时把日期字段解析成 datetime 对象，JSON 序列化会炸。统一转字符串。"""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: BucketManager._normalize_meta_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [BucketManager._normalize_meta_value(v) for v in value]
+        return value
+
     def _load_bucket(self, file_path: str) -> Optional[dict]:
         """
         Parse a Markdown file and return structured bucket data.
@@ -770,7 +783,10 @@ class BucketManager:
             post = frontmatter.load(file_path)
             return {
                 "id": post.get("id", Path(file_path).stem),
-                "metadata": dict(post.metadata),
+                "metadata": {
+                    k: self._normalize_meta_value(v)
+                    for k, v in dict(post.metadata).items()
+                },
                 "content": post.content,
                 "path": file_path,
             }

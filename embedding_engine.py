@@ -17,6 +17,7 @@ import math
 import sqlite3
 import logging
 import asyncio
+from collections import OrderedDict
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -58,6 +59,9 @@ class EmbeddingEngine:
         else:
             self.client = None
 
+        self._query_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._CACHE_MAX = 32
+
         # --- Initialize SQLite ---
         self._init_db()
 
@@ -95,16 +99,23 @@ class EmbeddingEngine:
             return False
 
     async def _generate_embedding(self, text: str) -> list[float]:
-        """Call API to generate embedding vector."""
-        # Truncate to avoid token limits
+        """Call API to generate embedding vector. LRU cache avoids duplicate API calls."""
         truncated = text[:2000]
+        cached = self._query_cache.get(truncated)
+        if cached is not None:
+            self._query_cache.move_to_end(truncated)
+            return list(cached)
         try:
             response = await self.client.embeddings.create(
                 model=self.model,
                 input=truncated,
             )
             if response.data and len(response.data) > 0:
-                return response.data[0].embedding
+                embedding = response.data[0].embedding
+                self._query_cache[truncated] = list(embedding)
+                if len(self._query_cache) > self._CACHE_MAX:
+                    self._query_cache.popitem(last=False)
+                return embedding
             return []
         except Exception as e:
             logger.warning(f"Embedding API call failed: {e}")
