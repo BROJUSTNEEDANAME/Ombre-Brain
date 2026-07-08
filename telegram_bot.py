@@ -71,7 +71,9 @@ ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowe
 
 # 每个 chat 保留的最近对话轮数（控制 token 成本；记忆本身存在大脑里，不靠这个）
 MAX_HISTORY_MESSAGES = 24
-MAX_TOKENS = 2000
+# 输出上限：聊天时她要求简短，Claude 自会短；但做网页(make_page)要生成一整页 HTML，
+# 2000 远不够会被截断。设大一点当上限用，正常聊天不受影响、也不多花钱（按实际输出计费）。
+MAX_TOKENS = 8192
 TELEGRAM_MSG_LIMIT = 4096
 
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
@@ -306,6 +308,7 @@ def _authorized(chat_id: int) -> bool:
 async def _ask_claude(history: list[dict]) -> str:
     """调 Claude（标准 tool_use）。bot 自己调大脑 REST API 执行工具。"""
     messages = list(history)
+    page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     for _ in range(12):  # 最多 12 轮工具循环
         resp = await claude.messages.create(
             model=MODEL,
@@ -324,7 +327,11 @@ async def _ask_claude(history: list[dict]) -> str:
                 tool_calls.append(block)
 
         if resp.stop_reason == "end_turn" or not tool_calls:
-            return "".join(text_parts).strip() or "（……）"
+            reply = "".join(text_parts).strip()
+            # 做了网页但话里没带上链接 → 补上，绝不让她收到空手
+            if page_url and page_url not in reply:
+                reply = (reply + "\n" + page_url).strip() if reply else page_url
+            return reply or "（……）"
 
         # 执行工具调用，把结果喂回去
         messages.append({"role": "assistant", "content": resp.content})
@@ -334,6 +341,8 @@ async def _ask_claude(history: list[dict]) -> str:
                 result = await _call_brain_tool(tc.name, tc.input or {})
             except Exception as e:
                 result = f"工具调用失败: {e}"
+            if tc.name == "make_page" and isinstance(result, str) and result.startswith("http"):
+                page_url = result
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tc.id,
@@ -341,7 +350,8 @@ async def _ask_claude(history: list[dict]) -> str:
             })
         messages.append({"role": "user", "content": tool_results})
 
-    return "（我想得太久了，等下再说。）"
+    # 12 轮还没收口：至少把已做好的网页链接给她
+    return page_url or "（我想得太久了，等下再说。）"
 
 
 # ----------------------------------------------------------------------------
