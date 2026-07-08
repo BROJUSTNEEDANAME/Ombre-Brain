@@ -1334,7 +1334,13 @@ async def make_page(html: str = "", title: str = "") -> str:
     os.makedirs(pages_dir, exist_ok=True)
     with open(os.path.join(pages_dir, f"{page_id}.html"), "w", encoding="utf-8") as f:
         f.write(html)
-    base = os.environ.get("OMBRE_BASE_URL", "").rstrip("/") or "https://ombre-brain-6e05.onrender.com"
+    # 网站公网地址：用 Render 自动注入的 RENDER_EXTERNAL_URL（就是大脑自己的域名）。
+    # 绝不能用 OMBRE_BASE_URL——那是 LLM 接口地址（如 Gemini），拿来拼链接会指错域名。
+    base = (
+        os.environ.get("RENDER_EXTERNAL_URL")
+        or os.environ.get("OMBRE_SITE_URL")
+        or "https://ombre-brain-6e05.onrender.com"
+    ).rstrip("/")
     return f"{base}/p/{page_id}"
 
 
