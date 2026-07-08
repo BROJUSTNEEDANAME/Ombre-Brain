@@ -12,10 +12,11 @@ Ombre Brain，breath / hold / dream 全都能用，记忆持续累积。
                                   └── MCP connector --> Ombre Brain (Render)
 
 跑起来需要三个环境变量：
-    TELEGRAM_BOT_TOKEN   找 @BotFather 要的 bot token
-    ANTHROPIC_API_KEY    Claude API key
-    ALLOWED_CHAT_IDS     允许使用的 Telegram chat id（逗号分隔；强烈建议只填你自己，
-                         否则任何人都能聊到你的私密记忆 + 烧你的 API 额度）
+    TELEGRAM_API_BOT_TOKEN  API bot 自己的 @BotFather token（与 cc_bridge 的 bot 分开）
+                            （兼容旧配置：没设时回退到 TELEGRAM_BOT_TOKEN）
+    ANTHROPIC_API_KEY       Claude API key
+    ALLOWED_CHAT_IDS        允许使用的 Telegram chat id（逗号分隔；强烈建议只填你自己，
+                            否则任何人都能聊到你的私密记忆 + 烧你的 API 额度）
 
 可选：
     OMBRE_MCP_URL        大脑地址，默认 https://ombre-brain-6e05.onrender.com/mcp
@@ -23,7 +24,7 @@ Ombre Brain，breath / hold / dream 全都能用，记忆持续累积。
 
 本地跑：
     pip install -r requirements-telegram.txt
-    export TELEGRAM_BOT_TOKEN=...
+    export TELEGRAM_API_BOT_TOKEN=...
     export ANTHROPIC_API_KEY=...
     export ALLOWED_CHAT_IDS=123456789
     python telegram_bot.py
@@ -57,7 +58,7 @@ import morning  # 本地：早安（天气 + 课表）
 # 配置 / Config
 # ----------------------------------------------------------------------------
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_API_BOT_TOKEN") or os.environ["TELEGRAM_BOT_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp"
