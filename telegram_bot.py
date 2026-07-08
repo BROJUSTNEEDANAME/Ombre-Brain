@@ -72,8 +72,9 @@ ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowe
 # 每个 chat 保留的最近对话轮数（控制 token 成本；记忆本身存在大脑里，不靠这个）
 MAX_HISTORY_MESSAGES = 24
 # 输出上限：聊天时她要求简短，Claude 自会短；但做网页(make_page)要生成一整页 HTML，
-# 2000 远不够会被截断。设大一点当上限用，正常聊天不受影响、也不多花钱（按实际输出计费）。
-MAX_TOKENS = 8192
+# 2000 远不够会被截断（截断→html 参数残缺→make_page 收到空内容→做不出）。
+# 设大给足余量当上限用，正常聊天不受影响、也不多花钱（按实际输出计费）。
+MAX_TOKENS = 16384
 TELEGRAM_MSG_LIMIT = 4096
 
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
