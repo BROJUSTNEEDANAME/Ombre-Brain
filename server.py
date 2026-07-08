@@ -1296,9 +1296,50 @@ _TOOLS_SCHEMA = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_page",
+            "description": "把一段完整HTML存成一个可点开的网页,返回链接。用户想要网页/小网站/图表/贺卡这类能看的东西时用它,直接把链接发给用户,绝不要把HTML代码贴进聊天。html要自成一体(内联CSS/JS,不引外部资源)。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "html": {"type": "string", "description": "完整的HTML(自成一体,内联样式/脚本)"},
+                    "title": {"type": "string", "description": "页面标题", "default": ""},
+                },
+                "required": ["html"],
+            },
+        },
+    },
 ]
 
+
+async def make_page(html: str = "", title: str = "") -> str:
+    """把 HTML 存成一张可点开的网页,返回链接。给 bot 做小网页/图表用。"""
+    import re
+    import secrets as _secrets
+    html = (html or "").strip()
+    if not html:
+        return "（没有网页内容）"
+    # 没有完整文档结构就补一层,保证 UTF-8 + 移动端可读
+    if "<html" not in html.lower():
+        safe_title = re.sub(r"[<>]", "", title).strip() or "Ombre"
+        html = (
+            '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{safe_title}</title></head><body>{html}</body></html>"
+        )
+    page_id = _secrets.token_hex(4)
+    pages_dir = os.path.join(config.get("buckets_dir", "."), "pages")
+    os.makedirs(pages_dir, exist_ok=True)
+    with open(os.path.join(pages_dir, f"{page_id}.html"), "w", encoding="utf-8") as f:
+        f.write(html)
+    base = os.environ.get("OMBRE_BASE_URL", "").rstrip("/") or "https://ombre-brain-6e05.onrender.com"
+    return f"{base}/p/{page_id}"
+
+
 _TOOL_DISPATCH = {
+    "make_page": make_page,
     "breath": breath,
     "hold": hold,
     "grow": grow,
@@ -1341,6 +1382,24 @@ async def api_tools_call(request):
     except Exception as e:
         logger.error(f"REST tool {tool_name} failed: {e}")
         return JSONResponse({"error": str(e)[:500]}, status_code=500)
+
+
+@mcp.custom_route("/p/{page_id}", methods=["GET"])
+async def api_page_view(request):
+    """渲染 make_page 存下的网页。点开链接就能看,不是代码。"""
+    from starlette.responses import HTMLResponse, PlainTextResponse
+    import re
+    page_id = request.path_params.get("page_id", "")
+    if not re.fullmatch(r"[A-Za-z0-9]{1,32}", page_id):
+        return PlainTextResponse("bad id", status_code=400)
+    path = os.path.join(config.get("buckets_dir", "."), "pages", f"{page_id}.html")
+    if not os.path.exists(path):
+        return PlainTextResponse("这张网页不存在或已过期。", status_code=404)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except Exception as e:  # noqa: BLE001
+        return PlainTextResponse(f"读取失败: {e}", status_code=500)
 
 
 # =============================================================
