@@ -1817,6 +1817,8 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
+# 情绪日历的 12 个心情词（和 home.html 的 EMO 一致）；模型没自打 [emo] 时用来兜底判定
+_EMO_WORDS = ["沉默", "担心你", "想靠近你", "心疼你", "烦躁", "空", "占有", "安定", "害羞", "吃醋", "火辣", "欲望"]
 
 
 def _text_of(content) -> str:
@@ -2229,6 +2231,21 @@ async def api_chat(request):
             rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
             rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", rt)      # 未闭合（到行尾/串尾）
             rt = rt.strip()
+            # 他没自打 [emo] → 用便宜/免费的 flash 模型兜底判定一个心情，保证日历每条都染色
+            if not emotion:
+                try:
+                    _emo_model = os.environ.get("OMBRE_EMO_MODEL", "glm-4.5-flash")
+                    _er = await _web_llm.chat.completions.create(
+                        model=_emo_model, max_tokens=8,
+                        messages=[{"role": "user", "content":
+                                   "从这些词里挑一个最贴合下面对话此刻氛围的，只回那一个词，别的都不要：\n"
+                                   + "、".join(_EMO_WORDS) + "\n\n对话：\n" + (user_text + " ｜ " + rt)[:1500]}],
+                    )
+                    _w = (_er.choices[0].message.content or "").strip().strip("。.、,「」【】 \n\t")
+                    if _w in _EMO_WORDS:
+                        emotion = _w
+                except Exception:  # noqa: BLE001
+                    pass
             # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
             segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", rt) if s.strip()]
             if not segments:
