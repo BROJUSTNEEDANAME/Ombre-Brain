@@ -1799,14 +1799,14 @@
     }, 800);
   }
   async function pullPrefs(){
+    let serverHadData=false;
     try{
       const res=await fetch('/api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
-      if(!res.ok) return;
+      if(!res.ok) throw 0;
       const data=await res.json(); const p=data&&data.prefs;
-      if(!p||typeof p!=='object') return;
-      let hit=false;
-      PREFS_KEYS.forEach(k=>{ if(typeof p[k]==='string'){ localStorage.setItem(k,p[k]); hit=true; } });
-      if(!hit) return;
+      if(!p||typeof p!=='object') throw 0;
+      PREFS_KEYS.forEach(k=>{ if(typeof p[k]==='string'){ localStorage.setItem(k,p[k]); serverHadData=true; } });
+      if(!serverHadData) throw 0;
       // 重新水合内存变量 + 重渲染（服务器为准）
       try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
       try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
@@ -1822,7 +1822,9 @@
       try{ if(typeof renderBrain==='function') renderBrain(); }catch(e){}
       try{ if(typeof renderRecycle==='function') renderRecycle(); }catch(e){}
     }catch(e){}
-    finally{ _prefsReady=true; }   // 拉完（成功或失败）后才允许上传，杜绝初始值覆盖
+    _prefsReady=true;   // 拉完（成功或失败）后才允许上传，杜绝初始值覆盖
+    // 服务器还没有这些数据（首次）→ 把本地现有的情绪日历/扭蛋种子上传一份，之后云端为准
+    if(!serverHadData) pushPrefs();
   }
   pullPrefs();
 
