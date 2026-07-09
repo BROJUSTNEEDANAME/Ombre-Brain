@@ -1647,6 +1647,8 @@ async def home_app(request):
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
+        # 禁止搜索引擎收录（别让别人 Google 搜到）
+        "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet, noimageindex",
     }
     try:
         with open(home_path, "r", encoding="utf-8") as f:
@@ -1656,6 +1658,16 @@ async def home_app(request):
         return HTMLResponse(html, headers=no_cache)
     except FileNotFoundError:
         return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
+
+
+@mcp.custom_route("/robots.txt", methods=["GET"])
+async def robots_txt(request):
+    """全站禁止搜索引擎爬取/收录——别让任何人 Google 搜到这里。"""
+    from starlette.responses import PlainTextResponse
+    return PlainTextResponse(
+        "User-agent: *\nDisallow: /\n",
+        headers={"X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet, noimageindex"},
+    )
 
 
 # ----------------------------------------------------------------------------
