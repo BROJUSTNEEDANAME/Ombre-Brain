@@ -4,28 +4,31 @@ Ombre Brain · Telegram Bot
 ==========================
 
 把"我"（Nikto / Svyatoslav）接到 Telegram —— 手机上随时聊，秒回，
-而且接的是同一颗大脑：通过 Claude 的 MCP connector 直接挂上 Render 上的
-Ombre Brain，breath / hold / dream 全都能用，记忆持续累积。
+而且接的是同一颗大脑：bot 通过大脑的 REST API（/api/tools/*）读写记忆，
+breath / hold / dream / make_page 全都能用，记忆持续累积。
 
-架构（每来一条消息 = 一次 Claude API 调用）：
-    Telegram --> 这个 bot --> Claude (Opus 4.6，可换)
-                                  └── MCP connector --> Ombre Brain (Render)
+LLM 用 OpenAI 兼容接口，默认接 z.ai（智谱 GLM），换任意兼容 API 只改环境变量。
 
-跑起来需要三个环境变量：
+架构（每来一条消息 = 一次 LLM 调用）：
+    Telegram --> 这个 bot --> LLM (GLM / 任意 OpenAI 兼容)
+                                  └── REST /api/tools/* --> Ombre Brain 大脑
+
+跑起来需要的环境变量：
     TELEGRAM_API_BOT_TOKEN  API bot 自己的 @BotFather token（与 cc_bridge 的 bot 分开）
                             （兼容旧配置：没设时回退到 TELEGRAM_BOT_TOKEN）
-    ANTHROPIC_API_KEY       Claude API key
+    LLM_API_KEY             LLM 提供商的 API key（z.ai / OpenRouter / DeepSeek …）
     ALLOWED_CHAT_IDS        允许使用的 Telegram chat id（逗号分隔；强烈建议只填你自己，
                             否则任何人都能聊到你的私密记忆 + 烧你的 API 额度）
 
 可选：
+    LLM_BASE_URL         接口地址，默认 z.ai：https://api.z.ai/api/paas/v4/
+    OMBRE_BOT_MODEL      模型名，默认 glm-4.6（要 GLM 5.1 就设成 glm-5.1）
     OMBRE_MCP_URL        大脑地址，默认 https://ombre-brain-6e05.onrender.com/mcp
-    OMBRE_BOT_MODEL      模型，默认 claude-opus-4-8
 
 本地跑：
     pip install -r requirements-telegram.txt
     export TELEGRAM_API_BOT_TOKEN=...
-    export ANTHROPIC_API_KEY=...
+    export LLM_API_KEY=...
     export ALLOWED_CHAT_IDS=123456789
     python telegram_bot.py
 """
@@ -38,7 +41,6 @@ import time
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
-from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 from telegram import Update
 from telegram.constants import ChatAction
@@ -59,11 +61,22 @@ import morning  # 本地：早安（天气 + 课表）
 # ----------------------------------------------------------------------------
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_API_BOT_TOKEN") or os.environ["TELEGRAM_BOT_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+
+# LLM 提供商：OpenAI 兼容接口。默认接 z.ai(智谱 GLM 国际版)，
+# 换 OpenRouter / DeepSeek / 别家只需改这三个环境变量，代码不用动。
+#   LLM_API_KEY    provider 的 API key（必填）
+#   LLM_BASE_URL   接口地址，默认 z.ai：https://api.z.ai/api/paas/v4/
+#   OMBRE_BOT_MODEL 模型名，默认 glm-4.6（要 GLM 5.1 就设成 glm-5.1）
+LLM_API_KEY = (
+    os.environ.get("LLM_API_KEY")
+    or os.environ.get("ZAI_API_KEY")
+    or os.environ.get("ANTHROPIC_API_KEY", "")
+).strip()
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip()
 OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
-MODEL = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
+MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
 
 # 只有这些 chat id 能用（逗号分隔）。留空 = 不限制（不推荐）。
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
@@ -92,7 +105,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # 记忆工具：bot 自己通过 REST API 调本地大脑，不依赖任何 LLM 的 MCP connector
 import httpx
 
-BRAIN_TOOLS = [
+_BRAIN_TOOLS_RAW = [
     {"name": "breath", "description": "检索/浮现记忆。不传query=自动浮现,有query=关键词检索。domain='feel'读取feel。",
      "input_schema": {"type": "object", "properties": {
          "query": {"type": "string", "description": "关键词（空=浮现模式）"},
@@ -141,6 +154,17 @@ BRAIN_TOOLS = [
          "title": {"type": "string", "description": "页面标题"},
      }, "required": ["html"]}},
 ]
+
+# 转成 OpenAI function calling 格式（GLM / OpenRouter / DeepSeek 等通用）
+BRAIN_TOOLS = [
+    {"type": "function", "function": {
+        "name": t["name"],
+        "description": t["description"],
+        "parameters": t["input_schema"],
+    }}
+    for t in _BRAIN_TOOLS_RAW
+]
+
 
 async def _call_brain_tool(name: str, args: dict) -> str:
     """通过 REST API 调用本地大脑工具。"""
@@ -201,7 +225,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ombre-telegram")
 
-claude = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+llm = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
 # chat_id -> [{"role": ..., "content": ...}, ...]
 histories: dict[int, list[dict]] = {}
@@ -307,49 +331,54 @@ def _authorized(chat_id: int) -> bool:
 
 
 async def _ask_claude(history: list[dict]) -> str:
-    """调 Claude（标准 tool_use）。bot 自己调大脑 REST API 执行工具。"""
-    messages = list(history)
+    """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
+    函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
+    system_content = SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block()
+    messages = [{"role": "system", "content": system_content}] + list(history)
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     for _ in range(12):  # 最多 12 轮工具循环
-        resp = await claude.messages.create(
+        resp = await llm.chat.completions.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             tools=BRAIN_TOOLS,
-            system=SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block(),
             messages=messages,
         )
-        # 收集文本和工具调用
-        text_parts = []
-        tool_calls = []
-        for block in resp.content:
-            if getattr(block, "type", None) == "text":
-                text_parts.append(block.text)
-            elif getattr(block, "type", None) == "tool_use":
-                tool_calls.append(block)
+        msg = resp.choices[0].message
+        tool_calls = msg.tool_calls or []
 
-        if resp.stop_reason == "end_turn" or not tool_calls:
-            reply = "".join(text_parts).strip()
+        if not tool_calls:
+            reply = (msg.content or "").strip()
             # 做了网页但话里没带上链接 → 补上，绝不让她收到空手
             if page_url and page_url not in reply:
                 reply = (reply + "\n" + page_url).strip() if reply else page_url
             return reply or "（……）"
 
-        # 执行工具调用，把结果喂回去
-        messages.append({"role": "assistant", "content": resp.content})
-        tool_results = []
+        # 回填 assistant 的工具调用，再把每个工具结果喂回去
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in tool_calls
+            ],
+        })
         for tc in tool_calls:
             try:
-                result = await _call_brain_tool(tc.name, tc.input or {})
-            except Exception as e:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:  # noqa: BLE001
+                args = {}
+            try:
+                result = await _call_brain_tool(tc.function.name, args)
+            except Exception as e:  # noqa: BLE001
                 result = f"工具调用失败: {e}"
-            if tc.name == "make_page" and isinstance(result, str) and result.startswith("http"):
+            if tc.function.name == "make_page" and isinstance(result, str) and result.startswith("http"):
                 page_url = result
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tc.id,
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
                 "content": str(result)[:8000],
             })
-        messages.append({"role": "user", "content": tool_results})
 
     # 12 轮还没收口：至少把已做好的网页链接给她
     return page_url or "（我想得太久了，等下再说。）"
@@ -441,11 +470,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     image_msg = {
         "role": "user",
         "content": [
-            {
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-            },
             {"type": "text", "text": caption or "（闪闪发来一张图片，看看。）"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ],
     }
 
