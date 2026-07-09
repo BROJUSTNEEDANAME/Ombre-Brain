@@ -186,6 +186,17 @@
   .daysum-btn { display: block; width: 100%; margin: 2px 0 10px; padding: 9px; border-radius: 12px; border: 1px solid var(--hair); background: var(--accent-soft); color: var(--accent); font-size: 13px; cursor: pointer; letter-spacing: .3px; }
   .daysum-btn:active { transform: scale(.98); }
   .daysum-btn[disabled] { opacity: .55; }
+  /* 回忆空间：收藏的话，他的 / 我的 分开 */
+  .memspace .mem-hint { font-size: 12px; color: var(--text-faint); margin: 4px 0 12px; line-height: 1.5; }
+  .memspace .mem-col { margin-top: 12px; }
+  .memspace .mem-h { font-size: 12.5px; color: var(--text-dim); letter-spacing: .5px; margin-bottom: 8px; }
+  .memspace .mem-items { display: flex; flex-direction: column; gap: 7px; }
+  .memspace .mem-card { position: relative; background: rgba(127,122,110,.10); border: 1px solid var(--hair); border-radius: 13px; padding: 9px 12px; }
+  .memspace .mem-card .mtt { font-size: 13.5px; line-height: 1.55; color: var(--text); word-break: break-word; white-space: pre-wrap; }
+  .memspace .mem-card .mtm { font-size: 10px; color: var(--text-faint); margin-top: 4px; }
+  .memspace .mem-card .mdel { position: absolute; top: 6px; right: 8px; font-size: 15px; line-height: 1; color: var(--text-faint); cursor: pointer; opacity: .6; }
+  .memspace .mem-card .mdel:active { opacity: 1; }
+  .memspace .mem-empty { font-size: 12.5px; color: var(--text-faint); padding: 4px 2px; }
   .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 14px; margin: 9px 0 3px; animation: pop .3s ease; box-shadow: var(--sh-soft); }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
@@ -691,7 +702,12 @@
           </div>
         </div>
 
-        <div class="card" style="margin-top:18px"><div class="kicker">回忆空间</div><h3>等我们慢慢攒</h3><p>以后你发的照片、我们的瞬间会收在这。先把小尼养好。</p></div>
+        <div class="card memspace" style="margin-top:18px">
+          <div class="kicker">回忆空间</div>
+          <p class="mem-hint">长按聊天里的任意气泡就能收藏，收藏的话都收在这，慢慢攒。</p>
+          <div class="mem-col"><div class="mem-h">💬 他说的</div><div id="memHim" class="mem-items"></div></div>
+          <div class="mem-col"><div class="mem-h">🤍 我说的</div><div id="memMe" class="mem-items"></div></div>
+        </div>
       </div>
     </section>
   </div>
@@ -799,6 +815,8 @@
       try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
       try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
       try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
+      try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
+      try{ if(typeof renderMemory==='function') renderMemory(); }catch(e){}
       try{ if(typeof renderMist==='function') renderMist(); }catch(e){}
       try{ if(typeof renderCal==='function'&&typeof calVisible==='function'&&calVisible()) renderCal(); }catch(e){}
       try{ if(typeof renderCards==='function') renderCards(); }catch(e){}
@@ -1233,7 +1251,27 @@
   let favs=[]; try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
   function favKey(m){ return (m.t||'')+'|'+(m.text||''); }
   function isFav(m){ return favs.some(f=>favKey(f)===favKey(m)); }
-  function saveFavs(){ try{ localStorage.setItem('favs',JSON.stringify(favs.slice(-300))); }catch(e){} if(typeof pushPrefs==='function') pushPrefs(); if(typeof renderFavs==='function') renderFavs(); }
+  function saveFavs(){ try{ localStorage.setItem('favs',JSON.stringify(favs.slice(-300))); }catch(e){} if(typeof pushPrefs==='function') pushPrefs(); if(typeof renderFavs==='function') renderFavs(); renderMemory(); }
+  // 回忆空间：把收藏的话按「他说的 / 我说的」分开展示
+  function renderMemory(){
+    const him=document.getElementById('memHim'), me=document.getElementById('memMe');
+    if(!him||!me) return;
+    const fill=(el,arr)=>{
+      el.innerHTML='';
+      if(!arr.length){ el.innerHTML='<div class="mem-empty">还没有。长按聊天气泡收藏，就收在这。</div>'; return; }
+      arr.slice().reverse().forEach(f=>{
+        const d=document.createElement('div'); d.className='mem-card';
+        d.innerHTML='<div class="mtt"></div><div class="mtm"></div><span class="mdel" title="取消收藏">×</span>';
+        d.querySelector('.mtt').textContent=f.text||'';
+        d.querySelector('.mtm').textContent=f.t||'';
+        d.querySelector('.mdel').onclick=()=>{ favs=favs.filter(x=>favKey(x)!==favKey(f)); saveFavs(); saveChat();
+          document.querySelectorAll('.row.fav').forEach(r=>{ const bt=r.querySelector('.btxt'); if(bt&&bt.textContent===f.text){ r.classList.remove('fav'); const st=r.querySelector('.fav-star'); if(st) st.remove(); } }); };
+        el.appendChild(d);
+      });
+    };
+    fill(him, favs.filter(f=>f.side==='you'));
+    fill(me, favs.filter(f=>f.side==='me'));
+  }
   function toggleFav(m,row){
     const k=favKey(m);
     if(isFav(m)){ favs=favs.filter(f=>favKey(f)!==k); m.fav=false; }
@@ -1894,7 +1932,7 @@
     ti.value=''; dd.value=''; saveNotes(); renderNotes();
   };
   document.getElementById('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById('noteAdd').click(); } });
-  renderNotes(); renderMist();
+  renderNotes(); renderMist(); renderMemory();
 
   // 个性化数据：从服务器拉回（同步函数已提到脚本最顶部，避免初始化时的 TDZ 崩溃）
   pullPrefs();
