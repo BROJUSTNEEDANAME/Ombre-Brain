@@ -182,6 +182,10 @@
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   .fav-star { position: absolute; top: -6px; right: -4px; font-size: 12px; }
+  /* 总结今天：把今天聊的收成一个心情 + 一句日记，写进当天格子 */
+  .daysum-btn { display: block; width: 100%; margin: 2px 0 10px; padding: 9px; border-radius: 12px; border: 1px solid var(--hair); background: var(--accent-soft); color: var(--accent); font-size: 13px; cursor: pointer; letter-spacing: .3px; }
+  .daysum-btn:active { transform: scale(.98); }
+  .daysum-btn[disabled] { opacity: .55; }
   .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 14px; margin: 9px 0 3px; animation: pop .3s ease; box-shadow: var(--sh-soft); }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
 
@@ -644,6 +648,7 @@
         <button class="cal-toggle" id="calToggle"><span class="ct-t">日记 · 日历</span><span class="ct-arrow" id="ctArrow">▾</span></button>
         <div class="cal-collapse" id="calCollapse">
           <div class="bsub">我每天写的小事、你的心情都收在这。点一天能翻到。</div>
+          <button class="daysum-btn" id="daySumBtn">✍️ 总结今天</button>
           <div class="cal-head"><button id="mcalPrev" class="cal-nav">‹</button><span id="mcalTitle"></span><button id="mcalNext" class="cal-nav">›</button></div>
           <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
           <div class="cal-grid" id="mcalGrid"></div>
@@ -1283,7 +1288,7 @@
     }
     scroll.appendChild(row); toBottom();
   }
-  function addMsg(side,text,img,think){ const t=now(); const m={side,text,t,img,think}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
+  function addMsg(side,text,img,think){ const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
   let thinkTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
@@ -1831,6 +1836,28 @@
   }
   document.getElementById('mcalPrev').onclick=()=>{ mcalM--; if(mcalM<0){mcalM=11;mcalY--;} renderCal(); };
   document.getElementById('mcalNext').onclick=()=>{ mcalM++; if(mcalM>11){mcalM=0;mcalY++;} renderCal(); };
+  // 总结今天：把今天聊的收成一个心情 + 一句日记，写进当天格子
+  (function(){
+    const btn=document.getElementById('daySumBtn'); if(!btn) return;
+    btn.onclick=async ()=>{
+      const todayK=tKey();
+      const todays=chatLog.filter(m=>m.dk===todayK && m.side!=='sys' && m.text);
+      if(todays.length<2){ alert('今天还没聊几句，多聊两句我再帮你收尾。'); return; }
+      const text=todays.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
+      const old=btn.textContent; btn.disabled=true; btn.textContent='正在收尾今天…';
+      try{
+        const res=await fetch('/api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({token:(window.OMBRE_TOKEN||''), text, moods:Object.keys(EMO)})});
+        const data=await res.json();
+        let ok=false;
+        if(data&&data.mood){ setMood(data.mood); ok=true; }
+        if(data&&data.note){ addDiaryEntry('【今日】'+data.note); ok=true; }
+        if(typeof renderCal==='function') renderCal();
+        btn.textContent = ok ? '✓ 今天收好了' : '没能收尾，等下再试';
+      }catch(e){ btn.textContent='网络卡了，再试一次'; }
+      setTimeout(()=>{ btn.disabled=false; btn.textContent=old; }, 2600);
+    };
+  })();
   // 日记/日历 收起+展开（默认收起，先看「我记下的」）
   (function(){
     const tg=document.getElementById('calToggle'), co=document.getElementById('calCollapse');

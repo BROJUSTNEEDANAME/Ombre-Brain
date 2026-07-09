@@ -2232,6 +2232,65 @@ async def api_chat(request):
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
 
+@mcp.custom_route("/api/daysummary", methods=["POST"])
+async def api_daysummary(request):
+    """把今天的对话收成：一个心情词(从传入列表里挑) + 一句当天日记。写进情绪日历用。
+    POST {token, text, moods:[...]} -> {mood, note}"""
+    from starlette.responses import JSONResponse
+    import os, re
+    global _web_llm
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if token_env and (body.get("token") or "") != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    api_key = (os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")).strip()
+    llm_base_url = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip()
+    if not api_key:
+        return JSONResponse({"error": "no key"}, status_code=500)
+    text = str(body.get("text") or "").strip()[:12000]
+    mood_words = [str(m) for m in (body.get("moods") or []) if isinstance(m, str)][:20]
+    if not text:
+        return JSONResponse({"error": "empty"}, status_code=400)
+    words_str = "、".join(mood_words) if mood_words else "安定、想靠近你、心疼你、占有、吃醋、火辣、欲望、害羞、烦躁、担心你、沉默、空"
+    prompt = (
+        "下面是闪闪(用户)今天和你(Nikto/Svyatoslav)的对话。以恋人的视角，把这一天收个尾：\n"
+        f"1) 从这个心情词列表里挑一个最贴合今天整体氛围的：{words_str}\n"
+        "2) 写一句给她的、简短温柔的当天日记（第一人称，你的口吻，不超过40字）。\n\n"
+        "严格按下面两行格式回答，不要任何多余的话：\n"
+        "心情：<从列表里挑的那个词>\n"
+        "日记：<一句话>\n\n"
+        "今天的对话：\n" + text
+    )
+    try:
+        from openai import AsyncOpenAI
+        if _web_llm is None:
+            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url)
+        model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
+        resp = await _web_llm.chat.completions.create(
+            model=model, max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        mood = ""
+        mm = re.search(r"心情[:：]\s*([^\n]+)", out)
+        if mm:
+            mood = mm.group(1).strip().strip("。.<>「」【】 ")
+        note = ""
+        nm = re.search(r"日记[:：]\s*([^\n]+)", out)
+        if nm:
+            note = nm.group(1).strip()
+        # 心情必须在允许列表内，否则不写颜色（避免脏词进日历）
+        if mood_words and mood not in mood_words:
+            mood = ""
+        return JSONResponse({"mood": mood, "note": note})
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"daysummary failed: {e}")
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
 @mcp.custom_route("/api/memory/forget", methods=["POST"])
 async def api_memory_forget(request):
     """网页「我记下的」里点删除：按内容找到最匹配的记忆桶，从大脑里删掉。"""
