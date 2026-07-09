@@ -1264,6 +1264,7 @@
   }
   function renderBubble(side,text,t,img,think,msg){
     if(side==='sys'){ const d=document.createElement('div'); d.className='sysnote'; d.textContent=text; scroll.appendChild(d); toBottom(); return; }
+    if(!(text&&(''+text).trim()) && !img) return;   // 空气泡（没文字也没图）不渲染
     const row=document.createElement('div'); row.className='row '+side;
     row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">'+(t||now())+'</div></div>';
     const bub=row.querySelector('.bubble'), wrap=row.querySelector('.bubble-wrap');
@@ -1288,7 +1289,7 @@
     }
     scroll.appendChild(row); toBottom();
   }
-  function addMsg(side,text,img,think){ const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
+  function addMsg(side,text,img,think){ if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
   let thinkTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
