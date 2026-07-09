@@ -1939,6 +1939,33 @@ async def api_prefs(request):
     return JSONResponse({"ok": True})
 
 
+@mcp.custom_route("/api/export", methods=["GET"])
+async def api_export(request):
+    """把全部数据(记忆桶+embeddings+网页聊天/便签/回忆/生成页)打包成 tar.gz 下载。
+    用于迁移到别的机器。必须 ?token= 匹配 OMBRE_EXPORT_TOKEN(没设则拒绝，防泄露)。"""
+    from starlette.responses import Response, PlainTextResponse
+    import os, io, tarfile
+    want = (os.environ.get("OMBRE_EXPORT_TOKEN") or "").strip()
+    tok = request.query_params.get("token", "")
+    if not want or tok != want:
+        return PlainTextResponse("unauthorized (set OMBRE_EXPORT_TOKEN and pass ?token=)", status_code=403)
+    base = (os.environ.get("OMBRE_BUCKETS_DIR") or config.get("buckets_dir")
+            or os.path.join(os.path.dirname(__file__), "buckets"))
+    if not os.path.isdir(base):
+        return PlainTextResponse("no data dir", status_code=404)
+    try:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            tar.add(base, arcname="ombre_data")
+        data = buf.getvalue()
+        return Response(data, media_type="application/gzip", headers={
+            "Content-Disposition": "attachment; filename=ombre_data.tar.gz",
+            "X-Ombre-Bytes": str(len(data)),
+        })
+    except Exception as e:  # noqa: BLE001
+        return PlainTextResponse(f"export failed: {e}", status_code=500)
+
+
 @mcp.custom_route("/api/notes", methods=["GET", "POST"])
 async def api_notes(request):
     """便签存读（持久磁盘）。聊天接口会读它，让「我」能提醒她。"""
