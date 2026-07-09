@@ -1637,12 +1637,40 @@ async def clawd_asset(request):
     return Response(status_code=404)
 
 
+# 登陆页（设了 OMBRE_HOME_PASSWORD 才会出现；密码只存环境变量，绝不入库）
+_HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>家</title>
+<style>
+  *{box-sizing:border-box}html,body{margin:0;height:100%}
+  body{background:#14110D;color:#EDE4D3;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;display:flex;align-items:center;justify-content:center}
+  .card{width:min(86vw,320px);text-align:center;padding:30px 24px}
+  .title{font-size:30px;letter-spacing:.14em;margin-bottom:6px}
+  .sub{font-size:13px;color:#9a8f7d;margin-bottom:26px}
+  input{width:100%;padding:14px 16px;border-radius:13px;border:1px solid #3a3226;background:#1e1a13;color:#EDE4D3;font-size:19px;text-align:center;letter-spacing:.35em;outline:none}
+  input:focus{border-color:#c8a86a}
+  button{width:100%;margin-top:14px;padding:14px;border-radius:13px;border:none;background:#c8a86a;color:#14110D;font-size:16px;font-weight:600}
+  button:active{transform:scale(.97)}
+  .err{color:#d98a6a;font-size:12.5px;margin-top:14px;min-height:16px}
+</style></head><body>
+<form class="card" method="GET" action="/home">
+  <div class="title">家</div>
+  <div class="sub">输入暗号进来</div>
+  <input type="password" name="key" inputmode="numeric" autofocus placeholder="········" autocomplete="off">
+  <button type="submit">进来</button>
+  <div class="err">__ERR__</div>
+</form></body></html>"""
+
+
 @mcp.custom_route("/home", methods=["GET"])
 async def home_app(request):
-    """Serve the mobile 家 app (chat + gacha + bingo). Add to Home Screen to install as PWA."""
-    from starlette.responses import HTMLResponse
+    """Serve the mobile 家 app。设了 OMBRE_HOME_PASSWORD 时先过登陆闸。"""
+    from starlette.responses import HTMLResponse, RedirectResponse
     import os
-    home_path = os.path.join(os.path.dirname(__file__), "home.html")
     no_cache = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
@@ -1650,6 +1678,27 @@ async def home_app(request):
         # 禁止搜索引擎收录（别让别人 Google 搜到）
         "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet, noimageindex",
     }
+
+    # --- 登陆闸：只有设了 OMBRE_HOME_PASSWORD 才启用 ---
+    home_pw = os.environ.get("OMBRE_HOME_PASSWORD", "").strip()
+    if home_pw:
+        key = request.query_params.get("key", "")
+        if key:
+            if key == home_pw:
+                # 暗号对 → 发 cookie（记一年）+ 跳回干净 /home
+                resp = RedirectResponse(url="/home", status_code=303)
+                resp.set_cookie("home_auth", home_pw, max_age=31536000,
+                                httponly=True, samesite="lax", secure=True, path="/")
+                return resp
+            # 暗号错 → 回登陆页带提示
+            return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", "暗号不对，再试一次。"),
+                                headers=no_cache, status_code=401)
+        if request.cookies.get("home_auth", "") != home_pw:
+            # 没登陆 → 给登陆页
+            return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", ""), headers=no_cache)
+
+    # 无密码 或 已登陆 → 正常发 app
+    home_path = os.path.join(os.path.dirname(__file__), "home.html")
     try:
         with open(home_path, "r", encoding="utf-8") as f:
             html = f.read()
