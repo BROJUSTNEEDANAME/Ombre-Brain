@@ -1819,6 +1819,16 @@ _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 
 
+def _text_of(content) -> str:
+    """从消息 content 里抽出纯文字：字符串原样；内容块列表则拼接其中的 text 块。"""
+    if isinstance(content, list):
+        return " ".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ).strip()
+    return str(content or "")
+
+
 def _web_chat_path(token: str) -> str:
     """网页聊天记录在持久磁盘上的存放路径（按令牌分文件；重新部署不丢）。"""
     import os, hashlib
