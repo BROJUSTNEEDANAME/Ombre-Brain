@@ -1755,6 +1755,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 最后另起一行，用 [emo:词] 标注你此刻的情绪（这一行不会显示给闪闪），从这 12 个里选一个：沉默 担心你 想靠近你 心疼你 烦躁 空 占有 安定 害羞 吃醋 火辣 欲望。"""
 
 _web_claude = None
+_web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 
 
 def _web_chat_path(token: str) -> str:
@@ -1882,9 +1883,9 @@ async def api_chat_state(request):
 
 @mcp.custom_route("/api/chat", methods=["POST"])
 async def api_chat(request):
-    """网页聊天：收消息历史 → 调 Claude（带大脑）→ 回 {reply, emotion}。"""
+    """网页聊天：收消息历史 → 调 GLM（进程内直调大脑记忆工具）→ 回 {reply, emotion}。"""
     from starlette.responses import JSONResponse
-    import os, re
+    import os, re, json
 
     try:
         body = await request.json()
@@ -1895,9 +1896,14 @@ async def api_chat(request):
     if token_env and (body.get("token") or "") != token_env:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    api_key = (
+        os.environ.get("LLM_API_KEY")
+        or os.environ.get("ZAI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
+    ).strip()
+    llm_base_url = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip()
     if not api_key:
-        return JSONResponse({"reply": "（我这边还没接上线——服务器还没配 ANTHROPIC_API_KEY。等闪闪配好我就能说话了。）", "emotion": "空"})
+        return JSONResponse({"reply": "（我这边还没接上线——服务器还没配 LLM_API_KEY。等闪闪配好我就能说话了。）", "emotion": "空"})
 
     def _norm_content(c):
         # 字符串原样；列表则只放行 text / image 块（图片识别），其余丢弃，防止乱传
@@ -1987,53 +1993,84 @@ async def api_chat(request):
     if not user_text and isinstance(history[-1]["content"], list):
         user_text = "[图片]"
 
-    global _web_claude
+    global _web_llm
     try:
-        from anthropic import AsyncAnthropic
-        if _web_claude is None:
-            _web_claude = AsyncAnthropic(api_key=api_key)
-        # 模型：网页可以传 model 切换（白名单内才认），否则用默认
-        _default_model = os.environ.get("OMBRE_BOT_MODEL", "claude-opus-4-6")
-        _allowed_models = {"claude-opus-4-6", "claude-sonnet-4-6"}
+        from openai import AsyncOpenAI
+        if _web_llm is None:
+            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url)
+        # 模型：网页可传 model 切换（白名单内才认），否则用默认
+        _default_model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
+        _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
         _req_model = str(body.get("model", "")).strip()
         model = _req_model if _req_model in _allowed_models else _default_model
         # 回复预算：放开人设后允许更长（动情/亲密/涩文需要篇幅，还得留地方写 [think]/[emo]/[diary] 标签）。
-        # 给到 4000；想收紧用 OMBRE_WEB_MAX_TOKENS 覆盖。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
-        mcp_url = os.environ.get("OMBRE_MCP_URL", "https://ombre-brain-6e05.onrender.com/mcp")
-        # 注：之前给人设加 prompt cache（system 改成 blocks）会让发送报错，已撤回，回到普通字符串。
         system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
-        messages = list(history)
-        reply = ""
         recorded = []
 
-        async def _run_chat(use_mcp: bool) -> str:
-            """跑一轮对话。use_mcp=True 带记忆工具；记忆服务连不上时用 False 退化重试（这轮不读记忆，但对话照常）。"""
+        def _to_openai_content(c):
+            # 网页历史 → OpenAI 消息格式（文字原样；图片转 image_url data-uri）
+            if isinstance(c, list):
+                blocks = []
+                for b in c:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text":
+                        blocks.append({"type": "text", "text": str(b.get("text", ""))})
+                    elif b.get("type") == "image":
+                        src = b.get("source") or {}
+                        if isinstance(src, dict) and src.get("data"):
+                            mt = src.get("media_type", "image/jpeg")
+                            blocks.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{src.get('data')}"}})
+                return blocks or ""
+            return str(c or "")
+
+        async def _run_chat(use_tools: bool) -> str:
+            """跑一轮对话。use_tools=True 带记忆工具（进程内直调大脑，不走 MCP/HTTP）；
+            出问题时用 False 退化重试（这轮不碰记忆，但对话照常）。"""
             nonlocal recorded
             recorded = []
-            msgs = list(messages)
+            msgs = [{"role": "system", "content": system}] + [
+                {"role": m["role"], "content": _to_openai_content(m["content"])} for m in history
+            ]
             out = ""
-            for _ in range(3):  # 限轮次省钱：工具来回越多，前面的大坨内容(人设+breath结果)就被重发越多遍
-                kwargs = dict(model=model, max_tokens=web_max_tokens, system=system, messages=msgs)
-                if use_mcp:
-                    kwargs.update(
-                        betas=["mcp-client-2025-11-20"],
-                        mcp_servers=[{"type": "url", "name": "ombre-brain", "url": mcp_url}],
-                        tools=[{"type": "mcp_toolset", "mcp_server_name": "ombre-brain"}],
-                    )
-                resp = await _web_claude.beta.messages.create(**kwargs)
-                # 探测「我」是否往大脑里记了东西（hold / grow），告诉网页好显示「已记录」
-                for blk in resp.content:
-                    if getattr(blk, "type", "") in ("mcp_tool_use", "tool_use") and getattr(blk, "name", "") in ("hold", "grow"):
-                        inp = getattr(blk, "input", {}) or {}
-                        c = inp.get("content") if isinstance(inp, dict) else ""
+            for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
+                kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
+                if use_tools:
+                    kwargs["tools"] = _TOOLS_SCHEMA
+                resp = await _web_llm.chat.completions.create(**kwargs)
+                msg = resp.choices[0].message
+                tcs = msg.tool_calls or []
+                if not tcs:
+                    out = (msg.content or "").strip()
+                    break
+                # 回填 assistant 的工具调用
+                msgs.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in tcs
+                    ],
+                })
+                for tc in tcs:
+                    name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except Exception:  # noqa: BLE001
+                        args = {}
+                    # 探测「我」是否往大脑里记了东西（hold / grow），网页显示「已记录」
+                    if name in ("hold", "grow"):
+                        c = args.get("content")
                         if c:
                             recorded.append(str(c)[:90])
-                if resp.stop_reason == "pause_turn":
-                    msgs = msgs + [{"role": "assistant", "content": resp.content}]
-                    continue
-                out = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-                break
+                    fn = _TOOL_DISPATCH.get(name)
+                    try:
+                        res = await fn(**args) if fn else f"unknown tool: {name}"
+                    except Exception as e:  # noqa: BLE001
+                        res = f"工具失败: {e}"
+                    msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(res)[:8000]})
             return out
 
         async def _finish() -> dict:
@@ -2041,13 +2078,9 @@ async def api_chat(request):
             这样闪闪中途切屏、请求被挂断时，这里也会跑完并把回复存住（她回来就看到）。"""
             try:
                 rt = await _run_chat(True)
-            except Exception as mcp_exc:  # noqa: BLE001
-                m = str(mcp_exc).lower()
-                if "mcp" in m or "connection error" in m or "unresponsive" in m or "unavailable" in m:
-                    # 记忆服务（/mcp）没连上 → 去掉记忆工具重试一次，别让整轮对话挂掉
-                    rt = await _run_chat(False)
-                else:
-                    raise
+            except Exception:  # noqa: BLE001
+                # 带记忆工具那轮出错 → 去掉工具重试一次，至少让她能聊上
+                rt = await _run_chat(False)
             rt = rt or "（……）"
             emotion = diary = think = ""
             em = re.search(r"\[emo:([^\]]+)\]", rt)
