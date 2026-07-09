@@ -2203,18 +2203,22 @@ async def api_chat(request):
                 rt = await _run_chat(False)
             rt = rt or "（……）"
             emotion = diary = think = ""
-            em = re.search(r"\[emo:([^\]]+)\]", rt)
-            if em:
-                emotion = em.group(1).strip()
-            dm = re.search(r"\[diary:([^\]]+)\]", rt)
-            if dm:
-                diary = dm.group(1).strip()
-            tm = re.search(r"\[think:([^\]]+)\]", rt)
-            if tm:
-                think = tm.group(1).strip()
-            rt = re.sub(r"\[emo:[^\]]+\]", "", rt)
-            rt = re.sub(r"\[diary:[^\]]+\]", "", rt)
-            rt = re.sub(r"\[think:[^\]]+\]", "", rt).strip()
+
+            def _tag(name, s):
+                # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
+                m = re.search(r"\[" + name + r":\s*([^\]\n]+?)\s*\]", s)
+                if m:
+                    return m.group(1).strip()
+                m = re.search(r"\[" + name + r":\s*([^\]\n]+)", s)
+                return m.group(1).strip() if m else ""
+
+            emotion = _tag("emo", rt)
+            diary = _tag("diary", rt)
+            think = _tag("think", rt)
+            # 剥掉标签：闭合的 + 没闭合的都清掉，绝不让 [diary:… 这种漏进聊天
+            rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
+            rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", rt)      # 未闭合（到行尾/串尾）
+            rt = rt.strip()
             # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
             segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", rt) if s.strip()]
             if not segments:
