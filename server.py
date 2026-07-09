@@ -2123,6 +2123,16 @@ async def api_chat(request):
         _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
         _req_model = str(body.get("model", "")).strip()
         model = _req_model if _req_model in _allowed_models else _default_model
+        # 识图模型：这轮有图片就切到能看图的模型（纯文本模型看不了图）
+        _vision_model = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
+        _has_img = any(
+            isinstance(m.get("content"), list) and any(
+                isinstance(b, dict) and b.get("type") == "image" for b in m["content"]
+            )
+            for m in history
+        )
+        if _has_img:
+            model = _vision_model
         # 回复预算：放开人设后允许更长（动情/亲密/涩文需要篇幅，还得留地方写 [think]/[emo]/[diary] 标签）。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
         system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")

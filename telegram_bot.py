@@ -77,6 +77,9 @@ OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
+# 识图模型：她发图片时这一轮自动切到能看图的模型（GLM 5.1 纯文本看不了图）。
+# GLM 的识图模型带 V：glm-4.6v。换别家自行改 OMBRE_VISION_MODEL。
+VISION_MODEL = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
 
 # 只有这些 chat id 能用（逗号分隔）。留空 = 不限制（不推荐）。
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
@@ -342,10 +345,18 @@ async def _ask_claude(history: list[dict]) -> str:
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     system_content = SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block()
     messages = [{"role": "system", "content": system_content}] + list(history)
+    # 这一轮有图片就自动切到识图模型（glm-4.6v），纯文字仍用默认（glm-5.1 等）
+    def _has_img(msgs):
+        for m in msgs:
+            c = m.get("content")
+            if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "image_url" for b in c):
+                return True
+        return False
+    use_model = VISION_MODEL if _has_img(history) else MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     for _ in range(12):  # 最多 12 轮工具循环
         resp = await llm.chat.completions.create(
-            model=MODEL,
+            model=use_model,
             max_tokens=MAX_TOKENS,
             tools=BRAIN_TOOLS,
             messages=messages,
