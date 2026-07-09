@@ -757,6 +757,46 @@
   </div>
 
 <script>
+  // ================= 个性化数据云同步（必须最先声明：后面 setTickets/saveGot 等在初始化时会调 pushPrefs） =================
+  // 情绪日历/扭蛋/皮肤/记忆日志/收藏 → 存大脑持久磁盘，换设备/清缓存都拉得回。
+  const PREFS_KEYS=['moods','diary','tickets','gachaGot','gameLog','skin','brainLog','recycleBin','favs'];
+  let _prefsTimer=null, _prefsReady=false;   // 初次拉取完成前禁止上传，杜绝用初始默认值覆盖服务器
+  function pushPrefs(){
+    if(!_prefsReady) return;
+    clearTimeout(_prefsTimer);
+    _prefsTimer=setTimeout(()=>{
+      const p={}; PREFS_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) p[k]=v; });
+      try{ fetch('/api/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),prefs:p})}); }catch(e){}
+    }, 800);
+  }
+  async function pullPrefs(){
+    let serverHadData=false;
+    try{
+      const res=await fetch('/api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      if(!res.ok) throw 0;
+      const data=await res.json(); const p=data&&data.prefs;
+      if(!p||typeof p!=='object') throw 0;
+      PREFS_KEYS.forEach(k=>{ if(typeof p[k]==='string'){ localStorage.setItem(k,p[k]); serverHadData=true; } });
+      if(!serverHadData) throw 0;
+      // 重新水合内存变量 + 重渲染（服务器为准）；变量/函数在下方，pullPrefs 只在末尾被调用，届时都已就绪
+      try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
+      try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
+      try{ const t=parseInt(localStorage.getItem('tickets'),10); if(!isNaN(t)){ tickets=t; if(typeof ticketNum!=='undefined'&&ticketNum) ticketNum.textContent=t; } }catch(e){}
+      try{ loadGot(); }catch(e){}
+      try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
+      try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
+      try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
+      try{ if(typeof renderMist==='function') renderMist(); }catch(e){}
+      try{ if(typeof renderCal==='function'&&typeof calVisible==='function'&&calVisible()) renderCal(); }catch(e){}
+      try{ if(typeof renderCards==='function') renderCards(); }catch(e){}
+      try{ if(typeof renderDex==='function') renderDex(); }catch(e){}
+      try{ if(typeof renderBrain==='function') renderBrain(); }catch(e){}
+      try{ if(typeof renderRecycle==='function') renderRecycle(); }catch(e){}
+    }catch(e){}
+    _prefsReady=true;
+    if(!serverHadData) pushPrefs();   // 服务器首次为空 → 把本地现有数据种子上传
+  }
+
   // ---------- 固定分层布局：各层独立 fixed，底栏死钉物理底；键盘弹出只抬输入框 ----------
   const root = document.documentElement;
   let baseVisualHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
@@ -1785,47 +1825,7 @@
   document.getElementById('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById('noteAdd').click(); } });
   renderNotes(); renderMist();
 
-  // ================= 个性化数据云同步（存服务器，跟人走不丢） =================
-  // 情绪日历(moods/diary)、扭蛋(tickets/gachaGot/gameLog)、皮肤、记忆日志、收藏——
-  // 全部同步到大脑的持久磁盘。换手机/换浏览器/Safari 被清，都能拉回来。
-  const PREFS_KEYS=['moods','diary','tickets','gachaGot','gameLog','skin','brainLog','recycleBin','favs'];
-  let _prefsTimer=null, _prefsReady=false;   // 初次云端拉取完成前，禁止上传（否则会用初始默认值覆盖服务器）
-  function pushPrefs(){
-    if(!_prefsReady) return;
-    clearTimeout(_prefsTimer);
-    _prefsTimer=setTimeout(()=>{
-      const p={}; PREFS_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) p[k]=v; });
-      try{ fetch('/api/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),prefs:p})}); }catch(e){}
-    }, 800);
-  }
-  async function pullPrefs(){
-    let serverHadData=false;
-    try{
-      const res=await fetch('/api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
-      if(!res.ok) throw 0;
-      const data=await res.json(); const p=data&&data.prefs;
-      if(!p||typeof p!=='object') throw 0;
-      PREFS_KEYS.forEach(k=>{ if(typeof p[k]==='string'){ localStorage.setItem(k,p[k]); serverHadData=true; } });
-      if(!serverHadData) throw 0;
-      // 重新水合内存变量 + 重渲染（服务器为准）
-      try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
-      try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
-      try{ const t=parseInt(localStorage.getItem('tickets'),10); if(!isNaN(t)){ tickets=t; if(ticketNum) ticketNum.textContent=t; } }catch(e){}
-      try{ loadGot(); }catch(e){}
-      try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
-      try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
-      try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
-      try{ renderMist(); }catch(e){}
-      try{ if(typeof renderCal==='function'&&calVisible()) renderCal(); }catch(e){}
-      try{ if(typeof renderCards==='function') renderCards(); }catch(e){}
-      try{ if(typeof renderDex==='function') renderDex(); }catch(e){}
-      try{ if(typeof renderBrain==='function') renderBrain(); }catch(e){}
-      try{ if(typeof renderRecycle==='function') renderRecycle(); }catch(e){}
-    }catch(e){}
-    _prefsReady=true;   // 拉完（成功或失败）后才允许上传，杜绝初始值覆盖
-    // 服务器还没有这些数据（首次）→ 把本地现有的情绪日历/扭蛋种子上传一份，之后云端为准
-    if(!serverHadData) pushPrefs();
-  }
+  // 个性化数据：从服务器拉回（同步函数已提到脚本最顶部，避免初始化时的 TDZ 崩溃）
   pullPrefs();
 
   // ================= 小家：小尼 =================
