@@ -947,7 +947,7 @@
   }
   let curSkin={}; try{ curSkin=JSON.parse(localStorage.getItem('skin'))||{}; }catch(e){}
   if(curSkin.accent) applySkin(curSkin.accent, curSkin.bubble);
-  function saveSkin(){ localStorage.setItem('skin',JSON.stringify(curSkin)); }
+  function saveSkin(){ localStorage.setItem('skin',JSON.stringify(curSkin)); if(typeof pushPrefs==='function') pushPrefs(); }
   const presetsEl=document.getElementById('skinPresets');
   SKINS.forEach(sk=>{ const d=document.createElement('div'); d.className='skin-sw'; d.style.background='linear-gradient(150deg,'+_lighten(sk.accent,0.16)+','+sk.accent+')'; d.title=sk.name;
     d.onclick=()=>{ curSkin={accent:sk.accent, bubble:curSkin.bubble}; applySkin(curSkin.accent,curSkin.bubble); saveSkin(); markSw(); syncSkinInputs(); };
@@ -1128,10 +1128,11 @@
     list.push({text, t:now()});
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(typeof renderBrain==='function') renderBrain();
+    if(typeof pushPrefs==='function') pushPrefs();
   }
   // 回收站（本地）：删掉的记忆先进这里，能恢复
   let recycleBin=[]; try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
-  function saveRecycle(){ localStorage.setItem('recycleBin',JSON.stringify(recycleBin.slice(-50))); }
+  function saveRecycle(){ localStorage.setItem('recycleBin',JSON.stringify(recycleBin.slice(-50))); if(typeof pushPrefs==='function') pushPrefs(); }
   async function forgetBrain(text){
     text=(text||'').trim(); if(!text) return;
     // 从「我记下的」列表移除 → 从大脑删掉 → 放进回收站（可恢复）
@@ -1427,7 +1428,7 @@
   let cur=2;
   let tickets = parseInt(localStorage.getItem('tickets'));
   if(isNaN(tickets)) tickets=18;
-  function setTickets(v){ tickets=v; ticketNum.textContent=v; localStorage.setItem('tickets',v); }
+  function setTickets(v){ tickets=v; ticketNum.textContent=v; localStorage.setItem('tickets',v); pushPrefs(); }
   setTickets(tickets);
   // 日期
   const today=new Date(), W='日一二三四五六'[today.getDay()], dateKey=today.getFullYear()+'-'+(today.getMonth()+1)+'-'+today.getDate();
@@ -1440,13 +1441,13 @@
     try{ const s=JSON.parse(localStorage.getItem('gachaGot')); if(s){ POOLS.forEach((p,i)=>{ p.got=s[i]||[]; }); return true; } }catch(e){}
     return false;
   }
-  function saveGot(){ const o={}; POOLS.forEach((p,i)=>o[i]=p.got); localStorage.setItem('gachaGot', JSON.stringify(o)); }
+  function saveGot(){ const o={}; POOLS.forEach((p,i)=>o[i]=p.got); localStorage.setItem('gachaGot', JSON.stringify(o)); pushPrefs(); }
   if(!loadGot()){ POOLS[2].got = POOLS[2].deck.slice(0,4).map(c=>({...c, date:dStr})); saveGot(); }
 
   // ---------- 记录 ----------
   let logArr=[]; try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
   function stamp(){ const d=new Date(); return (d.getMonth()+1)+'/'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
-  function logEvent(x){ logArr.unshift({t:stamp(), x}); if(logArr.length>60) logArr.length=60; localStorage.setItem('gameLog', JSON.stringify(logArr)); }
+  function logEvent(x){ logArr.unshift({t:stamp(), x}); if(logArr.length>60) logArr.length=60; localStorage.setItem('gameLog', JSON.stringify(logArr)); pushPrefs(); }
 
   // 按稀有度分桶
   POOLS.forEach(p=>{ p.byRar={SSR:[],SR:[],R:[]}; p.deck.forEach(c=>p.byRar[c.rar].push(c)); });
@@ -1716,8 +1717,8 @@
   function tKey(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
   function calVisible(){ const p=document.querySelector('.page[data-page="cal"]'); return p&&p.classList.contains('active'); }
   function renderMist(){ const e=moods[tKey()]||'安定', c=EMO[e]||'#7FA877', o=document.getElementById('mistOrb'); if(o){ o.style.setProperty('--mist',c); document.getElementById('mistEmo').textContent=e; } }
-  function setMood(emotion){ if(!EMO[emotion]) return; moods[tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); }
-  function addDiaryEntry(text){ const k=tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); }
+  function setMood(emotion){ if(!EMO[emotion]) return; moods[tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); pushPrefs(); }
+  function addDiaryEntry(text){ const k=tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); pushPrefs(); }
 
   let mcalY, mcalM;
   function renderCal(){
@@ -1783,6 +1784,47 @@
   };
   document.getElementById('noteInput').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById('noteAdd').click(); } });
   renderNotes(); renderMist();
+
+  // ================= 个性化数据云同步（存服务器，跟人走不丢） =================
+  // 情绪日历(moods/diary)、扭蛋(tickets/gachaGot/gameLog)、皮肤、记忆日志、收藏——
+  // 全部同步到大脑的持久磁盘。换手机/换浏览器/Safari 被清，都能拉回来。
+  const PREFS_KEYS=['moods','diary','tickets','gachaGot','gameLog','skin','brainLog','recycleBin','favs'];
+  let _prefsTimer=null, _prefsReady=false;   // 初次云端拉取完成前，禁止上传（否则会用初始默认值覆盖服务器）
+  function pushPrefs(){
+    if(!_prefsReady) return;
+    clearTimeout(_prefsTimer);
+    _prefsTimer=setTimeout(()=>{
+      const p={}; PREFS_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) p[k]=v; });
+      try{ fetch('/api/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),prefs:p})}); }catch(e){}
+    }, 800);
+  }
+  async function pullPrefs(){
+    try{
+      const res=await fetch('/api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      if(!res.ok) return;
+      const data=await res.json(); const p=data&&data.prefs;
+      if(!p||typeof p!=='object') return;
+      let hit=false;
+      PREFS_KEYS.forEach(k=>{ if(typeof p[k]==='string'){ localStorage.setItem(k,p[k]); hit=true; } });
+      if(!hit) return;
+      // 重新水合内存变量 + 重渲染（服务器为准）
+      try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
+      try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
+      try{ const t=parseInt(localStorage.getItem('tickets'),10); if(!isNaN(t)){ tickets=t; if(ticketNum) ticketNum.textContent=t; } }catch(e){}
+      try{ loadGot(); }catch(e){}
+      try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
+      try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
+      try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
+      try{ renderMist(); }catch(e){}
+      try{ if(typeof renderCal==='function'&&calVisible()) renderCal(); }catch(e){}
+      try{ if(typeof renderCards==='function') renderCards(); }catch(e){}
+      try{ if(typeof renderDex==='function') renderDex(); }catch(e){}
+      try{ if(typeof renderBrain==='function') renderBrain(); }catch(e){}
+      try{ if(typeof renderRecycle==='function') renderRecycle(); }catch(e){}
+    }catch(e){}
+    finally{ _prefsReady=true; }   // 拉完（成功或失败）后才允许上传，杜绝初始值覆盖
+  }
+  pullPrefs();
 
   // ================= 小家：小尼 =================
   let ni; try{ ni=JSON.parse(localStorage.getItem('ni')); }catch(e){} if(!ni||typeof ni.mood!=='number') ni={mood:72, jeal:18, last:Date.now()};

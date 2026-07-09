@@ -1888,6 +1888,55 @@ def _web_notes_path(token: str) -> str:
     return os.path.join(d, key + ".json")
 
 
+def _web_prefs_path(token: str) -> str:
+    import os, hashlib
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+    d = os.path.join(base, "web_prefs")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    return os.path.join(d, key + ".json")
+
+
+@mcp.custom_route("/api/prefs", methods=["GET", "POST"])
+async def api_prefs(request):
+    """网页个性化数据存读（持久磁盘）：情绪日历、扭蛋、收藏、皮肤等，跟人走不丢。
+    存的是一个 {键: 字符串} 的字典（值就是 localStorage 里各键的原样 JSON 串）。"""
+    from starlette.responses import JSONResponse
+    import os, json
+
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if request.method == "GET":
+        tok = request.query_params.get("token", "")
+        if token_env and tok != token_env:
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
+        try:
+            with open(_web_prefs_path(tok), "r", encoding="utf-8") as f:
+                return JSONResponse(json.load(f))
+        except Exception:
+            return JSONResponse({"prefs": {}})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    tok = body.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    prefs = body.get("prefs") or {}
+    if not isinstance(prefs, dict):
+        return JSONResponse({"error": "bad prefs"}, status_code=400)
+    # 只收字符串值，单值上限 ~200KB，防滥用
+    clean = {str(k): v for k, v in prefs.items() if isinstance(v, str) and len(v) <= 200000}
+    try:
+        with open(_web_prefs_path(tok), "w", encoding="utf-8") as f:
+            json.dump({"prefs": clean}, f, ensure_ascii=False)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
+    return JSONResponse({"ok": True})
+
+
 @mcp.custom_route("/api/notes", methods=["GET", "POST"])
 async def api_notes(request):
     """便签存读（持久磁盘）。聊天接口会读它，让「我」能提醒她。"""
