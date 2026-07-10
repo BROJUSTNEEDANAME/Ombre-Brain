@@ -2390,6 +2390,25 @@ async def api_endocrine(request):
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
 
 
+@mcp.custom_route("/api/endocrine/calm", methods=["POST"])
+async def api_endocrine_calm(request):
+    """网页面板「让他冷静下来」：手动退出入夜/发光，欲望/支配数值降回安全区。"""
+    from starlette.responses import JSONResponse
+    import os
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if token_env and (body.get("token") or "") != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        import endocrine
+        return JSONResponse(endocrine.calm())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)[:100]}, status_code=500)
+
+
 @mcp.custom_route("/api/daysummary", methods=["POST"])
 async def api_daysummary(request):
     """把今天的对话收成：一个心情词(从传入列表里挑) + 一句当天日记。写进情绪日历用。

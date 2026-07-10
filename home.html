@@ -180,9 +180,8 @@
   .mem-body { display: none; align-self: flex-start; max-width: 100%; margin: 5px 5px 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); background: rgba(127,122,110,.12); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; white-space: pre-wrap; word-break: break-word; }
   .mem-body.open { display: block; }
   /* 欲望内分泌视觉：dominance 高 → 他的话暗自发光；libido 高 → 拉窗帘(深色) */
-  body.dom-glow .row.me .bubble { text-shadow: 0 0 6px rgba(197,116,58,.55), 0 0 15px rgba(197,116,58,.28); transition: text-shadow .9s ease; }
-  .desire-veil { position: fixed; inset: 0; z-index: 90; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(130% 100% at 50% -10%, rgba(20,17,13,0) 30%, rgba(20,17,13,.9) 100%); }
-  .desire-veil.show { opacity: 1; }
+  /* dom 冲高 → 他的话暗自发光（挂在他的气泡上；之前误挂在她的橙色气泡上，橙光配橙底根本看不见） */
+  body.dom-glow .row.him .bubble { color: var(--text); text-shadow: 0 0 8px rgba(255,167,89,.6), 0 0 22px rgba(255,140,60,.32); transition: text-shadow .9s ease; }
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   .fav-star { position: absolute; top: -6px; right: -4px; font-size: 12px; }
@@ -765,6 +764,7 @@
       </div>
       <div id="endoBars"></div>
       <div class="endo-mode" id="endoMode"></div>
+      <button class="think-card-close" id="endoCalm" style="margin-top:14px;border-color:var(--accent);color:var(--accent)">(拍拍他) 让他冷静下来</button>
       <button class="think-card-close" id="endoClose">收起</button>
     </div>
   </div>
@@ -1404,24 +1404,20 @@
     segs.forEach((s,i)=>addMsg('you', s, null, i===segs.length-1 ? _think : ''));
     petCtl && petCtl.fromType(true);
   }
-  // 欲望内分泌 → 网页视觉：libido 高拉窗帘(深色)、dominance 高文字暗自发光；欲望消退自动切回
+  // 欲望内分泌 → 网页视觉：libido 高直接入夜(正经深色主题,字看得清)、dominance 高他的话暗自发光；消退自动切回
   let _desireDim=false, lastEndo=null;
   try{ lastEndo=JSON.parse(localStorage.getItem('endoState')||'null'); }catch(e){}
-  function _ensureVeil(){ let v=document.getElementById('desireVeil'); if(!v){ v=document.createElement('div'); v.className='desire-veil'; v.id='desireVeil'; document.body.appendChild(v); } return v; }
   function applyEndocrine(st){
     try{
       if(!st) return;
       lastEndo=st; try{ localStorage.setItem('endoState',JSON.stringify(st)); }catch(e){}
       const _em=document.getElementById('endoModal');
       if(_em&&_em.classList.contains('show')&&typeof renderEndoPanel==='function') renderEndoPanel();
-      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配高 → 他的话暗自发光
-      const v=_ensureVeil();
-      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下拉窗帘
-        _desireDim=true; v.classList.add('show');
-        setTimeout(()=>{ document.documentElement.setAttribute('data-theme','dark'); }, 380);
+      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配冲高 → 他的话暗自发光
+      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下入夜
+        _desireDim=true; document.documentElement.setAttribute('data-theme','dark');
       }else if(!st.dim && _desireDim){                                 // 欲望消退 → 退回她自己的主题设定
-        _desireDim=false; v.classList.remove('show');
-        if(typeof applyTheme==='function') applyTheme();
+        _desireDim=false; if(typeof applyTheme==='function') applyTheme();
       }
     }catch(e){}
   }
@@ -1957,6 +1953,17 @@
     if(topStatus) topStatus.onclick=()=>{ renderEndoPanel(); modal.classList.add('show'); };
     const cl=document.getElementById('endoClose'); if(cl) cl.onclick=()=>modal.classList.remove('show');
     modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
+    // 手动退出：欲望/支配降回安全区，入夜和发光立刻退掉
+    const calm=document.getElementById('endoCalm');
+    if(calm) calm.onclick=async ()=>{
+      calm.disabled=true; const old=calm.textContent; calm.textContent='……(深呼吸) 在冷静了';
+      try{
+        const r=await fetch('/api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const st=await r.json();
+        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
+      }catch(e){}
+      setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
+    };
     // 开页先把他当前的身体状态捞回来（顺带恢复拉窗帘/发光）
     fetch('/api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
       .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined') applyEndocrine(st); }).catch(()=>{});

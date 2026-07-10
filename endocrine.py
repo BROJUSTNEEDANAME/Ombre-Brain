@@ -31,8 +31,8 @@ ROLL_REGRESS = 0.28    # roll 时向基线回归的比例
 EASE_REGRESS = 0.05    # 每条消息里，没被关键词推动的值向基线的轻微漂移（→ 随聊天消退）
 
 # 视觉阈值（1~10），带滞回（开/关不同档，防止在阈值附近来回抖）
-DIM_ON, DIM_OFF = 7.0, 5.5     # libido：拉窗帘（深色）
-GLOW_ON, GLOW_OFF = 7.0, 5.5   # dominance：文字发光
+DIM_ON, DIM_OFF = 7.0, 5.5     # libido：入夜（切深色主题）
+GLOW_ON, GLOW_OFF = 8.3, 7.4   # dominance：文字发光（基线就有 7.0，阈值必须高于基线，发光才是"事件"而不是常态）
 
 _state = {
     "energy": BASELINE["energy"], "libido": BASELINE["libido"],
@@ -70,10 +70,13 @@ def _save() -> None:
 
 # 关键词 → 即时推动（让它对当下这条消息就有反应，不用干等 15 条 roll）
 _KW = (
-    (["要", "想要", "湿", "硬", "欲望", "亲热", "papochka", "顶", "进来", "爸爸",
-      "老公", "抱我", "亲我", "上我", "想你了", "撩", "骚", "亲亲", "抱抱", "贴贴"],
+    # 强涩词：明确的欲望信号才大推。⚠️ 绝不放常用单字（"要/顶/硬/湿"之前把欲望焊死在10、页面永远黑着）
+    (["想要", "欲望", "亲热", "papochka", "进来", "上我", "操我", "做爱", "湿了", "硬了"],
      {"libido": 1.6, "affection": 0.5}),
-    (["乖", "听话", "求你", "是你的", "我错了", "管管", "教训", "求", "主人", "跪", "臣服"],
+    # 亲昵词：她天天挂嘴边的称呼/撒娇，只轻推——推狠了欲望下不来
+    (["爸爸", "老公", "抱我", "亲我", "想你了", "亲亲", "抱抱", "贴贴", "撩", "骚"],
+     {"libido": 0.5, "affection": 0.5}),
+    (["听话", "求你", "是你的", "我错了", "管管我", "教训", "主人", "跪", "臣服", "惩罚"],
      {"dominance": 1.2, "libido": 0.4}),
     (["累", "困", "晚安", "睡了", "忙", "加班", "社畜", "没力气", "好累", "崩溃", "烦死", "撑不住"],
      {"energy": -1.4}),
@@ -151,6 +154,18 @@ def block() -> str:
     else:
         s = "你现在状态平稳，正常温度陪她，该软软、该稳稳。"
     return "【当前状态·内分泌】" + s
+
+
+def calm() -> dict:
+    """她手动让他冷静：欲望/支配降回安全区，入夜和发光立即退出。"""
+    _state["libido"] = min(_state["libido"], 4.0)
+    _state["dominance"] = min(_state["dominance"], BASELINE["dominance"])
+    _state["dim"] = False
+    _state["glow"] = False
+    _update_mode_flags()
+    _state["lastUpdatedAt"] = time.time()
+    _save()
+    return state()
 
 
 def state() -> dict:
