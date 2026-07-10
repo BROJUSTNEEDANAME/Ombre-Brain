@@ -1819,6 +1819,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
+_IMG_DESC_CACHE: dict = {}  # 图片→识图转述 缓存（按图片指纹），同一张图只识一次
 # 情绪日历的 12 个心情词（和 home.html 的 EMO 一致）；模型没自打 [emo] 时用来兜底判定
 _EMO_WORDS = ["沉默", "担心你", "想靠近你", "心疼你", "烦躁", "空", "占有", "安定", "害羞", "吃醋", "火辣", "欲望"]
 
@@ -2168,7 +2169,8 @@ async def api_chat(request):
         _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
         _req_model = str(body.get("model", "")).strip()
         model = _req_model if _req_model in _allowed_models else _default_model
-        # 识图模型：这轮有图片就切到能看图的模型（纯文本模型看不了图）
+        # 识图改走「转述管道」：不再整场切识图模型（那模型笨、人设和工具都拿不稳）。
+        # 识图模型只干一件事——把图转成文字塞回对话；正文永远是主模型来（人设/工具/生成HTML都不降级）。
         _vision_model = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
         _has_img = any(
             isinstance(m.get("content"), list) and any(
@@ -2177,7 +2179,46 @@ async def api_chat(request):
             for m in history
         )
         if _has_img:
-            model = _vision_model
+            import hashlib
+
+            async def _transcribe(mt, b64, k):
+                try:
+                    r = await _web_llm.chat.completions.create(
+                        model=_vision_model, max_tokens=1500,
+                        messages=[{"role": "user", "content": [
+                            {"type": "text", "text": "把这张图完整转述成文字：截图里的文字逐字抄下来（保留标题/列表/结构）；照片就客观细致地描述画面。只输出转述内容，不要任何评论。"},
+                            {"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}},
+                        ]}])
+                    t = (r.choices[0].message.content or "").strip()[:6000]
+                except Exception:  # noqa: BLE001
+                    t = ""
+                if t:
+                    if len(_IMG_DESC_CACHE) > 300:
+                        _IMG_DESC_CACHE.clear()
+                    _IMG_DESC_CACHE[k] = t
+                return t
+
+            _li = len(history) - 1
+            for _mi, m in enumerate(history):
+                c = m["content"]
+                if not isinstance(c, list):
+                    continue
+                nc = []
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "image":
+                        src = b.get("source") or {}
+                        b64 = str(src.get("data") or "")
+                        k = hashlib.md5((b64[:1024] + b64[-1024:] + str(len(b64))).encode()).hexdigest()
+                        desc = _IMG_DESC_CACHE.get(k, "")
+                        if not desc and _mi == _li:  # 只现场转述最新一条里的图，旧图用缓存（重启后旧图退化为占位）
+                            desc = await _transcribe(str(src.get("media_type", "image/jpeg")), b64, k)
+                        if desc:
+                            nc.append({"type": "text", "text": "【她发来一张图，识图转述如下】\n" + desc})
+                        else:
+                            nc.append({"type": "text", "text": "【她发过一张图，这轮没能看清内容——如果对话需要它，坦白说你没看清、让她重发或用文字讲，别不懂装懂】"})
+                    else:
+                        nc.append(b)
+                m["content"] = nc
         # 回复预算：放开人设后允许更长（动情/亲密/涩文需要篇幅，还得留地方写 [think]/[emo]/[diary] 标签）。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
