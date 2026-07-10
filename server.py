@@ -2080,7 +2080,8 @@ async def api_chat(request):
     for m in raw:
         if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
             history.append({"role": m["role"], "content": _norm_content(m.get("content"))})
-    history = history[-14:]
+    _hist_max = int(os.environ.get("OMBRE_WEB_HISTORY_MAX", "40"))
+    history = history[-_hist_max:]
     if not history or history[-1]["role"] != "user":
         return JSONResponse({"error": "no user message"}, status_code=400)
 
@@ -2164,7 +2165,21 @@ async def api_chat(request):
             model = _vision_model
         # 回复预算：放开人设后允许更长（动情/亲密/涩文需要篇幅，还得留地方写 [think]/[emo]/[diary] 标签）。
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "4000"))
-        system = _WEB_SYSTEM + "\n\n" + now_line + (("\n\n" + drives_block) if drives_block else "") + (("\n\n" + notes_block) if notes_block else "")
+        # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
+        # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
+        # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
+        system = _WEB_SYSTEM
+        # 每轮自动按当前话题捞一把相关记忆注入（不再等模型自觉去 breath），根治「聊两句就忘」。
+        mem_block = ""
+        if user_text and user_text != "[图片]":
+            try:
+                _m = await breath(query=user_text, max_tokens=1500, max_results=6)
+                if _m and _m.strip():
+                    mem_block = "【记忆·可能相关的过往（内化进当下，别生硬复述）】\n" + _m.strip()[:4000]
+            except Exception:  # noqa: BLE001
+                mem_block = ""
+        # 动态上下文块：时间＋情绪＋便签＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system
+        dynamic_ctx = "\n\n".join(b for b in (now_line, drives_block, notes_block, mem_block) if b)
         recorded = []
 
         def _to_openai_content(c):
@@ -2189,9 +2204,17 @@ async def api_chat(request):
             出问题时用 False 退化重试（这轮不碰记忆，但对话照常）。"""
             nonlocal recorded
             recorded = []
-            msgs = [{"role": "system", "content": system}] + [
-                {"role": m["role"], "content": _to_openai_content(m["content"])} for m in history
-            ]
+            msgs = [{"role": "system", "content": system}]
+            _last_i = len(history) - 1
+            for _i, m in enumerate(history):
+                c = _to_openai_content(m["content"])
+                # 动态上下文只挂在最后一条（最新 user）消息前面，保证它前面的前缀每轮一模一样
+                if _i == _last_i and dynamic_ctx:
+                    if isinstance(c, list):
+                        c = [{"type": "text", "text": dynamic_ctx + "\n\n"}] + c
+                    else:
+                        c = dynamic_ctx + "\n\n" + str(c)
+                msgs.append({"role": m["role"], "content": c})
             out = ""
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
