@@ -2143,6 +2143,19 @@ async def api_chat(request):
     if not user_text and isinstance(history[-1]["content"], list):
         user_text = "[图片]"
 
+    # 内分泌/精力值系统：她这条消息推动状态(每15条roll一次),拿到给模型的一句状态指令
+    # (endo_block) + 给网页做视觉的数值/开关(endo_state: dim=欲望高拉窗帘, glow=支配高发光)
+    endo_block = ""
+    endo_state = None
+    try:
+        import endocrine
+        endocrine.on_user_message(user_text if user_text != "[图片]" else "")
+        endo_block = endocrine.block()
+        endo_state = endocrine.state()
+    except Exception:  # noqa: BLE001
+        endo_block = ""
+        endo_state = None
+
     global _web_llm
     try:
         from openai import AsyncOpenAI
@@ -2179,7 +2192,7 @@ async def api_chat(request):
             except Exception:  # noqa: BLE001
                 mem_block = ""
         # 动态上下文块：时间＋情绪＋便签＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system
-        dynamic_ctx = "\n\n".join(b for b in (now_line, drives_block, notes_block, mem_block) if b)
+        dynamic_ctx = "\n\n".join(b for b in (now_line, drives_block, endo_block, notes_block, mem_block) if b)
         recorded = []
 
         def _to_openai_content(c):
@@ -2302,7 +2315,7 @@ async def api_chat(request):
                 segments = [rt]
             rt = "\n".join(segments)  # 存上下文/兜底用合并版
             _persist_web_reply(tok, user_text, segments, rt)  # 切屏也不丢
-            return {"reply": rt, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded}
+            return {"reply": rt, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
 
         result = await asyncio.shield(_finish())
         return JSONResponse(result)

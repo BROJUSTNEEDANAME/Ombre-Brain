@@ -179,6 +179,10 @@
   .mem-toggle:active { opacity: 1; }
   .mem-body { display: none; align-self: flex-start; max-width: 100%; margin: 5px 5px 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); background: rgba(127,122,110,.12); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; white-space: pre-wrap; word-break: break-word; }
   .mem-body.open { display: block; }
+  /* 欲望内分泌视觉：dominance 高 → 他的话暗自发光；libido 高 → 拉窗帘(深色) */
+  body.dom-glow .row.me .bubble { text-shadow: 0 0 6px rgba(197,116,58,.55), 0 0 15px rgba(197,116,58,.28); transition: text-shadow .9s ease; }
+  .desire-veil { position: fixed; inset: 0; z-index: 90; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(130% 100% at 50% -10%, rgba(20,17,13,0) 30%, rgba(20,17,13,.9) 100%); }
+  .desire-veil.show { opacity: 1; }
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   .fav-star { position: absolute; top: -6px; right: -4px; font-size: 12px; }
@@ -522,7 +526,7 @@
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav</div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="think-chip" id="thinkChip">💭</span><span class="model-chip" id="modelChip" title="切换模型 GLM 5.1 / GLM 4.6">GLM 5.1</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="modelChip" title="切换模型 GLM 5.1 / GLM 4.6">GLM 5.1</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
     </div>
     <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
   </div>
@@ -1185,7 +1189,7 @@
   // 思考链：他没说出口的心里话
   let lastThink=localStorage.getItem('lastThink')||'';
   const thinkChip=document.getElementById('thinkChip'), thinkModal=document.getElementById('thinkModal');
-  thinkChip.onclick=()=>{ document.getElementById('thinkBody').textContent=lastThink||'（这会儿没什么藏着的。）'; thinkModal.classList.add('show'); };
+  if(thinkChip) thinkChip.onclick=()=>{ document.getElementById('thinkBody').textContent=lastThink||'（这会儿没什么藏着的。）'; thinkModal.classList.add('show'); };
   document.getElementById('thinkClose').onclick=()=>thinkModal.classList.remove('show');
   thinkModal.onclick=e=>{ if(e.target===thinkModal) thinkModal.classList.remove('show'); };
 
@@ -1377,6 +1381,23 @@
     segs.forEach((s,i)=>addMsg('you', s, null, i===segs.length-1 ? _think : ''));
     petCtl && petCtl.fromType(true);
   }
+  // 欲望内分泌 → 网页视觉：libido 高拉窗帘(深色)、dominance 高文字暗自发光；欲望消退自动切回
+  let _desireDim=false;
+  function _ensureVeil(){ let v=document.getElementById('desireVeil'); if(!v){ v=document.createElement('div'); v.className='desire-veil'; v.id='desireVeil'; document.body.appendChild(v); } return v; }
+  function applyEndocrine(st){
+    try{
+      if(!st) return;
+      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配高 → 他的话暗自发光
+      const v=_ensureVeil();
+      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下拉窗帘
+        _desireDim=true; v.classList.add('show');
+        setTimeout(()=>{ document.documentElement.setAttribute('data-theme','dark'); }, 380);
+      }else if(!st.dim && _desireDim){                                 // 欲望消退 → 退回她自己的主题设定
+        _desireDim=false; v.classList.remove('show');
+        if(typeof applyTheme==='function') applyTheme();
+      }
+    }catch(e){}
+  }
   // 带超时的请求。只在「很快就失败」（请求根本没到、服务器没处理）时重试一次，避免重复生成/重复说。
   async function postChat(body){
     for(let attempt=0; attempt<2; attempt++){
@@ -1424,6 +1445,7 @@
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();
       if(data&&data.emotion){ setEmotion(data.emotion); if(typeof setMood==='function') setMood(data.emotion); }
+      if(data&&data.endocrine) applyEndocrine(data.endocrine);
       if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
       if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
       if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
