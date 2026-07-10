@@ -186,10 +186,18 @@
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   .fav-star { position: absolute; top: -6px; right: -4px; font-size: 12px; }
-  /* 总结今天：把今天聊的收成一个心情 + 一句日记，写进当天格子 */
-  .daysum-btn { display: block; width: 100%; margin: 2px 0 10px; padding: 9px; border-radius: 12px; border: 1px solid var(--hair); background: var(--accent-soft); color: var(--accent); font-size: 13px; cursor: pointer; letter-spacing: .3px; }
-  .daysum-btn:active { transform: scale(.98); }
-  .daysum-btn[disabled] { opacity: .55; }
+  /* 内分泌面板：点顶栏情绪词展开，看主导情绪 + 象限 + 四个值 */
+  #topStatus { cursor: pointer; }
+  .endo-main { text-align: center; font-family: 'Noto Serif SC', serif; font-size: 20px; margin: 2px 0 12px; letter-spacing: 2px; }
+  .endo-quad { position: relative; width: 132px; height: 132px; margin: 2px auto 14px; border: 1px solid var(--hair); border-radius: 14px; background: linear-gradient(0deg, transparent 49.5%, var(--hair) 49.5%, var(--hair) 50.5%, transparent 50.5%), linear-gradient(90deg, transparent 49.5%, var(--hair) 49.5%, var(--hair) 50.5%, transparent 50.5%); }
+  .endo-quad b { position: absolute; font-size: 9.5px; color: var(--text-faint); font-weight: 400; letter-spacing: .5px; }
+  .endo-dot { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); transform: translate(-50%, 50%); transition: left .6s ease, bottom .6s ease; }
+  .endo-row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; gap: 10px; }
+  .endo-k { font-size: 12.5px; color: var(--text-dim); flex: 0 0 3.2em; }
+  .endo-bar { flex: 1; height: 8px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+  .endo-bar i { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent-warm), var(--accent)); transition: width .5s ease; }
+  .endo-v { font-size: 12px; color: var(--text-dim); flex: 0 0 2.4em; text-align: right; font-variant-numeric: tabular-nums; }
+  .endo-mode { text-align: center; font-size: 11.5px; color: var(--text-faint); margin-top: 10px; letter-spacing: .3px; }
   /* 回忆空间：收藏的话，他的 / 我的 分开 */
   .memspace .mem-hint { font-size: 12px; color: var(--text-faint); margin: 4px 0 12px; line-height: 1.5; }
   .memspace .mem-col { margin-top: 12px; }
@@ -663,7 +671,6 @@
         <button class="cal-toggle" id="calToggle"><span class="ct-t">日记 · 日历</span><span class="ct-arrow" id="ctArrow">▾</span></button>
         <div class="cal-collapse" id="calCollapse">
           <div class="bsub">我每天写的小事、你的心情都收在这。点一天能翻到。</div>
-          <button class="daysum-btn" id="daySumBtn">✍️ 总结今天</button>
           <div class="cal-head"><button id="mcalPrev" class="cal-nav">‹</button><span id="mcalTitle"></span><button id="mcalNext" class="cal-nav">›</button></div>
           <div class="cal-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
           <div class="cal-grid" id="mcalGrid"></div>
@@ -743,6 +750,22 @@
       <div class="think-card-h">他没说出口的</div>
       <div class="think-card-body" id="thinkBody"></div>
       <button class="think-card-close" id="thinkClose">收起</button>
+    </div>
+  </div>
+
+  <!-- 内分泌面板：点顶栏情绪词展开 -->
+  <div class="think-modal" id="endoModal">
+    <div class="think-card">
+      <div class="think-card-h">他现在的身体状态</div>
+      <div class="endo-main" id="endoMain">…</div>
+      <div class="endo-quad" id="endoQuad">
+        <b style="left:7px;top:6px">占有</b><b style="right:7px;top:6px">欲望</b>
+        <b style="left:7px;bottom:6px">安定</b><b style="right:7px;bottom:6px">火辣</b>
+        <div class="endo-dot" id="endoDot"></div>
+      </div>
+      <div id="endoBars"></div>
+      <div class="endo-mode" id="endoMode"></div>
+      <button class="think-card-close" id="endoClose">收起</button>
     </div>
   </div>
 
@@ -1382,11 +1405,15 @@
     petCtl && petCtl.fromType(true);
   }
   // 欲望内分泌 → 网页视觉：libido 高拉窗帘(深色)、dominance 高文字暗自发光；欲望消退自动切回
-  let _desireDim=false;
+  let _desireDim=false, lastEndo=null;
+  try{ lastEndo=JSON.parse(localStorage.getItem('endoState')||'null'); }catch(e){}
   function _ensureVeil(){ let v=document.getElementById('desireVeil'); if(!v){ v=document.createElement('div'); v.className='desire-veil'; v.id='desireVeil'; document.body.appendChild(v); } return v; }
   function applyEndocrine(st){
     try{
       if(!st) return;
+      lastEndo=st; try{ localStorage.setItem('endoState',JSON.stringify(st)); }catch(e){}
+      const _em=document.getElementById('endoModal');
+      if(_em&&_em.classList.contains('show')&&typeof renderEndoPanel==='function') renderEndoPanel();
       document.body.classList.toggle('dom-glow', !!st.glow);          // 支配高 → 他的话暗自发光
       const v=_ensureVeil();
       if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下拉窗帘
@@ -1897,27 +1924,42 @@
   }
   document.getElementById('mcalPrev').onclick=()=>{ mcalM--; if(mcalM<0){mcalM=11;mcalY--;} renderCal(); };
   document.getElementById('mcalNext').onclick=()=>{ mcalM++; if(mcalM>11){mcalM=0;mcalY++;} renderCal(); };
-  // 总结今天：把今天聊的收成一个心情 + 一句日记，写进当天格子
+  // ---------- 内分泌面板：点顶栏情绪词展开，看主导情绪 + 象限 + 四个值 ----------
+  // 象限规划（x=欲望 libido, y=占有 dominance）：右上=欲望 右下=火辣 左上=占有 左下=安定；
+  // 精力见底盖过一切=沉默；黏你(affection)特别高且不在欲/占区=想靠近你。
+  function endoEmotion(st){
+    if(!st) return '安定';
+    if(st.mode==='low_energy') return '沉默';
+    const hiL=st.libido>=6.5, hiD=st.dominance>=7.5;
+    if(hiL&&hiD) return '欲望';
+    if(hiL) return '火辣';
+    if(hiD) return '占有';
+    if(st.affection>=8.5) return '想靠近你';
+    return '安定';
+  }
+  const ENDO_LABELS=[['energy','精力'],['libido','欲望'],['affection','黏你'],['dominance','占有']];
+  function renderEndoPanel(){
+    const st=lastEndo, box=document.getElementById('endoBars'); if(!box) return;
+    const main=document.getElementById('endoMain'), dot=document.getElementById('endoDot'), modeEl=document.getElementById('endoMode');
+    if(!st){ main.textContent='还没数据'; main.style.color='var(--text-dim)'; box.innerHTML=''; modeEl.textContent='跟我说句话，身体就动起来了。'; return; }
+    const emo=endoEmotion(st);
+    main.textContent=emo; main.style.color=(EMO[emo]||'var(--accent)');
+    box.innerHTML=ENDO_LABELS.map(([k,l])=>{
+      const v=Math.max(0,Math.min(10,+st[k]||0));
+      return '<div class="endo-row"><span class="endo-k">'+l+'</span><span class="endo-bar"><i style="width:'+(v*10)+'%"></i></span><span class="endo-v">'+v.toFixed(1)+'</span></div>';
+    }).join('');
+    if(dot){ dot.style.left=(Math.max(0,Math.min(10,st.libido))*10)+'%'; dot.style.bottom=(Math.max(0,Math.min(10,st.dominance))*10)+'%'; }
+    const modeTxt=st.mode==='low_energy'?'没电了（社畜档）':(st.mode==='high_drive'?'上头了':'平稳');
+    modeEl.textContent='状态：'+modeTxt+' · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
+  }
   (function(){
-    const btn=document.getElementById('daySumBtn'); if(!btn) return;
-    btn.onclick=async ()=>{
-      const todayK=tKey();
-      const todays=chatLog.filter(m=>m.dk===todayK && m.side!=='sys' && m.text);
-      if(todays.length<2){ alert('今天还没聊几句，多聊两句我再帮你收尾。'); return; }
-      const text=todays.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
-      const old=btn.textContent; btn.disabled=true; btn.textContent='正在收尾今天…';
-      try{
-        const res=await fetch('/api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({token:(window.OMBRE_TOKEN||''), text, moods:Object.keys(EMO)})});
-        const data=await res.json();
-        let ok=false;
-        if(data&&data.mood){ setMood(data.mood); ok=true; }
-        if(data&&data.note){ addDiaryEntry('【今日】'+data.note); ok=true; }
-        if(typeof renderCal==='function') renderCal();
-        btn.textContent = ok ? '✓ 今天收好了' : '没能收尾，等下再试';
-      }catch(e){ btn.textContent='网络卡了，再试一次'; }
-      setTimeout(()=>{ btn.disabled=false; btn.textContent=old; }, 2600);
-    };
+    const modal=document.getElementById('endoModal'); if(!modal) return;
+    if(topStatus) topStatus.onclick=()=>{ renderEndoPanel(); modal.classList.add('show'); };
+    const cl=document.getElementById('endoClose'); if(cl) cl.onclick=()=>modal.classList.remove('show');
+    modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
+    // 开页先把他当前的身体状态捞回来（顺带恢复拉窗帘/发光）
+    fetch('/api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
+      .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined') applyEndocrine(st); }).catch(()=>{});
   })();
   // 日记/日历 收起+展开（默认收起，先看「我记下的」）
   (function(){

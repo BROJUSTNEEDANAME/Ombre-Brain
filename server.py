@@ -2326,6 +2326,21 @@ async def api_chat(request):
         return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
 
 
+@mcp.custom_route("/api/endocrine", methods=["GET"])
+async def api_endocrine(request):
+    """网页开页时读他当前的内分泌/精力值状态（顶栏情绪面板 + 恢复拉窗帘/发光用）。"""
+    from starlette.responses import JSONResponse
+    import os
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if token_env and request.query_params.get("token", "") != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        import endocrine
+        return JSONResponse(endocrine.state())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)[:100]}, status_code=500)
+
+
 @mcp.custom_route("/api/daysummary", methods=["POST"])
 async def api_daysummary(request):
     """把今天的对话收成：一个心情词(从传入列表里挑) + 一句当天日记。写进情绪日历用。
