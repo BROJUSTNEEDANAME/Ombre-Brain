@@ -1364,10 +1364,31 @@ async def api_tools_schema(request):
     return JSONResponse({"tools": _TOOLS_SCHEMA})
 
 
+def _sensitive_gate(request) -> bool:
+    """敏感接口守门：本机直连(telegram/本地脚本,不经 Caddy = 无 X-Forwarded-For)放行；
+    公网(经 Caddy 一定带 X-Forwarded-For)必须带 有效登录cookie 或 web token。
+    系统完全没上锁(既没设 OMBRE_HOME_PASSWORD 也没设 OMBRE_WEB_TOKEN)时保持开放,不突然锁死。"""
+    import os
+    if not request.headers.get("x-forwarded-for"):
+        return True
+    home_pw = os.environ.get("OMBRE_HOME_PASSWORD", "").strip()
+    tok_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if not home_pw and not tok_env:
+        return True
+    if home_pw and request.cookies.get("home_auth", "") == home_pw:
+        return True
+    if tok_env and request.query_params.get("token", "") == tok_env:
+        return True
+    return False
+
+
 @mcp.custom_route("/api/tools/{tool_name}", methods=["POST"])
 async def api_tools_call(request):
     """通用工具调用入口：POST /api/tools/<name> + JSON body = 参数。
     返回 {"result": "工具输出文本"}。"""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     tool_name = request.path_params.get("tool_name", "")
     fn = _TOOL_DISPATCH.get(tool_name)
@@ -1415,6 +1436,9 @@ async def api_page_view(request):
 @mcp.custom_route("/api/buckets", methods=["GET"])
 async def api_buckets(request):
     """List all buckets with metadata (no content for efficiency)."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=True)
@@ -1449,6 +1473,9 @@ async def api_buckets(request):
 @mcp.custom_route("/api/bucket/{bucket_id}", methods=["GET"])
 async def api_bucket_detail(request):
     """Get full bucket content by ID."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     bucket_id = request.path_params["bucket_id"]
     bucket = await bucket_mgr.get(bucket_id)
@@ -1466,6 +1493,9 @@ async def api_bucket_detail(request):
 @mcp.custom_route("/api/search", methods=["GET"])
 async def api_search(request):
     """Search buckets by query."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     query = request.query_params.get("q", "")
     if not query:
@@ -1492,6 +1522,9 @@ async def api_search(request):
 @mcp.custom_route("/api/network", methods=["GET"])
 async def api_network(request):
     """Get embedding similarity network for visualization."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
@@ -2757,6 +2790,9 @@ async def api_memory_restore(request):
 @mcp.custom_route("/api/config", methods=["GET"])
 async def api_config_get(request):
     """Get current runtime config (safe fields only, API key masked)."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     dehy = config.get("dehydration", {})
     emb = config.get("embedding", {})
@@ -2783,6 +2819,9 @@ async def api_config_get(request):
 @mcp.custom_route("/api/config", methods=["POST"])
 async def api_config_update(request):
     """Hot-update runtime config. Optionally persist to config.yaml."""
+    from starlette.responses import JSONResponse as _JR403
+    if not _sensitive_gate(request):
+        return _JR403({"error": "unauthorized"}, status_code=403)
     from starlette.responses import JSONResponse
     import yaml
     try:

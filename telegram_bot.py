@@ -172,6 +172,9 @@ BRAIN_TOOLS = [
 async def _call_brain_tool(name: str, args: dict) -> str:
     """通过 REST API 调用本地大脑工具。"""
     url = OMBRE_MCP_URL.replace("/mcp", "") + f"/api/tools/{name}"
+    _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()  # 走公网时带上,本机直连可留空
+    if _wt:
+        url += f"?token={_wt}"
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, json=args)
         data = resp.json()
