@@ -175,6 +175,10 @@
   .bimg { display: block; max-width: 220px; max-height: 280px; width: auto; border-radius: 15px; object-fit: cover; }
   .bubble.has-img .btxt { padding: 6px 10px 3px; }
   .time { font-size: 10px; color: var(--text-faint); margin: 4px 5px 0; letter-spacing: .5px; }
+  /* 仿 Telegram：时间在气泡右下角，字绕着排，不在外面占一行 */
+  .bubble .tin { float: right; font-size: 9.5px; color: var(--text-faint); margin: 9px 0 0 8px; letter-spacing: .4px; user-select: none; }
+  .bubble.has-img { position: relative; }
+  .bubble.has-img .tin { position: absolute; right: 8px; bottom: 6px; margin: 0; background: rgba(0,0,0,.35); color: #fff; padding: 1px 6px; border-radius: 8px; }
   /* 记忆折叠：他这条话背后读/存的记忆，默认缩着，点开看 */
   .mem-toggle { align-self: flex-start; font-size: 11px; color: var(--text-dim); margin: 3px 5px 0; cursor: pointer; user-select: none; opacity: .7; letter-spacing: .3px; }
   .mem-toggle:active { opacity: 1; }
@@ -1332,10 +1336,12 @@
     if(side==='sys'){ const d=document.createElement('div'); d.className='sysnote'; d.textContent=text; scroll.appendChild(d); toBottom(); return; }
     if(!(text&&(''+text).trim()) && !img) return;   // 空气泡（没文字也没图）不渲染
     const row=document.createElement('div'); row.className='row '+side;
-    row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div><div class="time">'+(t||now())+'</div></div>';
+    row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div></div>';
     const bub=row.querySelector('.bubble'), wrap=row.querySelector('.bubble-wrap');
     if(img){ bub.classList.add('has-img'); const im=document.createElement('img'); im.className='bimg'; im.src=img; im.onload=toBottom; bub.appendChild(im); }
     if(text){ const sp=document.createElement('div'); sp.className='btxt'; sp.textContent=text; bub.appendChild(sp); }
+    // 仿 Telegram：时间收进气泡右下角，不再在气泡外面占一行
+    const tin=document.createElement('span'); tin.className='tin'; tin.textContent=(t||now()); bub.appendChild(tin);
     // 记忆折叠：他这条话背后读/存的记忆或内心，默认缩着，点开看
     if(side==='you' && think){
       const tg=document.createElement('div'); tg.className='mem-toggle'; tg.textContent='💭 记忆';
@@ -1353,11 +1359,10 @@
       bub.addEventListener('touchend', cancelLp); bub.addEventListener('touchmove', cancelLp);
       bub.addEventListener('mousedown', startLp); bub.addEventListener('mouseup', cancelLp); bub.addEventListener('mouseleave', cancelLp);
     }
-    // 仿 Telegram 分组：上一条也是同侧的 → 紧贴，且把上一条的时间标藏起来（组内只留最后一条的时间）
+    // 仿 Telegram 分组：上一条也是同侧的 → 紧贴成组（时间已收进各自气泡右下角）
     const prev=scroll.lastElementChild;
     if(prev && prev.classList && prev.classList.contains('row') && prev.classList.contains(side)){
       row.classList.add('grp');
-      const pt=prev.querySelector('.time'); if(pt) pt.style.display='none';
     }
     scroll.appendChild(row); toBottom();
   }
