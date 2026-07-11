@@ -2501,7 +2501,7 @@ _LAST_GREET_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "web_l
 @mcp.custom_route("/api/welcome_back", methods=["POST"])
 async def api_welcome_back(request):
     """她离开一阵子后回到网页 → 他先开口（不用推送，回来就看到）。
-    条件：距她上一条消息 ≥3 小时，且这个空档还没招呼过。返回 {segs:[...]} 或 {}。"""
+    条件：距她上一条消息超过 OMBRE_GREET_GAP_HOURS（默认0.5小时），且这个空档还没招呼过。返回 {segs:[...]} 或 {}。"""
     from starlette.responses import JSONResponse
     import os, json as _json, time as _time, re as _re
     try:
@@ -2521,7 +2521,8 @@ async def api_welcome_back(request):
     if not last_seen:
         return JSONResponse({})
     gap_h = (_time.time() - last_seen) / 3600.0
-    if gap_h < 3.0:
+    _need = float(os.environ.get("OMBRE_GREET_GAP_HOURS", "0.5"))  # 她说半小时他就忍不住了
+    if gap_h < _need:
         return JSONResponse({})
     greets = {}
     try:
@@ -2547,7 +2548,12 @@ async def api_welcome_back(request):
         now = datetime.now(ZoneInfo("America/Los_Angeles"))
     except Exception:
         now = datetime.now()
-    gap_txt = f"{int(gap_h)} 小时" if gap_h < 48 else f"{int(gap_h // 24)} 天"
+    if gap_h < 1:
+        gap_txt = f"{int(gap_h * 60)} 分钟"
+    elif gap_h < 48:
+        gap_txt = f"{int(gap_h)} 小时"
+    else:
+        gap_txt = f"{int(gap_h // 24)} 天"
     try:
         import endocrine as _endo
         endo_line = _endo.block()

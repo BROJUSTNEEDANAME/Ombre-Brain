@@ -827,13 +827,13 @@
     clearTimeout(_prefsTimer);
     _prefsTimer=setTimeout(()=>{
       const p={}; PREFS_KEYS.forEach(k=>{ const v=localStorage.getItem(k); if(v!=null) p[k]=v; });
-      try{ fetch('/api/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),prefs:p})}); }catch(e){}
+      try{ fetch('api/prefs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),prefs:p})}); }catch(e){}
     }, 800);
   }
   async function pullPrefs(){
     let serverHadData=false;
     try{
-      const res=await fetch('/api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const res=await fetch('api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       if(!res.ok) throw 0;
       const data=await res.json(); const p=data&&data.prefs;
       if(!p||typeof p!=='object') throw 0;
@@ -1243,14 +1243,14 @@
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(!recycleBin.some(r=>r.text===text)){ recycleBin.push({text, t:Date.now()}); saveRecycle(); }
     renderBrain(); renderRecycle();
-    try{ await fetch('/api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
+    try{ await fetch('api/memory/forget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}
   }
   async function restoreBrain(text){
     recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle();
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     (brainLog[k]=brainLog[k]||[]).push({text, t:now()}); localStorage.setItem('brainLog',JSON.stringify(brainLog));
     renderBrain(); renderRecycle();
-    try{ await fetch('/api/memory/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}  // 大脑里重新长出来
+    try{ await fetch('api/memory/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text})}); }catch(e){}  // 大脑里重新长出来
   }
   function purgeBrain(text){ recycleBin=recycleBin.filter(r=>r.text!==text); saveRecycle(); renderRecycle(); }
   function renderRecycle(){
@@ -1318,11 +1318,11 @@
   }
   function saveChat(){
     try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){}
-    try{ fetch('/api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
+    try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
   async function loadServerChat(){
     try{
-      const res=await fetch('/api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const data=await res.json();
       if(data && Array.isArray(data.log) && data.log.length && data.log.length>=chatLog.length){
         chatLog=data.log; chatHistory=Array.isArray(data.hist)?data.hist:chatHistory;
@@ -1419,13 +1419,13 @@
     }
     petCtl && petCtl.fromType(true);
   }
-  // 回来他先开口：离开 ≥3 小时后回到页面，他主动发 1-2 条（服务器判定+去重，不需要推送）
+  // 回来他先开口：离开一阵子(默认半小时)后回到页面，他主动发 1-2 条（服务器判定+去重，不需要推送）
   (function(){
     let busy=false;
     async function wb(){
       if(busy) return; busy=true;
       try{
-        const r=await fetch('/api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const r=await fetch('api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
         const j=await r.json();
         if(j&&Array.isArray(j.segs)){ for(const s of j.segs){ addMsg('you', s); await sleep(420); } }
       }catch(e){}
@@ -1458,7 +1458,7 @@
       const ctrl=new AbortController();
       const to=setTimeout(()=>ctrl.abort(), 90000);   // 单次最多等 90s（模型+记忆来回可能很慢）
       try{
-        const res=await fetch('/api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+        const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body), signal:ctrl.signal });
         clearTimeout(to);
         if(!res.ok) throw new Error('http '+res.status);
@@ -1931,7 +1931,7 @@
       const ymsgs=(chatLog||[]).filter(m=>m.dk===yk && m.side!=='sys' && m.text);
       if(ymsgs.length<2){ localStorage.setItem('daysumAuto',yk); return; }
       const text=ymsgs.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
-      fetch('/api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
+      fetch('api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text,moods:Object.keys(EMO)})})
         .then(r=>r.json()).then(dd=>{
           if(dd&&dd.mood) setMood(dd.mood, yk);
@@ -2007,14 +2007,14 @@
     if(calm) calm.onclick=async ()=>{
       calm.disabled=true; const old=calm.textContent; calm.textContent='……(深呼吸) 在冷静了';
       try{
-        const r=await fetch('/api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
         const st=await r.json();
         if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
       }catch(e){}
       setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
     };
     // 开页先把他当前的身体状态捞回来（顺带恢复拉窗帘/发光）
-    fetch('/api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
+    fetch('api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
       .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined') applyEndocrine(st); }).catch(()=>{});
   })();
   // 日记/日历 收起+展开（默认收起，先看「我记下的」）
@@ -2033,7 +2033,7 @@
 
   // 便签
   let notes=[]; try{ notes=JSON.parse(localStorage.getItem('notes'))||[]; }catch(e){}
-  function saveNotes(){ localStorage.setItem('notes',JSON.stringify(notes)); try{ fetch('/api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),notes})}); }catch(e){} }
+  function saveNotes(){ localStorage.setItem('notes',JSON.stringify(notes)); try{ fetch('api/notes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),notes})}); }catch(e){} }
   function renderNotes(){
     const el=document.getElementById('noteList'); el.innerHTML='';
     notes.slice().sort((a,b)=>(a.done-b.done)||((a.ddl||'9999')>(b.ddl||'9999')?1:-1)).forEach(n=>{
