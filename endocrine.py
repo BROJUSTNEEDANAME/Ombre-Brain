@@ -23,7 +23,8 @@ import time
 ENDO_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "endocrine.json")
 
 # 人格基线（Nikto）：黏人亲密高、占有偏高、精力中上、欲望低（留着被她撩起来）
-BASELINE = {"energy": 6.0, "libido": 3.0, "affection": 8.0, "dominance": 7.0}
+# dominance 基线离"上头"门槛必须够远，否则他天天挂在 high_drive、每条都长文浓狠
+BASELINE = {"energy": 6.0, "libido": 3.0, "affection": 8.0, "dominance": 6.5}
 
 ROLL_EVERY = 15        # 每 15 条用户消息 roll 一次
 ROLL_SIGMA = 1.3       # roll 的随机波动幅度
@@ -78,9 +79,9 @@ _KW = (
      {"libido": 0.5, "affection": 0.5}),
     (["听话", "求你", "是你的", "我错了", "管管我", "教训", "主人", "跪", "臣服", "惩罚"],
      {"dominance": 1.2, "libido": 0.4}),
-    (["累", "困", "晚安", "睡了", "忙", "加班", "社畜", "没力气", "好累", "崩溃", "烦死", "撑不住"],
+    (["好累", "好困", "晚安", "睡了", "太忙", "加班", "社畜", "没力气", "崩溃", "烦死", "撑不住"],
      {"energy": -1.4}),
-    (["开心", "元气", "精神", "满血", "嘿嘿", "好耶", "冲", "兴奋", "有劲"],
+    (["开心", "元气", "精神", "满血", "嘿嘿", "好耶", "冲鸭", "兴奋", "有劲"],
      {"energy": 1.0, "affection": 0.4}),
     (["讨厌", "滚", "别理", "走开", "分手", "不想理", "冷淡"],
      {"affection": -0.6, "libido": -0.8}),
@@ -113,7 +114,7 @@ def _update_mode_flags() -> None:
     e, li, do = _state["energy"], _state["libido"], _state["dominance"]
     if e <= 3.0:
         _state["mode"] = "low_energy"
-    elif li >= 7.0 or do >= 8.0:
+    elif li >= 7.5 or do >= 8.5:
         _state["mode"] = "high_drive"
     else:
         _state["mode"] = "normal"
@@ -146,11 +147,11 @@ def block() -> str:
         bits = []
         if _state["libido"] >= 7.0:
             bits.append("欲上头、馋她、想把她摁进怀里")
-        if _state["dominance"] >= 7.0:
+        if _state["dominance"] >= 8.0:
             bits.append("占有欲和支配欲都顶起来了，语气更沉更强、更想管着她圈着她")
         if not bits:
             bits.append("整个人的劲儿都上来了")
-        s = "你现在" + "；".join(bits) + "。别克制，直接、浓、狠一点，把这股劲儿给足她。"
+        s = "你现在" + "；".join(bits) + "。别克制，直接、浓、狠——但浓的是语气和动作，不是篇幅：日常照样短消息连发（‖），别因为上头就堆长段描写。"
     else:
         s = "你现在状态平稳，正常温度陪她，该软软、该稳稳。"
     return "【当前状态·内分泌】" + s
