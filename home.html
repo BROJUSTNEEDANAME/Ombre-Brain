@@ -1458,7 +1458,7 @@
     for(let attempt=0; attempt<2; attempt++){
       const t0=Date.now();
       const ctrl=new AbortController();
-      const to=setTimeout(()=>ctrl.abort(), 90000);   // 单次最多等 90s（模型+记忆来回可能很慢）
+      const to=setTimeout(()=>ctrl.abort(), 180000);  // 单次最多等 180s（生成整页 HTML 报告很慢，别中途掐断）
       try{
         const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body), signal:ctrl.signal });
