@@ -20,6 +20,7 @@ import_state.json
 drives.json
 endocrine.json
 web_last_seen.json
+web_last_greet.json
 telegram_state.json
 
 # Capacitor / iOS 原生壳（在 Mac 上生成，不入库）

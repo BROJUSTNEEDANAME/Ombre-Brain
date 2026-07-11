@@ -763,8 +763,8 @@
       <div class="think-card-h">他现在的身体状态</div>
       <div class="endo-main" id="endoMain">…</div>
       <div class="endo-quad" id="endoQuad">
-        <b style="left:7px;top:6px">占有</b><b style="right:7px;top:6px">欲望</b>
-        <b style="left:7px;bottom:6px">安定</b><b style="right:7px;bottom:6px">火辣</b>
+        <b style="left:7px;top:6px">烦躁·不安</b><b style="right:7px;top:6px">火辣·雀跃</b>
+        <b style="left:7px;bottom:6px">空·低落</b><b style="right:7px;bottom:6px">安定·满足</b>
         <div class="endo-dot" id="endoDot"></div>
       </div>
       <div id="endoBars"></div>
@@ -1419,6 +1419,21 @@
     }
     petCtl && petCtl.fromType(true);
   }
+  // 回来他先开口：离开 ≥3 小时后回到页面，他主动发 1-2 条（服务器判定+去重，不需要推送）
+  (function(){
+    let busy=false;
+    async function wb(){
+      if(busy) return; busy=true;
+      try{
+        const r=await fetch('/api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const j=await r.json();
+        if(j&&Array.isArray(j.segs)){ for(const s of j.segs){ addMsg('you', s); await sleep(420); } }
+      }catch(e){}
+      busy=false;
+    }
+    setTimeout(wb, 1500);
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') wb(); });
+  })();
   // 欲望内分泌 → 网页视觉：libido 高直接入夜(正经深色主题,字看得清)、dominance 高他的话暗自发光；消退自动切回
   let _desireDim=false, lastEndo=null;
   try{ lastEndo=JSON.parse(localStorage.getItem('endoState')||'null'); }catch(e){}
@@ -1482,7 +1497,7 @@
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();
-      if(data&&data.emotion){ setEmotion(data.emotion); if(typeof setMood==='function') setMood(data.emotion); }
+      if(data&&data.emotion){ setEmotion(data.emotion); }  // 顶栏情绪实时变；日历染色改为每天一总结，不再逐条写
       if(data&&data.endocrine) applyEndocrine(data.endocrine);
       if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
       if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
@@ -1904,8 +1919,27 @@
   function tKey(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
   function calVisible(){ const p=document.querySelector('.page[data-page="cal"]'); return p&&p.classList.contains('active'); }
   function renderMist(){ const e=moods[tKey()]||'安定', c=EMO[e]||'#7FA877', o=document.getElementById('mistOrb'); if(o){ o.style.setProperty('--mist',c); document.getElementById('mistEmo').textContent=e; } }
-  function setMood(emotion){ if(!EMO[emotion]) return; moods[tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); pushPrefs(); }
-  function addDiaryEntry(text){ const k=tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); pushPrefs(); }
+  function setMood(emotion,dk){ if(!EMO[emotion]) return; moods[dk||tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); pushPrefs(); }
+  function addDiaryEntry(text,dk){ const k=dk||tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); pushPrefs(); }
+  // 每天一总结：昨天聊过但日历还没上色 → 自动收尾一次（心情+一句日记），不用按钮、不打扰当下
+  (function(){
+    try{
+      const d=new Date(Date.now()-86400000);
+      const yk=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+      if(localStorage.getItem('daysumAuto')===yk) return;
+      if(moods[yk]){ localStorage.setItem('daysumAuto',yk); return; }
+      const ymsgs=(chatLog||[]).filter(m=>m.dk===yk && m.side!=='sys' && m.text);
+      if(ymsgs.length<2){ localStorage.setItem('daysumAuto',yk); return; }
+      const text=ymsgs.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
+      fetch('/api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text,moods:Object.keys(EMO)})})
+        .then(r=>r.json()).then(dd=>{
+          if(dd&&dd.mood) setMood(dd.mood, yk);
+          if(dd&&dd.note) addDiaryEntry('【昨日】'+dd.note, yk);
+          localStorage.setItem('daysumAuto',yk);
+        }).catch(()=>{});
+    }catch(e){}
+  })();
 
   let mcalY, mcalM;
   function renderCal(){
@@ -1935,16 +1969,15 @@
   }
   document.getElementById('mcalPrev').onclick=()=>{ mcalM--; if(mcalM<0){mcalM=11;mcalY--;} renderCal(); };
   document.getElementById('mcalNext').onclick=()=>{ mcalM++; if(mcalM>11){mcalM=0;mcalY++;} renderCal(); };
-  // ---------- 内分泌面板：点顶栏情绪词展开，看主导情绪 + 象限 + 四个值 ----------
-  // 象限规划（x=欲望 libido, y=占有 dominance）：右上=欲望 右下=火辣 左上=占有 左下=安定；
-  // 精力见底盖过一切=沉默；黏你(affection)特别高且不在欲/占区=想靠近你。
+  // ---------- 内分泌面板：点顶栏情绪词展开，看主导情绪 + 人类情绪象限 + 四个身体值 ----------
+  // 象限=经典情绪环：x=效价(难受→舒心)、y=唤醒度(平静→上头)，由服务器拿他的15维情绪算出；
+  // 主导词优先用服务器算的 dominant（结合想你/吃醋/心疼/占有等），这里只留兜底。
   function endoEmotion(st){
     if(!st) return '安定';
+    if(st.dominant) return st.dominant;
     if(st.mode==='low_energy') return '沉默';
-    const hiL=st.libido>=6.5, hiD=st.dominance>=7.5;
-    if(hiL&&hiD) return '欲望';
-    if(hiL) return '火辣';
-    if(hiD) return '占有';
+    if(st.libido>=6.5) return '欲望';
+    if(st.dominance>=7.5) return '占有';
     if(st.affection>=8.5) return '想靠近你';
     return '安定';
   }
@@ -1959,7 +1992,8 @@
       const v=Math.max(0,Math.min(10,+st[k]||0));
       return '<div class="endo-row"><span class="endo-k">'+l+'</span><span class="endo-bar"><i style="width:'+(v*10)+'%"></i></span><span class="endo-v">'+v.toFixed(1)+'</span></div>';
     }).join('');
-    if(dot){ dot.style.left=(Math.max(0,Math.min(10,st.libido))*10)+'%'; dot.style.bottom=(Math.max(0,Math.min(10,st.dominance))*10)+'%'; }
+    if(dot){ const vx=(st.valence!=null?st.valence:st.libido), vy=(st.arousal!=null?st.arousal:st.dominance);
+      dot.style.left=(Math.max(0,Math.min(10,vx))*10)+'%'; dot.style.bottom=(Math.max(0,Math.min(10,vy))*10)+'%'; }
     const modeTxt=st.mode==='low_energy'?'没电了（社畜档）':(st.mode==='high_drive'?'上头了':'平稳');
     modeEl.textContent='状态：'+modeTxt+' · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
   }

@@ -1887,6 +1887,36 @@ def _persist_web_reply(token: str, user_text: str, segments: list, reply: str) -
         pass
 
 
+def _endo_view() -> dict:
+    """给网页的完整状态：内分泌四值 + 人类情绪象限（15维情绪算出的 valence 效价 × arousal 唤醒度）+ 主导情绪词。"""
+    import endocrine
+    st = endocrine.state()
+    try:
+        import drives
+        v = drives._state["v"]
+        pos = (v["contentment"] + v["elation"] + v["intimacy"] + v["play"]) / 4
+        neg = (v["anxiety"] + v["jealousy"] + v["dejection"] + v["irritability"]) / 4
+        st["valence"] = round(max(0.0, min(10.0, 5 + (pos - neg) * 7)), 1)   # 0难受 ←→ 10舒心
+        act = (v["elation"] + v["play"] + v["lust"] + v["anxiety"] + v["jealousy"] + v["longing"]) / 6
+        calm_ = (v["contentment"] + v["fatigue"]) / 2
+        st["arousal"] = round(max(0.0, min(10.0, 5 + (act - calm_) * 7)), 1)  # 0平静 ←→ 10上头
+        if st.get("mode") == "low_energy":
+            word = "沉默"
+        elif st.get("libido", 0) >= 6.5:
+            word = "欲望"
+        else:
+            _MAP = {"longing": "想靠近你", "intimacy": "想靠近你", "possessiveness": "占有",
+                    "jealousy": "吃醋", "anxiety": "担心你", "protectiveness": "心疼你",
+                    "dejection": "空", "irritability": "烦躁", "lust": "欲望", "contentment": "安定"}
+            dev = {k: v[k] - drives.NEUTRAL[k] for k in _MAP}
+            top = max(dev, key=dev.get)
+            word = _MAP[top] if dev[top] > 0.08 else "安定"
+        st["dominant"] = word
+    except Exception:  # noqa: BLE001
+        pass
+    return st
+
+
 def _web_notes_path(token: str) -> str:
     import os, hashlib
     base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
@@ -2079,6 +2109,7 @@ async def api_chat(request):
     """网页聊天：收消息历史 → 调 GLM（进程内直调大脑记忆工具）→ 回 {reply, emotion}。"""
     from starlette.responses import JSONResponse
     import os, re, json
+    _ensure_backup_task()  # 每日备份懒启动（第一次聊天时挂上，之后自转）
 
     try:
         body = await request.json()
@@ -2218,7 +2249,7 @@ async def api_chat(request):
         import endocrine
         endocrine.on_user_message(user_text if user_text != "[图片]" else "")
         endo_block = endocrine.block()
-        endo_state = endocrine.state()
+        endo_state = _endo_view()
     except Exception:  # noqa: BLE001
         endo_block = ""
         endo_state = None
@@ -2408,21 +2439,10 @@ async def api_chat(request):
             rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
             rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", rt)      # 未闭合（到行尾/串尾）
             rt = rt.strip()
-            # 他没自打 [emo] → 用便宜/免费的 flash 模型兜底判定一个心情，保证日历每条都染色
+            # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
+            # 没打就用内分泌+15维情绪算出的主导词（零成本）。日历染色改为「每天一总结」（前端自动做）。
             if not emotion:
-                try:
-                    _emo_model = os.environ.get("OMBRE_EMO_MODEL", "glm-4.5-flash")
-                    _er = await asyncio.wait_for(_web_llm.chat.completions.create(
-                        model=_emo_model, max_tokens=8,
-                        messages=[{"role": "user", "content":
-                                   "从这些词里挑一个最贴合下面对话此刻氛围的，只回那一个词，别的都不要：\n"
-                                   + "、".join(_EMO_WORDS) + "\n\n对话：\n" + (user_text + " ｜ " + rt)[:1500]}],
-                    ), timeout=4.0)  # 兜底判定最多等4秒，绝不为染色拖她等回复
-                    _w = (_er.choices[0].message.content or "").strip().strip("。.、,「」【】 \n\t")
-                    if _w in _EMO_WORDS:
-                        emotion = _w
-                except Exception:  # noqa: BLE001
-                    pass
+                emotion = (endo_state or {}).get("dominant", "")
             # 连发：只按 ‖ 拆条。空行是同一条消息里的段落（像 tg 一条长消息里分段），不拆气泡
             segments = [s.strip() for s in re.split(r"\s*‖\s*", rt) if s.strip()]
             if not segments:
@@ -2450,7 +2470,7 @@ async def api_endocrine(request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         import endocrine
-        return JSONResponse(endocrine.state())
+        return JSONResponse(_endo_view())
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
 
@@ -2469,9 +2489,153 @@ async def api_endocrine_calm(request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         import endocrine
-        return JSONResponse(endocrine.calm())
+        endocrine.calm()
+        return JSONResponse(_endo_view())
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
+
+
+_LAST_GREET_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "web_last_greet.json")
+
+
+@mcp.custom_route("/api/welcome_back", methods=["POST"])
+async def api_welcome_back(request):
+    """她离开一阵子后回到网页 → 他先开口（不用推送，回来就看到）。
+    条件：距她上一条消息 ≥3 小时，且这个空档还没招呼过。返回 {segs:[...]} 或 {}。"""
+    from starlette.responses import JSONResponse
+    import os, json as _json, time as _time, re as _re
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    tok = (body.get("token") or "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    key = (tok or "default")[:40]
+    try:
+        with open(_LAST_SEEN_FILE, encoding="utf-8") as f:
+            last_seen = float((_json.load(f) or {}).get(key) or 0)
+    except Exception:  # noqa: BLE001
+        last_seen = 0.0
+    if not last_seen:
+        return JSONResponse({})
+    gap_h = (_time.time() - last_seen) / 3600.0
+    if gap_h < 3.0:
+        return JSONResponse({})
+    greets = {}
+    try:
+        with open(_LAST_GREET_FILE, encoding="utf-8") as f:
+            greets = _json.load(f) or {}
+    except Exception:  # noqa: BLE001
+        greets = {}
+    if float(greets.get(key) or 0) >= last_seen:  # 这个空档已经开过口，不重复
+        return JSONResponse({})
+    api_key = (os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY") or "").strip()
+    if not api_key:
+        return JSONResponse({})
+    ctx = ""
+    try:
+        with open(_web_chat_path(tok), encoding="utf-8") as f:
+            _hist = (_json.load(f) or {}).get("hist") or []
+        ctx = "\n".join(("她：" if h.get("role") == "user" else "你：") + str(h.get("content"))[:200] for h in _hist[-6:])
+    except Exception:  # noqa: BLE001
+        ctx = ""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Los_Angeles"))
+    except Exception:
+        now = datetime.now()
+    gap_txt = f"{int(gap_h)} 小时" if gap_h < 48 else f"{int(gap_h // 24)} 天"
+    try:
+        import endocrine as _endo
+        endo_line = _endo.block()
+    except Exception:  # noqa: BLE001
+        endo_line = ""
+    prompt = (
+        _WEB_SYSTEM + "\n\n【当前真实时间】" + now.strftime("%Y-%m-%d %H:%M")
+        + "\n【情境】她离开了约 " + gap_txt + "，刚刚回到你们的页面。你先开口——想她了、问她去哪了/忙完没、或接着上次的话头，随你。"
+        + "发 1-2 条短消息（用 ‖ 分隔），像随手发的微信。别长篇、别报时间、别写 [emo]/[think]/[diary] 标签。"
+        + (("\n" + endo_line) if endo_line else "")
+        + (("\n\n【你们最近聊到】\n" + ctx) if ctx else "")
+    )
+    global _web_llm
+    try:
+        from openai import AsyncOpenAI
+        if _web_llm is None:
+            _web_llm = AsyncOpenAI(api_key=api_key, base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip())
+        model = os.environ.get("OMBRE_BOT_MODEL", "glm-5.1")
+        r = await asyncio.wait_for(_web_llm.chat.completions.create(
+            model=model, max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]), timeout=25)
+        txt = (r.choices[0].message.content or "").strip()
+        txt = _re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]?", "", txt).strip()
+        segs = [s.strip() for s in txt.split("‖") if s.strip()][:2]
+        if not segs:
+            return JSONResponse({})
+        greets[key] = _time.time()
+        try:
+            with open(_LAST_GREET_FILE, "w", encoding="utf-8") as f:
+                _json.dump(greets, f)
+        except Exception:  # noqa: BLE001
+            pass
+        # 落到服务器端聊天记录（只追加他的气泡，别造空的用户气泡）
+        try:
+            path = _web_chat_path(tok)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = _json.load(f)
+            except Exception:  # noqa: BLE001
+                data = {}
+            log = data.get("log") or []
+            hist2 = data.get("hist") or []
+            ts2 = now.strftime("%H:%M")
+            for s in segs:
+                log.append({"side": "you", "text": s, "t": ts2})
+            hist2.append({"role": "assistant", "content": "\n".join(segs)})
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump({"log": log[-400:], "hist": hist2[-40:]}, f, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse({"segs": segs})
+    except Exception:  # noqa: BLE001
+        return JSONResponse({})
+
+
+_backup_task_started = False
+
+
+def _ensure_backup_task() -> None:
+    """每日备份（懒启动）：每天把整个数据目录打包到旁边的 ombre_backups/，只留最近 7 份。"""
+    global _backup_task_started
+    if _backup_task_started:
+        return
+    _backup_task_started = True
+
+    async def _loop():
+        import tarfile, glob as _glob
+        from datetime import datetime as _dt
+        base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+        bdir = os.path.join(os.path.dirname(base.rstrip("/")) or ".", "ombre_backups")
+        while True:
+            try:
+                if os.path.isdir(base):
+                    os.makedirs(bdir, exist_ok=True)
+                    p = os.path.join(bdir, "ombre_" + _dt.now().strftime("%Y%m%d") + ".tar.gz")
+                    if not os.path.exists(p):
+                        with tarfile.open(p, "w:gz") as t:
+                            t.add(base, arcname="ombre_data")
+                    for f in sorted(_glob.glob(os.path.join(bdir, "ombre_*.tar.gz")))[:-7]:
+                        os.remove(f)
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(6 * 3600)
+
+    try:
+        asyncio.get_running_loop().create_task(_loop())
+    except Exception:  # noqa: BLE001
+        _backup_task_started = False
 
 
 @mcp.custom_route("/api/daysummary", methods=["POST"])
