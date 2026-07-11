@@ -1737,7 +1737,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 跟着她的话题走：她换了话题，你就跟过去，别莫名其妙绕回上一个话题、别旧事重提（比如她已经聊到别的，你却又把"jacky"翻出来追问）。回应她"此刻"在说的，而不是你上一条惦记的。
 
-连发（像真人发微信）：你可以把话拆成几条短消息连着发，每条之间用一个 ‖ 隔开。该连发就连发——比如先应一声、再接正事；或一个念头分两口说；或她说了好几件事你一件一件回。每条都像随手发的。但别硬凑，一句能说清就一句，不必每次都连发。连发是为了更像活人、更黏她，不是用来把话切得更短更冷。
+连发（像真人发微信）：你可以把话拆成几条短消息连着发，每条之间用一个 ‖ 隔开。该连发就连发——比如先应一声、再接正事；或一个念头分两口说；或她说了好几件事你一件一件回。每条都像随手发的。但别硬凑，一句能说清就一句，不必每次都连发。连发是为了更像活人、更黏她，不是用来把话切得更短更冷。注意：同一条消息里想分段，直接空行就行（会显示在同一个气泡里，像一条长消息）；只有真的想分成几条发出去时才用 ‖。
 
 分段消息：闪闪有时把一件事分几段发，系统已经把这几段合成一条（用换行分隔）给你了。当成一整件事来理解和回应，别逐段拆开回。
 
@@ -2292,7 +2292,7 @@ async def api_chat(request):
         mem_block = ""
         if user_text and user_text != "[图片]":
             try:
-                _m = await breath(query=user_text, max_tokens=1500, max_results=6)
+                _m = await asyncio.wait_for(breath(query=user_text, max_tokens=1500, max_results=6), timeout=2.5)
                 if _m and _m.strip():
                     mem_block = "【记忆·可能相关的过往（内化进当下，别生硬复述）】\n" + _m.strip()[:4000]
             except Exception:  # noqa: BLE001
@@ -2410,19 +2410,19 @@ async def api_chat(request):
             if not emotion:
                 try:
                     _emo_model = os.environ.get("OMBRE_EMO_MODEL", "glm-4.5-flash")
-                    _er = await _web_llm.chat.completions.create(
+                    _er = await asyncio.wait_for(_web_llm.chat.completions.create(
                         model=_emo_model, max_tokens=8,
                         messages=[{"role": "user", "content":
                                    "从这些词里挑一个最贴合下面对话此刻氛围的，只回那一个词，别的都不要：\n"
                                    + "、".join(_EMO_WORDS) + "\n\n对话：\n" + (user_text + " ｜ " + rt)[:1500]}],
-                    )
+                    ), timeout=4.0)  # 兜底判定最多等4秒，绝不为染色拖她等回复
                     _w = (_er.choices[0].message.content or "").strip().strip("。.、,「」【】 \n\t")
                     if _w in _EMO_WORDS:
                         emotion = _w
                 except Exception:  # noqa: BLE001
                     pass
-            # 连发：他可以像发微信那样分几条，用 ‖ 隔开 → 切成多条气泡
-            segments = [s.strip() for s in re.split(r"\s*‖\s*|\n{2,}", rt) if s.strip()]
+            # 连发：只按 ‖ 拆条。空行是同一条消息里的段落（像 tg 一条长消息里分段），不拆气泡
+            segments = [s.strip() for s in re.split(r"\s*‖\s*", rt) if s.strip()]
             if not segments:
                 segments = [rt]
             rt = "\n".join(segments)  # 存上下文/兜底用合并版

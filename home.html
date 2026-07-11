@@ -162,6 +162,7 @@
   @keyframes scuttle { 0%,100%{ transform: translateY(0) rotate(0); } 25%{ transform: translateY(-3px) rotate(-5deg); } 50%{ transform: translateY(0) rotate(0); } 75%{ transform: translateY(-3px) rotate(5deg); } }
   .daysep { text-align: center; font-size: 11px; color: var(--text-faint); margin: 12px 0 8px; letter-spacing: 1px; }
   .row { display: flex; align-items: flex-end; gap: 9px; margin-top: 5px; }
+  .row.grp { margin-top: 2px; }               /* 仿 Telegram：同侧连发的气泡紧贴成组 */
   .row.me { flex-direction: row-reverse; }
   .row .av { width: 32px; height: 32px; border-radius: 50%; flex: 0 0 auto; display: grid; place-items: center; font-size: 15px; box-shadow: var(--sh-soft); }
   .row .av { display: none; }                 /* 仿 Telegram：消息里不放头像，只留气泡（头像只在顶栏） */
@@ -1352,6 +1353,12 @@
       bub.addEventListener('touchend', cancelLp); bub.addEventListener('touchmove', cancelLp);
       bub.addEventListener('mousedown', startLp); bub.addEventListener('mouseup', cancelLp); bub.addEventListener('mouseleave', cancelLp);
     }
+    // 仿 Telegram 分组：上一条也是同侧的 → 紧贴，且把上一条的时间标藏起来（组内只留最后一条的时间）
+    const prev=scroll.lastElementChild;
+    if(prev && prev.classList && prev.classList.contains('row') && prev.classList.contains(side)){
+      row.classList.add('grp');
+      const pt=prev.querySelector('.time'); if(pt) pt.style.display='none';
+    }
     scroll.appendChild(row); toBottom();
   }
   function addMsg(side,text,img,think){ if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
@@ -1401,7 +1408,10 @@
     if(!segs.length) return;                       // 全是重复 → 一句都不发，避免复读
     stopThinking();
     const _think=(data&&data.think)||'';           // 他这轮的内心/记忆，挂到最后一条气泡上，默认缩着
-    segs.forEach((s,i)=>addMsg('you', s, null, i===segs.length-1 ? _think : ''));
+    for(let i=0;i<segs.length;i++){
+      if(i>0) await sleep(300+Math.min(segs[i].length*14, 800));   // 条与条之间小停顿，像他在打下一条
+      addMsg('you', segs[i], null, i===segs.length-1 ? _think : '');
+    }
     petCtl && petCtl.fromType(true);
   }
   // 欲望内分泌 → 网页视觉：libido 高直接入夜(正经深色主题,字看得清)、dominance 高他的话暗自发光；消退自动切回
