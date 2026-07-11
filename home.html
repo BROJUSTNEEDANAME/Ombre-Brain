@@ -175,8 +175,8 @@
   .bimg { display: block; max-width: 220px; max-height: 280px; width: auto; border-radius: 15px; object-fit: cover; }
   .bubble.has-img .btxt { padding: 6px 10px 3px; }
   .time { font-size: 10px; color: var(--text-faint); margin: 4px 5px 0; letter-spacing: .5px; }
-  /* 仿 Telegram：时间在气泡右下角，字绕着排，不在外面占一行 */
-  .bubble .tin { float: right; font-size: 9.5px; color: var(--text-faint); margin: 9px 0 0 8px; letter-spacing: .4px; user-select: none; }
+  /* 仿 Telegram：时间嵌在文字流末尾，同行放得下跟在句尾、放不下换行贴右 */
+  .bubble .tin { float: right; font-size: 9.5px; color: var(--text-faint); margin: 7px 0 0 8px; line-height: 1; letter-spacing: .4px; user-select: none; }
   .bubble.has-img { position: relative; }
   .bubble.has-img .tin { position: absolute; right: 8px; bottom: 6px; margin: 0; background: rgba(0,0,0,.35); color: #fff; padding: 1px 6px; border-radius: 8px; }
   /* 记忆折叠：他这条话背后读/存的记忆，默认缩着，点开看 */
@@ -1339,9 +1339,10 @@
     row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div></div>';
     const bub=row.querySelector('.bubble'), wrap=row.querySelector('.bubble-wrap');
     if(img){ bub.classList.add('has-img'); const im=document.createElement('img'); im.className='bimg'; im.src=img; im.onload=toBottom; bub.appendChild(im); }
-    if(text){ const sp=document.createElement('div'); sp.className='btxt'; sp.textContent=text; bub.appendChild(sp); }
-    // 仿 Telegram：时间收进气泡右下角，不再在气泡外面占一行
-    const tin=document.createElement('span'); tin.className='tin'; tin.textContent=(t||now()); bub.appendChild(tin);
+    let sp=null;
+    if(text){ sp=document.createElement('div'); sp.className='btxt'; sp.textContent=text; bub.appendChild(sp); }
+    // 仿 Telegram：时间嵌进文字流末尾——同一行放得下就跟在句尾右侧，放不下才换行贴右（不再隔空行）
+    const tin=document.createElement('span'); tin.className='tin'; tin.textContent=(t||now()); (sp||bub).appendChild(tin);
     // 记忆折叠：他这条话背后读/存的记忆或内心，默认缩着，点开看
     if(side==='you' && think){
       const tg=document.createElement('div'); tg.className='mem-toggle'; tg.textContent='💭 记忆';
