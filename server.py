@@ -1657,7 +1657,7 @@ _HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
   button:active{transform:scale(.97)}
   .err{color:#d98a6a;font-size:12.5px;margin-top:14px;min-height:16px}
 </style></head><body>
-<form class="card" method="GET" action="/home">
+<form class="card" method="GET" action="home">
   <div class="title">家</div>
   <div class="sub">输入暗号进来</div>
   <input type="password" name="key" inputmode="numeric" autofocus placeholder="········" autocomplete="off">
@@ -1685,8 +1685,8 @@ async def home_app(request):
         key = request.query_params.get("key", "")
         if key:
             if key == home_pw:
-                # 暗号对 → 发 cookie（记一年）+ 跳回干净 /home
-                resp = RedirectResponse(url="/home", status_code=303)
+                # 暗号对 → 发 cookie（记一年）+ 跳回干净 home（相对路径，保住 Caddy 密钥前缀）
+                resp = RedirectResponse(url="home", status_code=303)
                 resp.set_cookie("home_auth", home_pw, max_age=31536000,
                                 httponly=True, samesite="lax", secure=True, path="/")
                 return resp

@@ -556,7 +556,7 @@
   <div class="pages">
     <!-- 聊天 -->
     <section class="page active" data-page="chat">
-      <div class="pet" id="pet"><img class="pet-g" id="petImg" src="/clawd/crab-idle.gif" alt=""></div>
+      <div class="pet" id="pet"><img class="pet-g" id="petImg" src="clawd/crab-idle.gif" alt=""></div>
       <div class="chat-scroll" id="chatScroll"><div class="daysep" id="daySep">今天</div></div>
       <div class="thinking" id="thinking">
         <div class="think-bubble"><span class="dots"><i></i><i></i><i></i></span><span id="thinkText">在看你发的字。</span></div>
@@ -1565,7 +1565,7 @@
     const pet=document.getElementById('pet'), img=document.getElementById('petImg'); if(!pet||!img) return null;
     const G={idle:'crab-idle',type:'crab-type',happy:'crab-happy',sleep:'crab-sleep',poke:'crab-poke',mad:'crab-mad',read:'crab-read',groove:'crab-groove'};
     let state='roam', x=6, dir=1, hold=null, lastTouch=Date.now(), taps=[];
-    function show(k){ const s='/clawd/'+G[k]+'.gif'; if(img.getAttribute('src')!==s) img.src=s; }
+    function show(k){ const s='clawd/'+G[k]+'.gif'; if(img.getAttribute('src')!==s) img.src=s; }
     function walk(on){ pet.classList.toggle('walking', on); }   // 碎步一颠一颠
     function roam(){ state='roam'; show('idle'); walk(true); }
     function temp(k,ms){ state='act'; walk(false); show(k); clearTimeout(hold); hold=setTimeout(roam, ms); } // 临时动作，结束回漫步
