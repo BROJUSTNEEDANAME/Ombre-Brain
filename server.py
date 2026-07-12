@@ -2322,6 +2322,7 @@ async def api_chat(request):
     token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if token_env and (body.get("token") or "") != token_env:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
+    thread = body.get("thread", "main") or "main"  # 当前所在的线（IF 线/主线）
 
     api_key = (
         os.environ.get("LLM_API_KEY")
