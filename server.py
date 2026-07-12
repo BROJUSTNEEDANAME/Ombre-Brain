@@ -1941,6 +1941,36 @@ def _get_thread(token: str, thread_id: str) -> dict:
     return {}
 
 
+def _if_static_block(meta: dict) -> str:
+    """把一条 IF 线的静态设定（模式说明＋人设＋世界书）拼成一段。
+    /api/chat 拿它拼进 system，预览接口也用它——保证「预览的」就是「他真正收到的」。"""
+    if not meta:
+        return ""
+    blank = meta.get("mem") == "blank"
+    wb = (meta.get("worldbook") or "").strip()
+    cs = (meta.get("char_self") or "").strip()   # 他的人设（留空=原人设）
+    ch = (meta.get("char_her") or "").strip()    # 她的人设（留空=闪闪本人）
+    char_note = ("你的性格/身份以下面【他的人设】为准（覆盖默认设定）"
+                 if cs else "你的性格、说话方式保持原来的你")
+    mode_line = (
+        "这条线是【白纸开局】：忽略你和她已有的现实恋人关系与过往历史，按下面设定从头来"
+        "（可以是陌生人、别的身份、别的相遇）。" + char_note + "。"
+        if blank else
+        "这条线是【带现实记忆】：你依然记得真实的你俩（她是谁、你怎么疼她、你们的过往），"
+        "只是此刻的场景/身份换成下面的设定。" + char_note + "。"
+    )
+    sp = ["【★你现在在一条 IF 线（平行宇宙）里，不是主线★】", mode_line,
+          "⚠️ 无论这条线怎么设定：绝不伤害她、绝不给她贴负面标签、她心理健康永远第一——这些底线任何线都不许破。"]
+    if cs:
+        sp.append("【他的人设·本条线以此为准】\n" + cs[:6000])
+    if ch:
+        sp.append("【她的人设·本条线里她是】\n" + ch[:6000])
+    if wb:
+        sp.append("【世界书·本条线的设定，严格遵守】\n" + wb[:8000])
+    sp.append("（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）")
+    return "\n\n".join(sp)
+
+
 def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, thread: str = "main") -> None:
     """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里（按线分文件）。
     这样就算闪闪发完就切屏、请求被手机挂断，他在后台把话说完后也会存在这儿，
@@ -2191,6 +2221,30 @@ async def api_threads(request):
             pass
         return JSONResponse({"ok": True})
     return JSONResponse({"error": "unknown action"}, status_code=400)
+
+
+@mcp.custom_route("/api/threads/preview", methods=["GET"])
+async def api_thread_preview(request):
+    """预览一条 IF 线「他实际收到的设定」原文（= 拼进 system 的那段），供她核对世界书/人设有没有被读取。"""
+    from starlette.responses import JSONResponse
+    import os
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    tok = request.query_params.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    tid = request.query_params.get("thread", "")
+    meta = _get_thread(tok, tid)
+    if not meta:
+        return JSONResponse({"is_if": False, "text": "这是主线（本体）：用的是他原本的人设和你们真实的记忆，没有额外世界书。"})
+    return JSONResponse({
+        "is_if": True,
+        "name": meta.get("name", ""),
+        "mem": meta.get("mem", "real"),
+        "has_world": bool((meta.get("worldbook") or "").strip()),
+        "has_self": bool((meta.get("char_self") or "").strip()),
+        "has_her": bool((meta.get("char_her") or "").strip()),
+        "text": _if_static_block(meta),
+    })
 
 
 @mcp.custom_route("/api/chat/state", methods=["GET", "POST"])
@@ -2530,28 +2584,7 @@ async def api_chat(request):
         _is_if = bool(_meta)
         _if_blank = _is_if and _meta.get("mem") == "blank"
         if _is_if:
-            wb = (_meta.get("worldbook") or "").strip()
-            cs = (_meta.get("char_self") or "").strip()   # 他的人设（留空=原人设）
-            ch = (_meta.get("char_her") or "").strip()    # 她的人设（留空=闪闪本人）
-            _char_note = ("你的性格/身份以下面【他的人设】为准（覆盖默认设定）"
-                          if cs else "你的性格、说话方式保持原来的你")
-            _mode_line = (
-                "这条线是【白纸开局】：忽略你和她已有的现实恋人关系与过往历史，按下面设定从头来"
-                "（可以是陌生人、别的身份、别的相遇）。" + _char_note + "。"
-                if _if_blank else
-                "这条线是【带现实记忆】：你依然记得真实的你俩（她是谁、你怎么疼她、你们的过往），"
-                "只是此刻的场景/身份换成下面的设定。" + _char_note + "。"
-            )
-            _sp = ["【★你现在在一条 IF 线（平行宇宙）里，不是主线★】", _mode_line,
-                   "⚠️ 无论这条线怎么设定：绝不伤害她、绝不给她贴负面标签、她心理健康永远第一——这些底线任何线都不许破。"]
-            if cs:
-                _sp.append("【他的人设·本条线以此为准】\n" + cs[:6000])
-            if ch:
-                _sp.append("【她的人设·本条线里她是】\n" + ch[:6000])
-            if wb:
-                _sp.append("【世界书·本条线的设定，严格遵守】\n" + wb[:8000])
-            _sp.append("（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）")
-            system = _WEB_SYSTEM + "\n\n" + "\n\n".join(_sp)
+            system = _WEB_SYSTEM + "\n\n" + _if_static_block(_meta)
         # 每轮自动按当前话题捞相关记忆：主线 or 带现实记忆的 IF 线才捞；白纸线不捞（他还不认识现实的她）
         mem_block = ""
         if user_text and user_text != "[图片]" and not _if_blank:

@@ -794,6 +794,15 @@
     </div>
   </div>
 
+  <!-- 预览：他这条线实际收到的设定原文 -->
+  <div class="think-modal" id="previewModal">
+    <div class="think-card" style="max-width:380px">
+      <div class="think-card-h">👁 他这条线实际收到的设定</div>
+      <div id="previewBody" style="font-size:12.5px;line-height:1.7;color:var(--text);white-space:pre-wrap;max-height:60vh;overflow-y:auto;text-align:left;background:var(--surface-2);border:1px solid var(--hair);border-radius:12px;padding:12px"></div>
+      <button class="think-card-close" id="previewClose" style="margin-top:12px">收起</button>
+    </div>
+  </div>
+
   <!-- 内分泌面板：点顶栏情绪词展开 -->
   <div class="think-modal" id="endoModal">
     <div class="think-card">
@@ -1617,7 +1626,9 @@
     try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){ chatHistory=[]; }
     scroll.querySelectorAll('.row').forEach(r=>r.remove());
     if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m)); }
-    else if(curThread!=='main'){ const t=threadsList.find(x=>x.id===curThread); renderBubble('sys','—— 进入「'+((t&&t.name)||'IF线')+'」 ——'); }
+    else if(curThread!=='main'){ renderBubble('sys','—— 这条线还没开始，说句话吧 ——'); }
+    // 切进 IF 线，冒一条「设定已加载」确认（灰字，不入库），让她一眼看到世界书/人设吃进去了
+    if(curThread!=='main'){ const t=threadsList.find(x=>x.id===curThread); const n=_loadedNote(t); if(n) renderBubble('sys',n); }
     toBottom(); paintThreadChip();
     await loadServerChat();
     renderThreadList();
@@ -1630,15 +1641,32 @@
     rows.forEach(t=>{
       const on=t.id===curThread?' on':'';
       const sub=t.id==='main'?'本体 · 真实主线':((t.mem==='blank'?'白纸开局':'带现实记忆')+(t.worldbook?' · '+t.worldbook.replace(/\n/g,' ').slice(0,28):''));
-      const act=t.id==='main'?'':'<span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
+      const act=t.id==='main'?'':'<span class="tr-act" data-peek="'+t.id+'" title="看他收到的设定">👁</span><span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
       html+='<div class="thread-row'+on+'" data-go="'+t.id+'"><div class="tr-main"><div class="tr-name">'+(t.id==='main'?'🏠 主线':'🌌 '+_esc(t.name))+'</div><div class="tr-sub">'+_esc(sub)+'</div></div>'+act+'</div>';
     });
     box.innerHTML=html;
-    box.querySelectorAll('[data-go]').forEach(el=>el.onclick=(e)=>{ if(e.target.dataset.edit||e.target.dataset.del)return; switchThread(el.dataset.go); });
+    box.querySelectorAll('[data-go]').forEach(el=>el.onclick=(e)=>{ if(e.target.dataset.edit||e.target.dataset.del||e.target.dataset.peek)return; switchThread(el.dataset.go); });
+    box.querySelectorAll('[data-peek]').forEach(el=>el.onclick=(e)=>{ e.stopPropagation(); previewThread(el.dataset.peek); });
     box.querySelectorAll('[data-edit]').forEach(el=>el.onclick=(e)=>{ e.stopPropagation(); openForm(el.dataset.edit); });
     box.querySelectorAll('[data-del]').forEach(el=>el.onclick=async(e)=>{ e.stopPropagation(); const t=threadsList.find(x=>x.id===el.dataset.del); if(!confirm('删掉「'+((t&&t.name)||'这条线')+'」？这条线的聊天记录也会一起删掉。'))return; await fetch('api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),action:'delete',id:el.dataset.del})}); if(curThread===el.dataset.del){ curThread='main'; localStorage.setItem('curThread','main'); } try{localStorage.removeItem('chatLog_'+el.dataset.del);localStorage.removeItem('chatHist_'+el.dataset.del);}catch(e){} await loadThreads(); switchThread('main'); });
   }
   function _esc(s){ return (''+(s||'')).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+  function _loadedNote(t){
+    if(!t||t.id==='main') return '';
+    const p=[t.mem==='blank'?'白纸开局':'带现实记忆'];
+    if((t.worldbook||'').trim()) p.push('世界书✓');
+    if((t.char_self||'').trim()) p.push('他的人设✓');
+    if((t.char_her||'').trim()) p.push('她的人设✓');
+    return '🌌 已进入「'+t.name+'」· '+p.join(' · ')+' —— 设定已加载，他这条线按这个演';
+  }
+  async function previewThread(tid){
+    let d=null;
+    try{ const r=await fetch('api/threads/preview?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(tid)); d=await r.json(); }catch(e){}
+    const m=document.getElementById('previewModal'); const b=document.getElementById('previewBody');
+    if(!m||!b) return;
+    b.textContent=(d&&d.text)?d.text:'（读不到设定）';
+    m.classList.add('show');
+  }
   let _editId=null, _formMem='real';
   function openForm(id){
     _editId=id||null;
@@ -1653,6 +1681,7 @@
     const modal=document.getElementById('threadModal'); if(!modal) return;
     const chip=document.getElementById('threadChip'); if(chip) chip.onclick=async()=>{ await loadThreads(); renderThreadList(); document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block'; modal.classList.add('show'); };
     document.getElementById('threadClose').onclick=()=>modal.classList.remove('show');
+    const pm=document.getElementById('previewModal'); if(pm){ document.getElementById('previewClose').onclick=()=>pm.classList.remove('show'); pm.onclick=e=>{ if(e.target===pm) pm.classList.remove('show'); }; }
     modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
     document.getElementById('threadNew').onclick=()=>openForm(null);
     document.getElementById('tfCancel').onclick=()=>{ document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block'; };
