@@ -203,6 +203,15 @@
   .endo-bar i { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent-warm), var(--accent)); transition: width .5s ease; }
   .endo-v { font-size: 12px; color: var(--text-dim); flex: 0 0 2.4em; text-align: right; font-variant-numeric: tabular-nums; }
   .endo-mode { text-align: center; font-size: 11.5px; color: var(--text-faint); margin-top: 10px; letter-spacing: .3px; }
+  /* 线列表 */
+  .thread-row { display: flex; align-items: center; gap: 8px; padding: 11px 12px; border: 1px solid var(--hair); border-radius: 13px; margin: 7px 0; cursor: pointer; transition: .15s; text-align: left; }
+  .thread-row.on { border-color: var(--accent); background: var(--accent-soft); }
+  .thread-row .tr-main { flex: 1; min-width: 0; }
+  .thread-row .tr-name { font-size: 14.5px; color: var(--text); font-weight: 500; }
+  .thread-row .tr-sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thread-row .tr-act { flex: 0 0 auto; font-size: 13px; color: var(--text-faint); padding: 4px 6px; border-radius: 8px; }
+  .thread-row .tr-act:active { background: var(--surface-2); }
+  .tf-mem { flex: 1; }
   /* 回忆空间：收藏的话，他的 / 我的 分开 */
   .memspace .mem-hint { font-size: 12px; color: var(--text-faint); margin: 4px 0 12px; line-height: 1.5; }
   .memspace .mem-col { margin-top: 12px; }
@@ -539,7 +548,7 @@
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav</div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="modelChip" title="切换模型 GLM 5.1 / GLM 4.6">GLM 5.1</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span><span class="model-chip" id="modelChip" title="切换模型 GLM 5.1 / GLM 4.6">GLM 5.1</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
     </div>
     <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
   </div>
@@ -755,6 +764,30 @@
       <div class="think-card-h">他没说出口的</div>
       <div class="think-card-body" id="thinkBody"></div>
       <button class="think-card-close" id="thinkClose">收起</button>
+    </div>
+  </div>
+
+  <!-- 线（IF 平行宇宙）面板 -->
+  <div class="think-modal" id="threadModal">
+    <div class="think-card" style="max-width:360px">
+      <div class="think-card-h">🌌 平行宇宙 · 你俩的线</div>
+      <div id="threadList"></div>
+      <button class="think-card-close" id="threadNew" style="margin-top:12px;border-color:var(--accent);color:var(--accent)">＋ 开一条新线</button>
+      <!-- 新建/编辑表单 -->
+      <div id="threadForm" style="display:none;margin-top:12px;text-align:left">
+        <input id="tfName" placeholder="线的名字（如：海盗AU / 校园线）" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:14px;margin-bottom:8px">
+        <textarea id="tfWorld" placeholder="世界书：这条线里你俩是什么身份、什么背景、什么规矩……（可留空，之后再补）" rows="5" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
+        <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:6px">进这条线，他记得现实里的你俩吗？</div>
+        <div class="skin-theme" style="margin-bottom:10px">
+          <button type="button" class="tf-mem on" data-mem="real">带现实记忆</button>
+          <button type="button" class="tf-mem" data-mem="blank">白纸开局</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="think-card-close" id="tfSave" style="flex:1;border-color:var(--accent);color:var(--accent);margin:0">保存</button>
+          <button class="think-card-close" id="tfCancel" style="flex:1;margin:0">取消</button>
+        </div>
+      </div>
+      <button class="think-card-close" id="threadClose" style="margin-top:10px">收起</button>
     </div>
   </div>
 
@@ -1278,8 +1311,13 @@
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
-  // 聊天记录持久化：关掉重开也在
-  let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem('chatLog'))||[]; }catch(e){}
+  // 线（IF 平行宇宙）：当前所在的线；主线=main 用原 localStorage 键（本体历史不动），IF 线用带 id 的键
+  let curThread=localStorage.getItem('curThread')||'main';
+  let threadsList=[];
+  function _lsChat(){ return curThread==='main'?'chatLog':'chatLog_'+curThread; }
+  function _lsHist(){ return curThread==='main'?'chatHist':'chatHist_'+curThread; }
+  // 聊天记录持久化：关掉重开也在（按当前线取）
+  let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){}
   // 收藏：长按气泡收藏某句话，存服务器(favs 已在同步键里)，可在「收藏」里回味
   let favs=[]; try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
   function favKey(m){ return (m.t||'')+'|'+(m.text||''); }
@@ -1318,8 +1356,8 @@
     }
   }
   function saveChat(){
-    try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){}
-    try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
+    try{ localStorage.setItem(_lsChat(), JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(), JSON.stringify(chatHistory.slice(-40))); }catch(e){}
+    try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
   function _msgKey(m){ return (m.dk||'')+'|'+(m.side||'')+'|'+(m.t||'')+'|'+((m.text||'')+'').slice(0,60); }
   function _msgTime(m){ try{ const [y,mo,d]=(m.dk||'1970-1-1').split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
@@ -1331,7 +1369,7 @@
   }
   async function loadServerChat(){
     try{
-      const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(curThread));
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
       // 合并本地+服务器，绝不用一方整个盖掉另一方（防多设备切换丢消息）
@@ -1339,11 +1377,11 @@
       if(merged.length!==chatLog.length || srv.length){
         chatLog=merged;
         if(Array.isArray(data.hist) && data.hist.length>=(chatHistory||[]).length) chatHistory=data.hist;
-        try{ localStorage.setItem('chatLog',JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist',JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
+        try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
         // 合并后把并集回推服务器,让两边最终一致
-        try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40)})}); }catch(e){}
+        try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40)})}); }catch(e){}
       }
     }catch(e){}
   }
@@ -1391,7 +1429,7 @@
     petCtl && petCtl.toType();          // 我在回话时它坐到小终端前打字
   }
   function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petCtl && petCtl.fromType(false); }
-  let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem('chatHist'))||[]; }catch(e){} // 上下文，持久化
+  let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){} // 上下文，持久化（按当前线）
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
   function send(){
@@ -1507,7 +1545,7 @@
     startThinking();
     const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
     try{
-      const data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), model:chatModel });
+      const data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel });
       const reply=(data&&data.reply)||'（……）';
       await showReply(data);
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
@@ -1558,9 +1596,75 @@
   });
   input.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
 
+  // ---------- 线（IF 平行宇宙）交互 ----------
+  function _threadName(){ if(curThread==='main')return '主线'; const t=threadsList.find(x=>x.id===curThread); return t?t.name:'主线'; }
+  function paintThreadChip(){ const c=document.getElementById('threadChip'); if(c) c.textContent='🌌 '+_threadName(); }
+  async function loadThreads(){ try{ const r=await fetch('api/threads?token='+encodeURIComponent(window.OMBRE_TOKEN||'')); const d=await r.json(); threadsList=Array.isArray(d.threads)?d.threads:[]; }catch(e){ threadsList=[]; } paintThreadChip(); }
+  async function switchThread(tid){
+    if(tid===curThread){ document.getElementById('threadModal').classList.remove('show'); return; }
+    saveChat();
+    curThread=tid; localStorage.setItem('curThread',tid);
+    try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){ chatLog=[]; }
+    try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){ chatHistory=[]; }
+    scroll.querySelectorAll('.row').forEach(r=>r.remove());
+    if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m)); }
+    else if(curThread!=='main'){ const t=threadsList.find(x=>x.id===curThread); renderBubble('sys','—— 进入「'+((t&&t.name)||'IF线')+'」 ——'); }
+    toBottom(); paintThreadChip();
+    await loadServerChat();
+    renderThreadList();
+    document.getElementById('threadModal').classList.remove('show');
+  }
+  function renderThreadList(){
+    const box=document.getElementById('threadList'); if(!box) return;
+    let html='';
+    const rows=[{id:'main',name:'主线',worldbook:'你俩真实的关系。记忆写这儿。',mem:''}].concat(threadsList);
+    rows.forEach(t=>{
+      const on=t.id===curThread?' on':'';
+      const sub=t.id==='main'?'本体 · 真实主线':((t.mem==='blank'?'白纸开局':'带现实记忆')+(t.worldbook?' · '+t.worldbook.replace(/\n/g,' ').slice(0,28):''));
+      const act=t.id==='main'?'':'<span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
+      html+='<div class="thread-row'+on+'" data-go="'+t.id+'"><div class="tr-main"><div class="tr-name">'+(t.id==='main'?'🏠 主线':'🌌 '+_esc(t.name))+'</div><div class="tr-sub">'+_esc(sub)+'</div></div>'+act+'</div>';
+    });
+    box.innerHTML=html;
+    box.querySelectorAll('[data-go]').forEach(el=>el.onclick=(e)=>{ if(e.target.dataset.edit||e.target.dataset.del)return; switchThread(el.dataset.go); });
+    box.querySelectorAll('[data-edit]').forEach(el=>el.onclick=(e)=>{ e.stopPropagation(); openForm(el.dataset.edit); });
+    box.querySelectorAll('[data-del]').forEach(el=>el.onclick=async(e)=>{ e.stopPropagation(); const t=threadsList.find(x=>x.id===el.dataset.del); if(!confirm('删掉「'+((t&&t.name)||'这条线')+'」？这条线的聊天记录也会一起删掉。'))return; await fetch('api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),action:'delete',id:el.dataset.del})}); if(curThread===el.dataset.del){ curThread='main'; localStorage.setItem('curThread','main'); } try{localStorage.removeItem('chatLog_'+el.dataset.del);localStorage.removeItem('chatHist_'+el.dataset.del);}catch(e){} await loadThreads(); switchThread('main'); });
+  }
+  function _esc(s){ return (''+(s||'')).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])); }
+  let _editId=null, _formMem='real';
+  function openForm(id){
+    _editId=id||null;
+    const f=document.getElementById('threadForm'); const nm=document.getElementById('tfName'); const wd=document.getElementById('tfWorld');
+    if(id){ const t=threadsList.find(x=>x.id===id)||{}; nm.value=t.name||''; wd.value=t.worldbook||''; _formMem=t.mem==='blank'?'blank':'real'; }
+    else { nm.value=''; wd.value=''; _formMem='real'; }
+    document.querySelectorAll('.tf-mem').forEach(b=>b.classList.toggle('on',b.dataset.mem===_formMem));
+    f.style.display='block'; document.getElementById('threadNew').style.display='none';
+  }
+  (function(){
+    const modal=document.getElementById('threadModal'); if(!modal) return;
+    const chip=document.getElementById('threadChip'); if(chip) chip.onclick=async()=>{ await loadThreads(); renderThreadList(); document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block'; modal.classList.add('show'); };
+    document.getElementById('threadClose').onclick=()=>modal.classList.remove('show');
+    modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
+    document.getElementById('threadNew').onclick=()=>openForm(null);
+    document.getElementById('tfCancel').onclick=()=>{ document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block'; };
+    document.querySelectorAll('.tf-mem').forEach(b=>b.onclick=()=>{ _formMem=b.dataset.mem; document.querySelectorAll('.tf-mem').forEach(x=>x.classList.toggle('on',x===b)); });
+    document.getElementById('tfSave').onclick=async()=>{
+      const name=document.getElementById('tfName').value.trim()||'新的线';
+      const worldbook=document.getElementById('tfWorld').value.trim();
+      const body={token:(window.OMBRE_TOKEN||''),name,worldbook,mem:_formMem};
+      if(_editId){ body.action='update'; body.id=_editId; } else { body.action='create'; }
+      let created=null;
+      try{ const r=await fetch('api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); created=d.thread; }catch(e){}
+      await loadThreads();
+      document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block';
+      if(!_editId && created){ switchThread(created.id); } else { renderThreadList(); }
+    };
+  })();
+
   // 开场：有历史就恢复，没有就打个招呼（招呼不入库）
   if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img)); }
+  else if(curThread!=='main'){ renderBubble('sys','—— 这条线还没开始，说句话吧 ——'); }
   else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
+  loadThreads();
   loadServerChat(); // 从服务器持久盘拉回（重新部署也不丢）
 
   // 你回家时我先开口（home 版的「想你」——代替 Telegram 定时打扰，只在你离开久了、重新打开时出现）

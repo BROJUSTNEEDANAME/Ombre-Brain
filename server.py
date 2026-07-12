@@ -1882,11 +1882,29 @@ def _text_of(content) -> str:
     return str(content or "")
 
 
-def _web_chat_path(token: str) -> str:
-    """网页聊天记录在持久磁盘上的存放路径（按令牌分文件；重新部署不丢）。"""
-    import os, hashlib
+def _web_chat_path(token: str, thread: str = "main") -> str:
+    """网页聊天记录在持久磁盘上的存放路径（按令牌分文件；重新部署不丢）。
+    thread=main → 原文件名（向后兼容，本体历史一动不动）；IF 线 → 追加线 id 后缀。"""
+    import os, hashlib, re
     base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
     d = os.path.join(base, "web_chat")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    thread = (thread or "main").strip()
+    if thread and thread != "main":
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", thread)[:40] or "x"
+        return os.path.join(d, f"{key}__{safe}.json")
+    return os.path.join(d, key + ".json")
+
+
+def _web_threads_path(token: str) -> str:
+    """线注册表：这个令牌名下所有 IF 线的元数据（名字/世界书/记忆模式）。"""
+    import os, hashlib
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+    d = os.path.join(base, "web_threads")
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:
@@ -1895,15 +1913,43 @@ def _web_chat_path(token: str) -> str:
     return os.path.join(d, key + ".json")
 
 
-def _persist_web_reply(token: str, user_text: str, segments: list, reply: str) -> None:
-    """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里。
+def _load_threads(token: str) -> list:
+    import json
+    try:
+        with open(_web_threads_path(token), encoding="utf-8") as f:
+            return json.load(f).get("threads", []) or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _save_threads(token: str, threads: list) -> None:
+    import json
+    try:
+        with open(_web_threads_path(token), "w", encoding="utf-8") as f:
+            json.dump({"threads": threads}, f, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _get_thread(token: str, thread_id: str) -> dict:
+    """按 id 取一条 IF 线的元数据；main 或找不到返回空 dict。"""
+    if not thread_id or thread_id == "main":
+        return {}
+    for t in _load_threads(token):
+        if t.get("id") == thread_id:
+            return t
+    return {}
+
+
+def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, thread: str = "main") -> None:
+    """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里（按线分文件）。
     这样就算闪闪发完就切屏、请求被手机挂断，他在后台把话说完后也会存在这儿，
     她回来一刷新就能看到——不丢、不报错（像 Telegram 那样后台把话留住）。
     客户端正常拿到回复后会用自己的完整记录覆盖，所以不会重复。"""
     import json
     from datetime import datetime
     try:
-        path = _web_chat_path(token)
+        path = _web_chat_path(token, thread)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -2078,6 +2124,68 @@ async def api_notes(request):
     return JSONResponse({"ok": True})
 
 
+@mcp.custom_route("/api/threads", methods=["GET", "POST"])
+async def api_threads(request):
+    """IF 线（平行宇宙）管理。
+    GET ?token= → {threads:[{id,name,worldbook,mem,created}]}
+    POST {token, action:create/update/delete, ...}"""
+    from starlette.responses import JSONResponse
+    import os, json, re, hashlib
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    if request.method == "GET":
+        tok = request.query_params.get("token", "")
+        if token_env and tok != token_env:
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
+        return JSONResponse({"threads": _load_threads(tok)})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    tok = body.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    action = body.get("action", "")
+    threads = _load_threads(tok)
+    if action == "create":
+        name = str(body.get("name") or "新的线").strip()[:40]
+        wb = str(body.get("worldbook") or "").strip()[:8000]
+        mem = "blank" if body.get("mem") == "blank" else "real"
+        # 生成一个短 id
+        import time as _t
+        raw = (name + str(len(threads)) + str(int(_t.time() * 1000))).encode()
+        tid = "if_" + hashlib.sha1(raw).hexdigest()[:8]
+        threads.append({"id": tid, "name": name, "worldbook": wb, "mem": mem,
+                        "created": __import__("time").strftime("%Y-%m-%d")})
+        _save_threads(tok, threads)
+        return JSONResponse({"ok": True, "thread": threads[-1]})
+    if action == "update":
+        tid = body.get("id", "")
+        for t in threads:
+            if t.get("id") == tid:
+                if "name" in body:
+                    t["name"] = str(body.get("name") or t["name"]).strip()[:40]
+                if "worldbook" in body:
+                    t["worldbook"] = str(body.get("worldbook") or "").strip()[:8000]
+                if "mem" in body:
+                    t["mem"] = "blank" if body.get("mem") == "blank" else "real"
+                _save_threads(tok, threads)
+                return JSONResponse({"ok": True, "thread": t})
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if action == "delete":
+        tid = body.get("id", "")
+        threads = [t for t in threads if t.get("id") != tid]
+        _save_threads(tok, threads)
+        # 顺手删这条线的聊天存档
+        try:
+            p = _web_chat_path(tok, tid)
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse({"ok": True})
+    return JSONResponse({"error": "unknown action"}, status_code=400)
+
+
 @mcp.custom_route("/api/chat/state", methods=["GET", "POST"])
 async def api_chat_state(request):
     """聊天记录存读（持久磁盘）。GET ?token= 读；POST {token, log, hist} 存。"""
@@ -2087,10 +2195,11 @@ async def api_chat_state(request):
     token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if request.method == "GET":
         tok = request.query_params.get("token", "")
+        thread = request.query_params.get("thread", "main")
         if token_env and tok != token_env:
             return JSONResponse({"error": "unauthorized"}, status_code=403)
         try:
-            with open(_web_chat_path(tok), "r", encoding="utf-8") as f:
+            with open(_web_chat_path(tok, thread), "r", encoding="utf-8") as f:
                 return JSONResponse(json.load(f))
         except Exception:
             return JSONResponse({"log": [], "hist": []})
@@ -2100,13 +2209,14 @@ async def api_chat_state(request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
     tok = body.get("token", "")
+    thread = body.get("thread", "main")
     if token_env and tok != token_env:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     incoming = body.get("log") or []
     inc_hist = body.get("hist") or []
     # 合并而非覆盖：读出服务器已存的，和这次上传的取并集去重——多设备切换绝不丢消息
     try:
-        with open(_web_chat_path(tok), "r", encoding="utf-8") as f:
+        with open(_web_chat_path(tok, thread), "r", encoding="utf-8") as f:
             _old = json.load(f)
         existing = _old.get("log") or []
         old_hist = _old.get("hist") or []
@@ -2148,7 +2258,7 @@ async def api_chat_state(request):
 
     data = {"log": merged[-400:], "hist": mhist[-40:]}
     try:
-        with open(_web_chat_path(tok), "w", encoding="utf-8") as f:
+        with open(_web_chat_path(tok, thread), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
     except Exception as exc:
         return JSONResponse({"error": str(exc)[:200]}, status_code=500)
@@ -2407,18 +2517,49 @@ async def api_chat(request):
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
         system = _WEB_SYSTEM
-        # 每轮自动按当前话题捞一把相关记忆注入（不再等模型自觉去 breath），根治「聊两句就忘」。
+        # ---- IF 线（平行宇宙）：加载这条线的世界书 + 记忆模式 ----
+        _meta = _get_thread(tok, thread)
+        _is_if = bool(_meta)
+        _if_blank = _is_if and _meta.get("mem") == "blank"
+        if_block = ""
+        if _is_if:
+            wb = (_meta.get("worldbook") or "").strip()
+            _mode_line = (
+                "这条线是【白纸开局】：忽略你和她已有的现实恋人关系与过往历史，按下面世界书从头来"
+                "（可以是陌生人、别的身份、别的相遇）。但你的人不变——性格、说话方式、以及"
+                "绝不伤害她/绝不给她贴负面标签这些底线，永远带着。"
+                if _if_blank else
+                "这条线是【带现实记忆】：你依然记得真实的你俩（她是谁、你怎么疼她、你们的过往），"
+                "只是此刻的场景/身份换成下面世界书的设定。"
+            )
+            if_block = (
+                "【★你现在在一条 IF 线（平行宇宙）里，不是主线★】\n" + _mode_line
+                + (("\n【世界书·本条线的设定，严格遵守】\n" + wb[:8000]) if wb else "")
+                + "\n（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）"
+            )
+        # 每轮自动按当前话题捞相关记忆：主线 or 带现实记忆的 IF 线才捞；白纸线不捞（他还不认识现实的她）
         mem_block = ""
-        if user_text and user_text != "[图片]":
+        if user_text and user_text != "[图片]" and not _if_blank:
             try:
                 _m = await asyncio.wait_for(breath(query=user_text, max_tokens=1500, max_results=6), timeout=2.5)
                 if _m and _m.strip():
                     mem_block = "【记忆·可能相关的过往（内化进当下，别生硬复述）】\n" + _m.strip()[:4000]
             except Exception:  # noqa: BLE001
                 mem_block = ""
-        # 动态上下文块：时间＋情绪＋便签＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system。
+        # 主线「完全知道」你们玩过哪些 IF 线：注入各线概要（他能当一起玩过的戏提起）
+        lines_digest = ""
+        if not _is_if:
+            _ts = _load_threads(tok)
+            if _ts:
+                _parts = []
+                for _tt in _ts[:12]:
+                    _wb1 = (_tt.get("worldbook") or "").replace("\n", " ").strip()[:60]
+                    _parts.append("· " + str(_tt.get("name", ""))[:24] + (("（" + _wb1 + "…）") if _wb1 else ""))
+                lines_digest = ("【你俩一起开过的 IF 线（平行宇宙存档；你都知道、能当一起玩过的戏自然提起，"
+                                "但那些不是主线真发生的事）】\n" + "\n".join(_parts))
+        # 动态上下文块：时间＋情绪＋便签＋(IF线设定)＋(主线的线概要)＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system。
         # 必须裹上显眼的系统标记——否则模型会把这坨当成"她发的东西"，开始否认/犯迷糊（已踩过坑）。
-        _ctx_body = "\n\n".join(b for b in (now_line, drives_block, endo_block, notes_block, mem_block) if b)
+        _ctx_body = "\n\n".join(b for b in (now_line, drives_block, endo_block, notes_block, if_block, lines_digest, mem_block) if b)
         dynamic_ctx = (
             "┏━━ 系统注入（她看不到这段，也不是她说的；只是给你的背景，绝不要回应、复述或提起它）\n"
             + _ctx_body
@@ -2459,11 +2600,17 @@ async def api_chat(request):
                     else:
                         c = dynamic_ctx + "\n\n" + str(c)
                 msgs.append({"role": m["role"], "content": c})
+            # 按线过滤工具：IF 线绝不许写主脑(hold/grow)；白纸线连记忆读取也不给(他不认识现实的她)。make_page 都留。
+            if not _is_if:
+                _active_tools = _TOOLS_SCHEMA
+            else:
+                _drop = {"hold", "grow"} | ({"breath", "read", "pulse", "dream", "trace"} if _if_blank else set())
+                _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
             out = ""
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
-                if use_tools:
-                    kwargs["tools"] = _TOOLS_SCHEMA
+                if use_tools and _active_tools:
+                    kwargs["tools"] = _active_tools
                 resp = await _web_llm.chat.completions.create(**kwargs)
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
@@ -2534,7 +2681,7 @@ async def api_chat(request):
             if not segments:
                 segments = [rt]
             rt = "\n".join(segments)  # 存上下文/兜底用合并版
-            _persist_web_reply(tok, user_text, segments, rt)  # 切屏也不丢
+            _persist_web_reply(tok, user_text, segments, rt, thread)  # 切屏也不丢（按线分文件）
             return {"reply": rt, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
 
         result = await asyncio.shield(_finish())
