@@ -1392,13 +1392,14 @@
       const srv=(data&&Array.isArray(data.log))?data.log:[];
       // 合并本地+服务器，绝不用一方整个盖掉另一方（防多设备切换丢消息）
       const merged=_mergeLogs(chatLog, srv);
-      if(merged.length!==chatLog.length || srv.length){
+      // 只在「真有新消息进来」时才重画一次——否则轮询会每 3 秒把整屏重画，看着像一直在刷新
+      if(merged.length > chatLog.length){
         chatLog=merged;
         if(Array.isArray(data.hist) && data.hist.length>=(chatHistory||[]).length) chatHistory=data.hist;
         try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
-        // 合并后把并集回推服务器,让两边最终一致
+        // 合并后把并集回推服务器,让两边最终一致（只在有变化时推，减少写竞争）
         try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40)})}); }catch(e){}
       }
     }catch(e){}
