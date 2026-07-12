@@ -2699,7 +2699,8 @@ _backup_task_started = False
 
 
 def _ensure_backup_task() -> None:
-    """每日备份（懒启动）：每天把整个数据目录打包到旁边的 ombre_backups/，只留最近 7 份。"""
+    """每小时备份（懒启动）：把整个数据目录打包到旁边的 ombre_backups/，保留最近 36 份（一天半）。
+    这样多设备/意外导致的最坏丢失窗口 = 1 小时，而不是一整天。"""
     global _backup_task_started
     if _backup_task_started:
         return
@@ -2714,15 +2715,17 @@ def _ensure_backup_task() -> None:
             try:
                 if os.path.isdir(base):
                     os.makedirs(bdir, exist_ok=True)
-                    p = os.path.join(bdir, "ombre_" + _dt.now().strftime("%Y%m%d") + ".tar.gz")
+                    # 按 日期_小时 命名 → 每小时一份；同一小时内重启不重复打包
+                    p = os.path.join(bdir, "ombre_" + _dt.now().strftime("%Y%m%d_%H") + ".tar.gz")
                     if not os.path.exists(p):
                         with tarfile.open(p, "w:gz") as t:
                             t.add(base, arcname="ombre_data")
-                    for f in sorted(_glob.glob(os.path.join(bdir, "ombre_*.tar.gz")))[:-7]:
+                    # 保留最近 36 份（含旧的按天命名的也一起排序清理）
+                    for f in sorted(_glob.glob(os.path.join(bdir, "ombre_*.tar.gz")))[:-36]:
                         os.remove(f)
             except Exception:  # noqa: BLE001
                 pass
-            await asyncio.sleep(6 * 3600)
+            await asyncio.sleep(3600)  # 每小时一次
 
     try:
         asyncio.get_running_loop().create_task(_loop())
