@@ -777,7 +777,9 @@
       <!-- 新建/编辑表单 -->
       <div id="threadForm" style="display:none;margin-top:12px;text-align:left">
         <input id="tfName" placeholder="线的名字（如：海盗AU / 校园线）" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:14px;margin-bottom:8px">
-        <textarea id="tfWorld" placeholder="世界书：这条线里你俩是什么身份、什么背景、什么规矩……（可留空，之后再补）" rows="5" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
+        <textarea id="tfWorld" placeholder="世界书：这条线的世界/背景/规矩……（可留空）。写太长不影响速度，会被缓存。" rows="4" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
+        <textarea id="tfCharSelf" placeholder="他的人设（留空＝原来的他）：这条线里他是谁、什么性格/身份" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
+        <textarea id="tfCharHer" placeholder="她的人设（留空＝你自己）：这条线里你是谁、什么身份" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
         <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:6px">进这条线，他记得现实里的你俩吗？</div>
         <div class="skin-theme" style="margin-bottom:10px">
           <button type="button" class="tf-mem on" data-mem="real">带现实记忆</button>
@@ -1641,8 +1643,9 @@
   function openForm(id){
     _editId=id||null;
     const f=document.getElementById('threadForm'); const nm=document.getElementById('tfName'); const wd=document.getElementById('tfWorld');
-    if(id){ const t=threadsList.find(x=>x.id===id)||{}; nm.value=t.name||''; wd.value=t.worldbook||''; _formMem=t.mem==='blank'?'blank':'real'; }
-    else { nm.value=''; wd.value=''; _formMem='real'; }
+    const cs=document.getElementById('tfCharSelf'), cbh=document.getElementById('tfCharHer');
+    if(id){ const t=threadsList.find(x=>x.id===id)||{}; nm.value=t.name||''; wd.value=t.worldbook||''; cs.value=t.char_self||''; cbh.value=t.char_her||''; _formMem=t.mem==='blank'?'blank':'real'; }
+    else { nm.value=''; wd.value=''; cs.value=''; cbh.value=''; _formMem='real'; }
     document.querySelectorAll('.tf-mem').forEach(b=>b.classList.toggle('on',b.dataset.mem===_formMem));
     f.style.display='block'; document.getElementById('threadNew').style.display='none';
   }
@@ -1657,7 +1660,9 @@
     document.getElementById('tfSave').onclick=async()=>{
       const name=document.getElementById('tfName').value.trim()||'新的线';
       const worldbook=document.getElementById('tfWorld').value.trim();
-      const body={token:(window.OMBRE_TOKEN||''),name,worldbook,mem:_formMem};
+      const char_self=document.getElementById('tfCharSelf').value.trim();
+      const char_her=document.getElementById('tfCharHer').value.trim();
+      const body={token:(window.OMBRE_TOKEN||''),name,worldbook,char_self,char_her,mem:_formMem};
       if(_editId){ body.action='update'; body.id=_editId; } else { body.action='create'; }
       let created=null;
       try{ const r=await fetch('api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); created=d.thread; }catch(e){}

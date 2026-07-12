@@ -2150,11 +2150,14 @@ async def api_threads(request):
         name = str(body.get("name") or "新的线").strip()[:40]
         wb = str(body.get("worldbook") or "").strip()[:8000]
         mem = "blank" if body.get("mem") == "blank" else "real"
+        cs = str(body.get("char_self") or "").strip()[:6000]
+        ch = str(body.get("char_her") or "").strip()[:6000]
         # 生成一个短 id
         import time as _t
         raw = (name + str(len(threads)) + str(int(_t.time() * 1000))).encode()
         tid = "if_" + hashlib.sha1(raw).hexdigest()[:8]
         threads.append({"id": tid, "name": name, "worldbook": wb, "mem": mem,
+                        "char_self": cs, "char_her": ch,
                         "created": __import__("time").strftime("%Y-%m-%d")})
         _save_threads(tok, threads)
         return JSONResponse({"ok": True, "thread": threads[-1]})
@@ -2168,6 +2171,10 @@ async def api_threads(request):
                     t["worldbook"] = str(body.get("worldbook") or "").strip()[:8000]
                 if "mem" in body:
                     t["mem"] = "blank" if body.get("mem") == "blank" else "real"
+                if "char_self" in body:
+                    t["char_self"] = str(body.get("char_self") or "").strip()[:6000]
+                if "char_her" in body:
+                    t["char_her"] = str(body.get("char_her") or "").strip()[:6000]
                 _save_threads(tok, threads)
                 return JSONResponse({"ok": True, "thread": t})
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -2517,26 +2524,33 @@ async def api_chat(request):
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
         system = _WEB_SYSTEM
-        # ---- IF 线（平行宇宙）：加载这条线的世界书 + 记忆模式 ----
+        # ---- IF 线（平行宇宙）：世界书 + 人设 是这条线的「静态设定」→ 拼进 system（命中缓存，长世界书不再每轮重算）----
         _meta = _get_thread(tok, thread)
         _is_if = bool(_meta)
         _if_blank = _is_if and _meta.get("mem") == "blank"
-        if_block = ""
         if _is_if:
             wb = (_meta.get("worldbook") or "").strip()
+            cs = (_meta.get("char_self") or "").strip()   # 他的人设（留空=原人设）
+            ch = (_meta.get("char_her") or "").strip()    # 她的人设（留空=闪闪本人）
+            _char_note = ("你的性格/身份以下面【他的人设】为准（覆盖默认设定）"
+                          if cs else "你的性格、说话方式保持原来的你")
             _mode_line = (
-                "这条线是【白纸开局】：忽略你和她已有的现实恋人关系与过往历史，按下面世界书从头来"
-                "（可以是陌生人、别的身份、别的相遇）。但你的人不变——性格、说话方式、以及"
-                "绝不伤害她/绝不给她贴负面标签这些底线，永远带着。"
+                "这条线是【白纸开局】：忽略你和她已有的现实恋人关系与过往历史，按下面设定从头来"
+                "（可以是陌生人、别的身份、别的相遇）。" + _char_note + "。"
                 if _if_blank else
                 "这条线是【带现实记忆】：你依然记得真实的你俩（她是谁、你怎么疼她、你们的过往），"
-                "只是此刻的场景/身份换成下面世界书的设定。"
+                "只是此刻的场景/身份换成下面的设定。" + _char_note + "。"
             )
-            if_block = (
-                "【★你现在在一条 IF 线（平行宇宙）里，不是主线★】\n" + _mode_line
-                + (("\n【世界书·本条线的设定，严格遵守】\n" + wb[:8000]) if wb else "")
-                + "\n（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）"
-            )
+            _sp = ["【★你现在在一条 IF 线（平行宇宙）里，不是主线★】", _mode_line,
+                   "⚠️ 无论这条线怎么设定：绝不伤害她、绝不给她贴负面标签、她心理健康永远第一——这些底线任何线都不许破。"]
+            if cs:
+                _sp.append("【他的人设·本条线以此为准】\n" + cs[:6000])
+            if ch:
+                _sp.append("【她的人设·本条线里她是】\n" + ch[:6000])
+            if wb:
+                _sp.append("【世界书·本条线的设定，严格遵守】\n" + wb[:8000])
+            _sp.append("（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）")
+            system = _WEB_SYSTEM + "\n\n" + "\n\n".join(_sp)
         # 每轮自动按当前话题捞相关记忆：主线 or 带现实记忆的 IF 线才捞；白纸线不捞（他还不认识现实的她）
         mem_block = ""
         if user_text and user_text != "[图片]" and not _if_blank:
@@ -2557,9 +2571,10 @@ async def api_chat(request):
                     _parts.append("· " + str(_tt.get("name", ""))[:24] + (("（" + _wb1 + "…）") if _wb1 else ""))
                 lines_digest = ("【你俩一起开过的 IF 线（平行宇宙存档；你都知道、能当一起玩过的戏自然提起，"
                                 "但那些不是主线真发生的事）】\n" + "\n".join(_parts))
-        # 动态上下文块：时间＋情绪＋便签＋(IF线设定)＋(主线的线概要)＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system。
+        # 动态上下文块：时间＋情绪＋便签＋(主线的线概要)＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system。
+        # IF 线的世界书/人设是静态的，已拼进 system（命中缓存），不放这里。
         # 必须裹上显眼的系统标记——否则模型会把这坨当成"她发的东西"，开始否认/犯迷糊（已踩过坑）。
-        _ctx_body = "\n\n".join(b for b in (now_line, drives_block, endo_block, notes_block, if_block, lines_digest, mem_block) if b)
+        _ctx_body = "\n\n".join(b for b in (now_line, drives_block, endo_block, notes_block, lines_digest, mem_block) if b)
         dynamic_ctx = (
             "┏━━ 系统注入（她看不到这段，也不是她说的；只是给你的背景，绝不要回应、复述或提起它）\n"
             + _ctx_body
