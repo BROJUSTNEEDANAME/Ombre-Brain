@@ -123,6 +123,7 @@
   .who .status { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; letter-spacing: .3px; }
   .think-chip { font-size: 12px; cursor: pointer; opacity: .8; padding: 1px 4px; border-radius: 8px; transition: .15s; }
   .model-chip { font-size: 10.5px; cursor: pointer; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); padding: 1px 7px; border-radius: 9px; letter-spacing: .3px; transition: .15s; flex: 0 0 auto; }
+  .model-chip.nline { vertical-align: middle; margin-left: 10px; font-weight: 400; position: relative; top: -2px; }
   .model-chip:active { transform: scale(.92); }
   .think-chip:active { transform: scale(.88); }
   .think-modal { position: fixed; inset: 0; z-index: 76; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; padding: 30px; }
@@ -547,8 +548,8 @@
     <button class="icon-btn" id="navBtn" title="去别的板块"></button>
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
-      <div class="name" id="topName">Svyatoslav</div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span><span class="model-chip" id="modelChip" title="切换模型 GLM 5.1 / GLM 4.6">GLM 5.1</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
+      <div class="name" id="topName">Svyatoslav<span class="model-chip nline" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
     </div>
     <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
   </div>
@@ -817,6 +818,11 @@
         <button data-th="auto">自动</button>
         <button data-th="light">浅色</button>
         <button data-th="dark">深色</button>
+      </div>
+      <div class="skin-label">模型</div>
+      <div class="skin-theme" id="skinModel">
+        <button data-md="glm-5.1">GLM 5.1</button>
+        <button data-md="glm-4.6">GLM 4.6</button>
       </div>
       <div class="skin-label">预设套装</div>
       <div class="skin-presets" id="skinPresets"></div>
@@ -1239,14 +1245,15 @@
   // 换成 GLM：把 localStorage 里旧的 Claude 模型值清掉，回默认 GLM 5.1
   try{ if(!localStorage.getItem('glmSwitchFix')){ const old=localStorage.getItem('chatModel'); if(old && !MODELS[old]) localStorage.removeItem('chatModel'); localStorage.setItem('glmSwitchFix','1'); } }catch(e){}
   let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='glm-5.1';  // 默认 GLM 5.1；点 header 上的芯片可切 GLM 4.6
-  const modelChip=document.getElementById('modelChip');
-  function paintModel(){ if(modelChip) modelChip.textContent=MODELS[chatModel]; }
+  // 模型切换挪进「外观」面板（顶栏不再放，省地方）
+  function paintModel(){ const box=document.getElementById('skinModel'); if(box) box.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.md===chatModel)); }
   paintModel();
-  if(modelChip) modelChip.onclick=()=>{
-    chatModel = chatModel==='glm-5.1' ? 'glm-4.6' : 'glm-5.1';
-    localStorage.setItem('chatModel',chatModel); paintModel();
-    if(typeof addMsg==='function') addMsg('sys','已切到 '+MODELS[chatModel]);
-  };
+  (function(){ const box=document.getElementById('skinModel'); if(!box) return;
+    box.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      chatModel=b.dataset.md; localStorage.setItem('chatModel',chatModel); paintModel();
+      if(typeof addMsg==='function') addMsg('sys','已切到 '+MODELS[chatModel]);
+    });
+  })();
 
   // 思考链：他没说出口的心里话
   let lastThink=localStorage.getItem('lastThink')||'';
