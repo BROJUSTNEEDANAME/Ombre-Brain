@@ -1543,6 +1543,22 @@
       }
     }
   }
+  // 切屏/刷新回来后，耐心轮询把他在后台写好的回复捞回来——IF线首句要建缓存、生成慢，
+  // 只试一两次会漏，所以持续轮询直到他那条回复真的进来（或超时）。
+  let _recoverTimer=null;
+  function pollForReply(maxMs){
+    clearInterval(_recoverTimer);
+    const start=Date.now(); const before=chatLog.length;
+    startThinking(); if(thinkText) thinkText.textContent='他还在写…';
+    const tick=async()=>{
+      await loadServerChat();
+      const last=chatLog[chatLog.length-1];
+      if(chatLog.length>before && last && last.side==='you'){ clearInterval(_recoverTimer); stopThinking(); return; }
+      if(Date.now()-start>maxMs){ clearInterval(_recoverTimer); stopThinking(); }
+    };
+    _recoverTimer=setInterval(tick, 3000);
+    tick();
+  }
   // 核心：把一条用户消息发给大脑，处理回复。userApiContent 可以是字符串或富内容块数组（图片/文件）；
   // histText 是存进上下文的纯文字占位（图片/文件不存 base64，省 token）。
   let inFlight=false, recoverOnReturn=false, lastHiddenAt=0;
@@ -1551,9 +1567,8 @@
   document.addEventListener('visibilitychange', ()=>{
     if(document.hidden){ lastHiddenAt=Date.now(); }
     else if(recoverOnReturn){
-      recoverOnReturn=false; stopThinking();
-      loadServerChat();                 // 他在后台存好的回复，捞回来
-      setTimeout(loadServerChat, 4000); // 万一服务器还没生成完，过几秒再捞一次
+      recoverOnReturn=false;
+      pollForReply(120000);             // 回前台：耐心轮询最多2分钟，直到他后台写好的回复捞回来
     }
   });
   async function requestReply(userApiContent, histText){
@@ -1580,7 +1595,7 @@
       if(wasBackgrounded){
         // 切屏被挂断：他在后台会把回复存到服务器，别重发，回来捞即可
         if(document.hidden){ recoverOnReturn=true; }     // 还在后台 → 回前台时捞
-        else { loadServerChat(); setTimeout(loadServerChat, 4000); }  // 已回前台 → 直接捞
+        else { pollForReply(120000); }                   // 已回前台 → 耐心轮询直到他写好
       } else {
         addMsg('you','（我这边断了一下，网不好。再说一次。）');     // 真·网络问题才报错
       }
@@ -1706,7 +1721,11 @@
   else if(curThread!=='main'){ renderBubble('sys','—— 这条线还没开始，说句话吧 ——'); }
   else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
   loadThreads();
-  loadServerChat(); // 从服务器持久盘拉回（重新部署也不丢）
+  loadServerChat().then(()=>{
+    // 刷新时若最后一条是「我」发的、还没等到他回复 → 他可能正在后台写（IF线尤其慢），耐心轮询捞回来
+    const last=chatLog[chatLog.length-1];
+    if(last && last.side==='me'){ pollForReply(120000); }
+  });
 
   // 你回家时我先开口（home 版的「想你」——代替 Telegram 定时打扰，只在你离开久了、重新打开时出现）
   (function(){
