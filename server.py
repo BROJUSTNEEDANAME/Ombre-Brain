@@ -2102,7 +2102,51 @@ async def api_chat_state(request):
     tok = body.get("token", "")
     if token_env and tok != token_env:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
-    data = {"log": (body.get("log") or [])[-400:], "hist": (body.get("hist") or [])[-40:]}
+    incoming = body.get("log") or []
+    inc_hist = body.get("hist") or []
+    # 合并而非覆盖：读出服务器已存的，和这次上传的取并集去重——多设备切换绝不丢消息
+    try:
+        with open(_web_chat_path(tok), "r", encoding="utf-8") as f:
+            _old = json.load(f)
+        existing = _old.get("log") or []
+        old_hist = _old.get("hist") or []
+    except Exception:  # noqa: BLE001
+        existing, old_hist = [], []
+
+    def _mk(m):
+        return f"{m.get('dk','')}|{m.get('side','')}|{m.get('t','')}|{(m.get('text') or '')[:60]}"
+
+    seen, merged = set(), []
+    for m in existing + incoming:  # 已存的在前，上传的补新的进来
+        if not isinstance(m, dict):
+            continue
+        k = _mk(m)
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(m)
+
+    def _sk(m):
+        try:
+            y, mo, d = (int(x) for x in (m.get("dk") or "1970-1-1").split("-"))
+            hh, mm = (int(x) for x in (m.get("t") or "0:0").split(":"))
+            return (y, mo, d, hh, mm)
+        except Exception:  # noqa: BLE001
+            return (0, 0, 0, 0, 0)
+    merged.sort(key=_sk)  # 稳定排序：同一分钟内保持原顺序
+
+    # hist（模型上下文）也并集去重，保留较全的
+    hseen, mhist = set(), []
+    for h in old_hist + inc_hist:
+        if not isinstance(h, dict):
+            continue
+        hk = f"{h.get('role','')}|{str(h.get('content'))[:80]}"
+        if hk in hseen:
+            continue
+        hseen.add(hk)
+        mhist.append(h)
+
+    data = {"log": merged[-400:], "hist": mhist[-40:]}
     try:
         with open(_web_chat_path(tok), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)

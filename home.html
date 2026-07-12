@@ -1321,15 +1321,29 @@
     try{ localStorage.setItem('chatLog', JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist', JSON.stringify(chatHistory.slice(-40))); }catch(e){}
     try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
+  function _msgKey(m){ return (m.dk||'')+'|'+(m.side||'')+'|'+(m.t||'')+'|'+((m.text||'')+'').slice(0,60); }
+  function _msgTime(m){ try{ const [y,mo,d]=(m.dk||'1970-1-1').split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
+  function _mergeLogs(a,b){
+    const seen=new Set(), out=[];
+    (a||[]).concat(b||[]).forEach(m=>{ if(!m||typeof m!=='object')return; const k=_msgKey(m); if(seen.has(k))return; seen.add(k); out.push(m); });
+    out.sort((x,y)=>_msgTime(x)-_msgTime(y));   // 稳定按时间；同分钟保持原序
+    return out;
+  }
   async function loadServerChat(){
     try{
       const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const data=await res.json();
-      if(data && Array.isArray(data.log) && data.log.length && data.log.length>=chatLog.length){
-        chatLog=data.log; chatHistory=Array.isArray(data.hist)?data.hist:chatHistory;
-        try{ localStorage.setItem('chatLog',JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist',JSON.stringify(chatHistory.slice(-40))); }catch(e){}
+      const srv=(data&&Array.isArray(data.log))?data.log:[];
+      // 合并本地+服务器，绝不用一方整个盖掉另一方（防多设备切换丢消息）
+      const merged=_mergeLogs(chatLog, srv);
+      if(merged.length!==chatLog.length || srv.length){
+        chatLog=merged;
+        if(Array.isArray(data.hist) && data.hist.length>=(chatHistory||[]).length) chatHistory=data.hist;
+        try{ localStorage.setItem('chatLog',JSON.stringify(chatLog.slice(-300))); localStorage.setItem('chatHist',JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
+        // 合并后把并集回推服务器,让两边最终一致
+        try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40)})}); }catch(e){}
       }
     }catch(e){}
   }
