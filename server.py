@@ -2238,7 +2238,19 @@ async def api_thread_preview(request):
     tid = request.query_params.get("thread", "")
     meta = _get_thread(tok, tid)
     if not meta:
-        return JSONResponse({"is_if": False, "text": "这是主线（本体）：用的是他原本的人设和你们真实的记忆，没有额外世界书。"})
+        # 主线：展示「他在主线知道哪些 IF 线」——证明本体完全知道你们玩过什么
+        _ts = _load_threads(tok)
+        if _ts:
+            parts = []
+            for _tt in _ts[:20]:
+                _wb1 = (_tt.get("worldbook") or "").replace("\n", " ").strip()[:80]
+                parts.append("· " + str(_tt.get("name", ""))[:24] + (("：" + _wb1 + "…") if _wb1 else ""))
+            digest = ("这是主线（本体）：他用原本的人设 + 你们真实的记忆。\n\n"
+                      "【他在主线里知道你俩开过这些平行宇宙（能当一起玩过的戏提起，但不当真发生）】\n"
+                      + "\n".join(parts))
+        else:
+            digest = "这是主线（本体）：他用原本的人设 + 你们真实的记忆。\n\n（你还没开过任何 IF 线；开了之后，他在主线这里会知道你们玩过哪些。）"
+        return JSONResponse({"is_if": False, "text": digest})
     return JSONResponse({
         "is_if": True,
         "name": meta.get("name", ""),
@@ -2692,7 +2704,11 @@ async def api_chat(request):
                             recorded.append(str(c)[:90])
                     fn = _TOOL_DISPATCH.get(name)
                     try:
-                        res = await fn(**args) if fn else f"unknown tool: {name}"
+                        # 关键：给工具执行加超时。hold/grow 要写库+算embedding，一旦卡住会把整条回复无限期挂死
+                        # （网页只能干等180s，期间她发不出话）。超时就跳过，让他照常把话说完。
+                        res = await asyncio.wait_for(fn(**args), timeout=20) if fn else f"unknown tool: {name}"
+                    except asyncio.TimeoutError:
+                        res = "（这步太慢，先跳过了）"
                     except Exception as e:  # noqa: BLE001
                         res = f"工具失败: {e}"
                     msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(res)[:8000]})

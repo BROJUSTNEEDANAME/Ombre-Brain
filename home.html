@@ -1463,7 +1463,6 @@
       if(v) blocks.push({type:'text', text:v});
       blocks.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data:img.b64}});
       petCtl && petCtl.wake();
-      setEmotion(pick(['想靠近你','安定','心疼你','害羞']));
       sendRich(blocks, v ? (v+' ［图片］') : '［图片］');
       return;
     }
@@ -1471,7 +1470,7 @@
     closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
     pending.push(v);
     petCtl && petCtl.wake(); // 你一说话，它就醒过来
-    setEmotion(pick(['想靠近你','安定','心疼你','害羞'])); // 听你说话时，情绪先动一下
+    // 不再在发消息时随机跳情绪——顶栏只反映他回复后的真实情绪，跟面板同一个来源
     clearTimeout(debTimer); debTimer=setTimeout(flush, SEND_WAIT);
   }
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1585,8 +1584,10 @@
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();
-      if(data&&data.emotion){ setEmotion(data.emotion); }  // 顶栏情绪实时变；日历染色改为每天一总结，不再逐条写
       if(data&&data.endocrine) applyEndocrine(data.endocrine);
+      // 顶栏情绪 = 面板同一个来源（身体状态算出的主导情绪），保证俩一致；没有就退回他自标的
+      const _emo=(data&&data.endocrine&&data.endocrine.dominant)||(data&&data.emotion)||'';
+      if(_emo) setEmotion(_emo);
       if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
       if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
       if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
@@ -1657,7 +1658,7 @@
     rows.forEach(t=>{
       const on=t.id===curThread?' on':'';
       const sub=t.id==='main'?'本体 · 真实主线':((t.mem==='blank'?'白纸开局':'带现实记忆')+(t.worldbook?' · '+t.worldbook.replace(/\n/g,' ').slice(0,28):''));
-      const act=t.id==='main'?'':'<span class="tr-act" data-peek="'+t.id+'" title="看他收到的设定">👁</span><span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
+      const act=t.id==='main'?'<span class="tr-act" data-peek="main" title="看他在主线知道哪些IF线">👁</span>':'<span class="tr-act" data-peek="'+t.id+'" title="看他收到的设定">👁</span><span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
       html+='<div class="thread-row'+on+'" data-go="'+t.id+'"><div class="tr-main"><div class="tr-name">'+(t.id==='main'?'🏠 主线':'🌌 '+_esc(t.name))+'</div><div class="tr-sub">'+_esc(sub)+'</div></div>'+act+'</div>';
     });
     box.innerHTML=html;
