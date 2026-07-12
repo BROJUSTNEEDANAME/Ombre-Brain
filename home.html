@@ -1276,7 +1276,7 @@
   // 我记下的（脑子/仓库）
   let brainLog={}; try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
   function recordBrain(text){
-    addMsg('sys','📌 已记录');                         // 气泡里只写「已记录」，详情去「我记下的」看
+    addMsg('sys','📌 已记进大脑（永久记忆）');            // 真的存进大脑了；详情去「我记下的」看
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     const list=(brainLog[k]=brainLog[k]||[]);
     if(list.some(r=>(r.text||'').trim()===text.trim())) return;  // 同一天同样的别重复进列表
@@ -1415,11 +1415,11 @@
     if(text){ sp=document.createElement('div'); sp.className='btxt'; sp.textContent=text; bub.appendChild(sp); }
     // 仿 Telegram：时间嵌进文字流末尾——同一行放得下就跟在句尾右侧，放不下才换行贴右（不再隔空行）
     const tin=document.createElement('span'); tin.className='tin'; tin.textContent=(t||now()); (sp||bub).appendChild(tin);
-    // 记忆折叠：他这条话背后读/存的记忆或内心，默认缩着，点开看
+    // 他没说出口的心里话([think])，默认缩着，点开看。注意：这是他的内心念头，不是存进大脑的记忆。
     if(side==='you' && think){
-      const tg=document.createElement('div'); tg.className='mem-toggle'; tg.textContent='💭 记忆';
+      const tg=document.createElement('div'); tg.className='mem-toggle'; tg.textContent='💭 心里话';
       const bd=document.createElement('div'); bd.className='mem-body'; bd.textContent=think;
-      tg.onclick=()=>{ const open=bd.classList.toggle('open'); tg.textContent=open?'💭 收起':'💭 记忆'; toBottom(); };
+      tg.onclick=()=>{ const open=bd.classList.toggle('open'); tg.textContent=open?'💭 收起':'💭 心里话'; toBottom(); };
       wrap.appendChild(tg); wrap.appendChild(bd);
     }
     // 收藏：长按气泡切换
