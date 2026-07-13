@@ -191,6 +191,9 @@
   body.dom-glow .row.him .bubble { color: var(--text); text-shadow: 0 0 8px rgba(255,167,89,.6), 0 0 22px rgba(255,140,60,.32); transition: text-shadow .9s ease; }
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
+  /* 流式直播气泡：末尾一根呼吸的小竖线，像他正在打字 */
+  .row.live .btxt::after { content:'▍'; opacity:.7; animation: curblink 1s steps(1) infinite; }
+  @keyframes curblink { 50% { opacity: 0; } }
   .fav-star { position: absolute; top: -6px; right: -4px; font-size: 12px; }
   /* 内分泌面板：点顶栏情绪词展开，看主导情绪 + 象限 + 四个值 */
   #topStatus { cursor: pointer; }
@@ -1491,6 +1494,83 @@
     }
     petCtl && petCtl.fromType(true);
   }
+  // ── 流式：他一个字一个字打出来 ─────────────────────────────────────
+  function liveBubbleNew(){
+    const row=document.createElement('div'); row.className='row you live';
+    row.innerHTML='<div class="av">◐</div><div class="bubble-wrap"><div class="bubble"><div class="btxt"></div></div></div>';
+    const prev=scroll.lastElementChild;
+    if(prev && prev.classList && prev.classList.contains('row') && prev.classList.contains('you')) row.classList.add('grp');
+    scroll.appendChild(row); toBottom();
+    return row;
+  }
+  // 边收边滤：吞掉 [emo]/[think]/[diary] 标签、按 ‖ 切气泡。标签可能被网络拆成两半，先扣住半截再决定
+  function makeStreamSink(){
+    const rows=[]; let cur=null, hold='', shown=false;
+    const ensure=()=>{ if(!cur){ cur=liveBubbleNew(); rows.push(cur); } return cur.querySelector('.btxt'); };
+    const TAGRE=/^\[(?:emo|diary|think):[^\]\n]*\]/;                  // 完整标签
+    const OPENRE=/^\[(?:emo|diary|think):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
+    const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?)?$/; // 半截标签名
+    function put(x){ if(!x) return; const sp=ensure(); sp.textContent+=x; shown=true; toBottom(); }
+    function feed(chunk){
+      let s=hold+chunk; hold='';
+      while(s){
+        const br=s.indexOf('‖'), lb=s.indexOf('[');
+        if(lb===-1 && br===-1){ put(s); return; }
+        if(br!==-1 && (lb===-1 || br<lb)){ put(s.slice(0,br)); cur=null; s=s.slice(br+1); continue; }
+        put(s.slice(0,lb)); s=s.slice(lb);
+        const m=s.match(TAGRE);
+        if(m){ s=s.slice(m[0].length); continue; }                     // 完整标签 → 吞掉不显示
+        if(OPENRE.test(s)||PREFIX.test(s)){ hold=s; return; }           // 可能是半截标签 → 扣住等下一包
+        put('['); s=s.slice(1);                                         // 就是普通中括号，放行
+      }
+    }
+    function destroy(){ rows.forEach(r=>r.remove()); rows.length=0; cur=null; }
+    return { feed, destroy, gotAny:()=>shown };
+  }
+  async function streamReply(outgoing){
+    const ctrl=new AbortController(); let idleT=null;
+    const arm=()=>{ clearTimeout(idleT); idleT=setTimeout(()=>ctrl.abort(),120000); }; // 120s 没动静才算断
+    arm();
+    const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, stream:true }),
+      signal:ctrl.signal });
+    if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
+    const sink=makeStreamSink();
+    let done=null, first=true, got=false;
+    try{
+      const rd=res.body.getReader(); const dec=new TextDecoder(); let carry='';
+      while(true){
+        const {value, done:eof}=await rd.read();
+        arm();
+        if(eof) break;
+        carry+=dec.decode(value,{stream:true});
+        let nl;
+        while((nl=carry.indexOf('\n'))>=0){
+          const line=carry.slice(0,nl).trim(); carry=carry.slice(nl+1);
+          if(!line) continue;
+          let j; try{ j=JSON.parse(line); }catch(e){ continue; }
+          if(j.t==='d'){ if(first){ stopThinking(); first=false; } got=true; sink.feed(j.x); }
+          else if(j.t==='done'){ done=j; }
+        }
+      }
+    }catch(e){
+      clearTimeout(idleT); sink.destroy();
+      if(got){ pollForReply(120000); return null; }   // 半路断线：服务器会写完存好，别重发，去捞
+      throw e;                                          // 一个字没收到 → 让外层退回非流式重来
+    }
+    clearTimeout(idleT);
+    if(!done){ sink.destroy(); if(got){ pollForReply(120000); return null; } throw new Error('stream no done'); }
+    // 落定：直播气泡换成正式消息（进 chatLog、可收藏、挂心里话），文字以服务器清洗后的为准
+    sink.destroy();
+    const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||'（……）'];
+    const recent=new Set(chatLog.filter(m=>m.side==='you').slice(-6).map(m=>(m.text||'').trim()));
+    const seen=new Set();
+    const fin=segs.map(s=>(s||'').trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
+    stopThinking();
+    fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):''));
+    petCtl && petCtl.fromType(true);
+    return done;
+  }
   // 回来他先开口：离开一阵子(默认半小时)后回到页面，他主动发 1-2 条（服务器判定+去重，不需要推送）
   (function(){
     let busy=false;
@@ -1578,9 +1658,16 @@
     startThinking();
     const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
     try{
-      const data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel });
+      // 先走流式（一个字一个字打出来）；流式起不来（老浏览器/代理不支持）才退回一次性等全文
+      let data=null, streamed=false;
+      try{ data=await streamReply(outgoing); streamed=true; }
+      catch(e){ streamed=false; }
+      if(streamed && data===null){ return; }          // 半路断线：已转入轮询捞服务器存好的回复
+      if(!streamed){
+        data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel });
+        await showReply(data);
+      }
       const reply=(data&&data.reply)||'（……）';
-      await showReply(data);
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();

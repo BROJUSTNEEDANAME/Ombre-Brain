@@ -2701,11 +2701,7 @@ async def api_chat(request):
                 return blocks or ""
             return str(c or "")
 
-        async def _run_chat(use_tools: bool) -> str:
-            """跑一轮对话。use_tools=True 带记忆工具（进程内直调大脑，不走 MCP/HTTP）；
-            出问题时用 False 退化重试（这轮不碰记忆，但对话照常）。"""
-            nonlocal recorded
-            recorded = []
+        def _build_msgs():
             msgs = [{"role": "system", "content": system}]
             _last_i = len(history) - 1
             for _i, m in enumerate(history):
@@ -2717,12 +2713,50 @@ async def api_chat(request):
                     else:
                         c = dynamic_ctx + "\n\n" + str(c)
                 msgs.append({"role": m["role"], "content": c})
-            # 按线过滤工具：IF 线绝不许写主脑(hold/grow)；白纸线连记忆读取也不给(他不认识现实的她)。make_page 都留。
-            if not _is_if:
-                _active_tools = _TOOLS_SCHEMA
-            else:
-                _drop = {"hold", "grow"} | ({"breath", "read", "pulse", "dream", "trace"} if _if_blank else set())
-                _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
+            return msgs
+
+        # 按线过滤工具：IF 线绝不许写主脑(hold/grow)；白纸线连记忆读取也不给(他不认识现实的她)。make_page 都留。
+        if not _is_if:
+            _active_tools = _TOOLS_SCHEMA
+        else:
+            _drop = {"hold", "grow"} | ({"breath", "read", "pulse", "dream", "trace"} if _if_blank else set())
+            _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
+
+        async def _exec_tool_calls(msgs, tcs):
+            """执行一批工具调用并把结果回填 msgs。tcs: [{id,name,args(json串)}...]
+            写记忆（hold/grow）要算 embedding，走外部 API 可能等几十秒——绝不能拖住回复：
+            丢到后台跑，立刻回「已记下」；读类工具他需要结果才能接着答，照样等但带超时防卡死。"""
+            for tc in tcs:
+                name = tc["name"]
+                try:
+                    args = json.loads(tc["args"] or "{}")
+                except Exception:  # noqa: BLE001
+                    args = {}
+                fn = _TOOL_DISPATCH.get(name)
+                if name in ("hold", "grow"):
+                    c = args.get("content")
+                    if c:
+                        recorded.append(str(c)[:90])
+                    if fn:
+                        _t = asyncio.create_task(_bg_run_tool(fn, args))
+                        _BG_TASKS.add(_t)
+                        _t.add_done_callback(_BG_TASKS.discard)
+                    res = "已记下（后台保存中）"
+                else:
+                    try:
+                        res = await asyncio.wait_for(fn(**args), timeout=15) if fn else f"unknown tool: {name}"
+                    except asyncio.TimeoutError:
+                        res = "（这步太慢，先跳过了）"
+                    except Exception as e:  # noqa: BLE001
+                        res = f"工具失败: {e}"
+                msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": str(res)[:8000]})
+
+        async def _run_chat(use_tools: bool) -> str:
+            """跑一轮对话（非流式，老路径/降级用）。use_tools=True 带记忆工具（进程内直调大脑）；
+            出问题时用 False 退化重试（这轮不碰记忆，但对话照常）。"""
+            nonlocal recorded
+            recorded = []
+            msgs = _build_msgs()
             out = ""
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
@@ -2744,34 +2778,118 @@ async def api_chat(request):
                         for tc in tcs
                     ],
                 })
-                for tc in tcs:
-                    name = tc.function.name
-                    try:
-                        args = json.loads(tc.function.arguments or "{}")
-                    except Exception:  # noqa: BLE001
-                        args = {}
-                    fn = _TOOL_DISPATCH.get(name)
-                    # 写记忆（hold/grow）要算 embedding，走外部 API 可能等几十秒——绝不能拖住回复。
-                    # 丢到后台跑，立刻回「已记下」，他照常把话说完；记忆在后台悄悄存好。
-                    if name in ("hold", "grow"):
-                        c = args.get("content")
-                        if c:
-                            recorded.append(str(c)[:90])
-                        if fn:
-                            _t = asyncio.create_task(_bg_run_tool(fn, args))
-                            _BG_TASKS.add(_t)
-                            _t.add_done_callback(_BG_TASKS.discard)
-                        res = "已记下（后台保存中）"
-                    else:
-                        # 读类工具（breath/read/pulse…）他需要结果才能接着答，照样等，但加超时防卡死
-                        try:
-                            res = await asyncio.wait_for(fn(**args), timeout=15) if fn else f"unknown tool: {name}"
-                        except asyncio.TimeoutError:
-                            res = "（这步太慢，先跳过了）"
-                        except Exception as e:  # noqa: BLE001
-                            res = f"工具失败: {e}"
-                    msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(res)[:8000]})
+                await _exec_tool_calls(msgs, [
+                    {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
+                ])
             return out
+
+        def _tag(name, s):
+            # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
+            m = re.search(r"\[" + name + r":\s*([^\]\n]+?)\s*\]", s)
+            if m:
+                return m.group(1).strip()
+            m = re.search(r"\[" + name + r":\s*([^\]\n]+)", s)
+            return m.group(1).strip() if m else ""
+
+        def _parse_reply(rt):
+            """整段回复 → (合并文本, 气泡段列表, emotion, diary, think)。流式/非流式共用。"""
+            emotion = _tag("emo", rt)
+            diary = _tag("diary", rt)
+            think = _tag("think", rt)
+            # 剥掉标签：闭合的 + 没闭合的都清掉，绝不让 [diary:… 这种漏进聊天
+            s = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
+            s = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", s)       # 未闭合（到行尾/串尾）
+            s = s.strip()
+            # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
+            # 没打就用内分泌+15维情绪算出的主导词（零成本）。
+            if not emotion:
+                emotion = (endo_state or {}).get("dominant", "")
+            # 连发：只按 ‖ 拆条。空行是同一条消息里的段落，不拆气泡
+            segments = [x.strip() for x in re.split(r"\s*‖\s*", s) if x.strip()]
+            if not segments:
+                segments = [s]
+            return "\n".join(segments), segments, emotion, diary, think
+
+        # ── 流式模式（body.stream=true）：边生成边把字推给前端，他一个字一个字打出来 ──
+        # 生成跑在独立后台任务里：就算她中途切屏断线，照样写完、照样落盘（回来轮询能捞到）。
+        if body.get("stream"):
+            from starlette.responses import StreamingResponse
+            _q: asyncio.Queue = asyncio.Queue()
+
+            async def _produce():
+                nonlocal recorded
+                recorded = []
+                rt = ""
+                try:
+                    msgs = _build_msgs()
+                    for _ in range(4):  # 限轮次省钱，同非流式
+                        kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs, stream=True)
+                        if _active_tools:
+                            kwargs["tools"] = _active_tools
+                        st = await _llm_create(_web_llm, **kwargs)
+                        buf, flushed, tc_acc, saw_tc = "", 0, {}, False
+                        async for ch in st:
+                            if not ch.choices:
+                                continue
+                            d = ch.choices[0].delta
+                            if d is None:
+                                continue
+                            for tc in (getattr(d, "tool_calls", None) or []):
+                                saw_tc = True
+                                slot = tc_acc.setdefault(tc.index or 0, {"id": "", "name": "", "args": ""})
+                                if tc.id:
+                                    slot["id"] = tc.id
+                                if tc.function is not None:
+                                    if tc.function.name:
+                                        slot["name"] = tc.function.name
+                                    if tc.function.arguments:
+                                        slot["args"] += tc.function.arguments
+                            c = getattr(d, "content", None)
+                            if c:
+                                buf += c
+                                # 这轮一旦出现工具调用就不外推正文（多半是工具前碎碎念）；
+                                # 攒够几个字再开推，防止「刚吐字就发现是工具轮」的闪烁
+                                if not saw_tc and (flushed or len(buf) >= 8):
+                                    await _q.put({"t": "d", "x": buf[flushed:]})
+                                    flushed = len(buf)
+                        if not tc_acc:
+                            if not saw_tc and buf[flushed:]:
+                                await _q.put({"t": "d", "x": buf[flushed:]})
+                            rt = buf
+                            break
+                        # 有工具调用：回填 assistant 消息 + 执行工具，进下一轮
+                        msgs.append({"role": "assistant", "content": buf or "", "tool_calls": [
+                            {"id": s2["id"] or f"call_{i}", "type": "function",
+                             "function": {"name": s2["name"], "arguments": s2["args"]}}
+                            for i, s2 in sorted(tc_acc.items())]})
+                        await _exec_tool_calls(msgs, [
+                            {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
+                            for i, s2 in sorted(tc_acc.items())])
+                    rt = (rt or "").strip() or "（……）"
+                    joined, segments, emotion, diary, think = _parse_reply(rt)
+                    _persist_web_reply(tok, user_text, segments, joined, thread)  # 切屏也不丢
+                    await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
+                                  "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state})
+                except Exception as exc:  # noqa: BLE001
+                    await _q.put({"t": "done", "reply": "（我卡了一下，再说一次好吗。）",
+                                  "segments": ["（我卡了一下，再说一次好吗。）"], "emotion": "",
+                                  "error": str(exc)[:200]})
+                finally:
+                    await _q.put(None)
+
+            _pt = asyncio.create_task(_produce())
+            _BG_TASKS.add(_pt)
+            _pt.add_done_callback(_BG_TASKS.discard)
+
+            async def _ndjson():
+                while True:
+                    item = await _q.get()
+                    if item is None:
+                        break
+                    yield (json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8")
+
+            return StreamingResponse(_ndjson(), media_type="application/x-ndjson",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         async def _finish() -> dict:
             """生成回复 + 解析标签 + 落服务器端记录。整块用 asyncio.shield 包住，
@@ -2782,34 +2900,9 @@ async def api_chat(request):
                 # 带记忆工具那轮出错 → 去掉工具重试一次，至少让她能聊上
                 rt = await _run_chat(False)
             rt = rt or "（……）"
-            emotion = diary = think = ""
-
-            def _tag(name, s):
-                # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
-                m = re.search(r"\[" + name + r":\s*([^\]\n]+?)\s*\]", s)
-                if m:
-                    return m.group(1).strip()
-                m = re.search(r"\[" + name + r":\s*([^\]\n]+)", s)
-                return m.group(1).strip() if m else ""
-
-            emotion = _tag("emo", rt)
-            diary = _tag("diary", rt)
-            think = _tag("think", rt)
-            # 剥掉标签：闭合的 + 没闭合的都清掉，绝不让 [diary:… 这种漏进聊天
-            rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
-            rt = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", rt)      # 未闭合（到行尾/串尾）
-            rt = rt.strip()
-            # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
-            # 没打就用内分泌+15维情绪算出的主导词（零成本）。日历染色改为「每天一总结」（前端自动做）。
-            if not emotion:
-                emotion = (endo_state or {}).get("dominant", "")
-            # 连发：只按 ‖ 拆条。空行是同一条消息里的段落（像 tg 一条长消息里分段），不拆气泡
-            segments = [s.strip() for s in re.split(r"\s*‖\s*", rt) if s.strip()]
-            if not segments:
-                segments = [rt]
-            rt = "\n".join(segments)  # 存上下文/兜底用合并版
-            _persist_web_reply(tok, user_text, segments, rt, thread)  # 切屏也不丢（按线分文件）
-            return {"reply": rt, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
+            joined, segments, emotion, diary, think = _parse_reply(rt)
+            _persist_web_reply(tok, user_text, segments, joined, thread)  # 切屏也不丢（按线分文件）
+            return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
 
         result = await asyncio.shield(_finish())
         return JSONResponse(result)
