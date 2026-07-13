@@ -1879,6 +1879,27 @@ _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 _IMG_DESC_CACHE: dict = {}  # 图片→识图转述 缓存（按图片指纹），同一张图只识一次
 _BG_TASKS: set = set()      # 后台任务引用（防止被 GC）——写记忆等慢活丢这里跑，不拖住回复
 
+# GLM-4.5 起是混合推理模型：不传参数时"深度思考"默认开着——每条回复都先在后台
+# 憋一大段看不见的推理再开口，这是"他半天不说话"的最大来源。聊天陪伴不需要解题式
+# 推理，默认关掉；要重新打开设 OMBRE_GLM_THINKING=on。
+_GLM_THINKING_OFF = {"thinking": {"type": "disabled"}}
+_thinking_param_ok = True  # 万一某个模型不认这个参数，自动降级并且以后不再白试
+
+
+async def _llm_create(client, **kw):
+    """所有 GLM 调用的统一入口：默认带上「关思考」参数；模型不认就退回原样调用。"""
+    global _thinking_param_ok
+    _want_off = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in ("on", "1", "true", "enabled")
+    if _want_off and _thinking_param_ok:
+        try:
+            return await client.chat.completions.create(extra_body=_GLM_THINKING_OFF, **kw)
+        except Exception as e:  # noqa: BLE001
+            if "thinking" in str(e).lower():
+                _thinking_param_ok = False  # 这家模型不认这参数：这次和以后都不带了
+            else:
+                raise
+    return await client.chat.completions.create(**kw)
+
 
 async def _bg_run_tool(fn, args):
     """后台执行一个大脑工具（如 hold/grow：写库+算embedding），出错只记日志、不影响对话。"""
@@ -2545,6 +2566,20 @@ async def api_chat(request):
         endo_block = ""
         endo_state = None
 
+    # 记忆检索提前并行跑：breath(query) 要去外部 API 算向量（一来一回可能 1-2 秒多），
+    # 原来串行排在识图/建连接后面白等——现在先丢出去跑，到真正拼上下文时再收结果。
+    _meta = _get_thread(tok, thread)
+    _is_if = bool(_meta)
+    _if_blank = _is_if and _meta.get("mem") == "blank"
+    _mem_task = None
+    if user_text and user_text != "[图片]" and not _if_blank:
+        async def _safe_breath(q):
+            try:
+                return await breath(query=q, max_tokens=1500, max_results=6)
+            except Exception:  # noqa: BLE001
+                return ""
+        _mem_task = asyncio.create_task(_safe_breath(user_text))
+
     global _web_llm
     try:
         from openai import AsyncOpenAI
@@ -2569,8 +2604,8 @@ async def api_chat(request):
 
             async def _transcribe(mt, b64, k):
                 try:
-                    r = await _web_llm.chat.completions.create(
-                        model=_vision_model, max_tokens=1500,
+                    r = await _llm_create(
+                        _web_llm, model=_vision_model, max_tokens=1500,
                         messages=[{"role": "user", "content": [
                             {"type": "text", "text": "把这张图完整转述成文字：截图里的文字逐字抄下来（保留标题/列表/结构）；照片就客观细致地描述画面。只输出转述内容，不要任何评论。"},
                             {"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}},
@@ -2613,19 +2648,19 @@ async def api_chat(request):
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
         system = _WEB_SYSTEM
         # ---- IF 线（平行宇宙）：世界书 + 人设 是这条线的「静态设定」→ 拼进 system（命中缓存，长世界书不再每轮重算）----
-        _meta = _get_thread(tok, thread)
-        _is_if = bool(_meta)
-        _if_blank = _is_if and _meta.get("mem") == "blank"
+        # （_meta/_is_if/_if_blank 在上面提前算好了，顺便把记忆检索也提前丢去并行跑了）
         if _is_if:
             system = _WEB_SYSTEM + "\n\n" + _if_static_block(_meta)
-        # 每轮自动按当前话题捞相关记忆：主线 or 带现实记忆的 IF 线才捞；白纸线不捞（他还不认识现实的她）
+        # 收取提前跑的记忆检索结果（主线 or 带现实记忆的 IF 线；白纸线没起任务）
         mem_block = ""
-        if user_text and user_text != "[图片]" and not _if_blank:
+        if _mem_task is not None:
             try:
-                _m = await asyncio.wait_for(breath(query=user_text, max_tokens=1500, max_results=6), timeout=2.5)
+                _m = await asyncio.wait_for(_mem_task, timeout=2.5)
                 if _m and _m.strip():
-                    mem_block = "【记忆·可能相关的过往（内化进当下，别生硬复述）】\n" + _m.strip()[:4000]
+                    mem_block = ("【记忆·可能相关的过往（内化进当下，别生硬复述。这是系统已经帮你查好的——"
+                                 "够用就别再调 breath 重复检索，省得她多等一轮）】\n" + _m.strip()[:4000])
             except Exception:  # noqa: BLE001
+                _mem_task.cancel()
                 mem_block = ""
         # 主线「完全知道」你们玩过哪些 IF 线：注入各线概要（他能当一起玩过的戏提起）
         lines_digest = ""
@@ -2693,7 +2728,7 @@ async def api_chat(request):
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
                 if use_tools and _active_tools:
                     kwargs["tools"] = _active_tools
-                resp = await _web_llm.chat.completions.create(**kwargs)
+                resp = await _llm_create(_web_llm, **kwargs)
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
                 if not tcs:
@@ -2897,8 +2932,8 @@ async def api_welcome_back(request):
         if _web_llm is None:
             _web_llm = AsyncOpenAI(api_key=api_key, base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip())
         model = os.environ.get("OMBRE_BOT_MODEL", "glm-5.1")
-        r = await asyncio.wait_for(_web_llm.chat.completions.create(
-            model=model, max_tokens=300,
+        r = await asyncio.wait_for(_llm_create(
+            _web_llm, model=model, max_tokens=300,
             messages=[{"role": "user", "content": prompt}]), timeout=25)
         txt = (r.choices[0].message.content or "").strip()
         txt = _re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]?", "", txt).strip()
@@ -3009,8 +3044,8 @@ async def api_daysummary(request):
         if _web_llm is None:
             _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url)
         model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
-        resp = await _web_llm.chat.completions.create(
-            model=model, max_tokens=400,
+        resp = await _llm_create(
+            _web_llm, model=model, max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
         out = (resp.choices[0].message.content or "").strip()
