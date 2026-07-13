@@ -1384,7 +1384,16 @@
     try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
   function _msgKey(m){ return (m.dk||'')+'|'+(m.side||'')+'|'+(m.t||'')+'|'+((m.text||'')+'').slice(0,60); }
-  function _msgTime(m){ try{ const [y,mo,d]=(m.dk||'1970-1-1').split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
+  function _msgTime(m){ try{ const [y,mo,d]=(m.dk||tKey()).split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
+  // 服务器落盘的老条目可能没有 dk（日期键）：先认领——本地有一模一样的（同侧同时刻同文字）就用它的 dk，
+  // 没有就按今天算。以前没 dk 的会被当成 1970 年排到聊天最顶上，看起来像"消息被吞了变成记忆"。
+  function _adoptDk(srv){
+    return (srv||[]).map(m=>{
+      if(!m||typeof m!=='object'||m.dk) return m;
+      const loc=chatLog.find(x=>x&&x.side===m.side&&x.t===m.t&&(x.text||'')===(m.text||''));
+      return Object.assign({}, m, {dk: loc&&loc.dk ? loc.dk : (typeof tKey==='function'?tKey():'')});
+    });
+  }
   function _mergeLogs(a,b){
     const seen=new Set(), out=[];
     (a||[]).concat(b||[]).forEach(m=>{ if(!m||typeof m!=='object')return; const k=_msgKey(m); if(seen.has(k))return; seen.add(k); out.push(m); });
@@ -1396,7 +1405,7 @@
     try{
       const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(curThread));
       const data=await res.json();
-      const srv=(data&&Array.isArray(data.log))?data.log:[];
+      const srv=_adoptDk((data&&Array.isArray(data.log))?data.log:[]);
       // 合并本地+服务器，绝不用一方整个盖掉另一方（防多设备切换丢消息）
       const merged=_mergeLogs(chatLog, srv);
       // 只在「真有新消息进来」时才重画一次——否则轮询会每 3 秒把整屏重画，看着像一直在刷新

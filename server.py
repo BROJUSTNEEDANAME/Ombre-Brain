@@ -1904,8 +1904,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.3"
-OMBRE_WEB_VERSION_NOTE = "修好逐字输出：气泡不再被轮询重画/去重吞掉"
+OMBRE_WEB_VERSION = "v1.5"
+OMBRE_WEB_VERSION_NOTE = "修「记完记忆旧消息像被吞」：老消息不再跳到聊天最顶上（无打字机版）"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2045,14 +2045,19 @@ def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, t
         hist = data.get("hist") or []
         try:
             from zoneinfo import ZoneInfo
-            ts = datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%H:%M")
+            _now = datetime.now(ZoneInfo("America/Los_Angeles"))
+            ts = _now.strftime("%H:%M")
+            # dk＝客户端的日期键（格式必须和网页 tKey() 一致：不补零）。
+            # 以前这里不写 dk，客户端合并排序把没日期的当 1970 年→老消息整段跳到聊天最顶上，
+            # 看起来像"记完记忆消息被吞了"。
+            dk = f"{_now.year}-{_now.month}-{_now.day}"
         except Exception:
-            ts = ""
+            ts, dk = "", ""
         # 用户气泡：客户端发送时一般已存过，避免重复；最后一条不是这条才补
         if not (log and log[-1].get("side") == "me" and (log[-1].get("text") or "") == (user_text or "")):
-            log.append({"side": "me", "text": user_text or "", "t": ts})
+            log.append({"side": "me", "text": user_text or "", "t": ts, "dk": dk})
         for seg in segments:
-            log.append({"side": "you", "text": seg, "t": ts})
+            log.append({"side": "you", "text": seg, "t": ts, "dk": dk})
         hist.append({"role": "user", "content": user_text or ""})
         hist.append({"role": "assistant", "content": reply})
         with open(path, "w", encoding="utf-8") as f:
