@@ -1904,8 +1904,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.1"
-OMBRE_WEB_VERSION_NOTE = "流式输出：他一个字一个字打出来 + 版本号系统"
+OMBRE_WEB_VERSION = "v1.2"
+OMBRE_WEB_VERSION_NOTE = "流式改走 SSE，穿透 Tailscale Funnel 缓冲，真·逐字"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2895,15 +2895,21 @@ async def api_chat(request):
             _BG_TASKS.add(_pt)
             _pt.add_done_callback(_BG_TASKS.discard)
 
-            async def _ndjson():
+            # 用 SSE（text/event-stream）而不是裸 NDJSON：Tailscale Funnel / nginx / Cloudflare
+            # 等代理层都特判 text/event-stream「必须立刻转发、不许攒」，裸 ndjson 会被 Funnel 缓冲。
+            # 每个事件一行 data:（json 里换行已被转义成 \n，不会破坏 SSE 帧），事件间空行分隔。
+            async def _sse():
+                # 开头塞一坨 2KB 注释行：有些代理要攒够一个缓冲块才肯放，先把它喂饱，逼它立刻开闸
+                yield (":" + " " * 2048 + "\n\n").encode("utf-8")
                 while True:
                     item = await _q.get()
                     if item is None:
                         break
-                    yield (json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8")
+                    yield ("data: " + json.dumps(item, ensure_ascii=False) + "\n\n").encode("utf-8")
 
-            return StreamingResponse(_ndjson(), media_type="application/x-ndjson",
-                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            return StreamingResponse(_sse(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                              "Connection": "keep-alive"})
 
         async def _finish() -> dict:
             """生成回复 + 解析标签 + 落服务器端记录。整块用 asyncio.shield 包住，
