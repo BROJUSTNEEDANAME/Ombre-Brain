@@ -1699,6 +1699,7 @@
       recoverOnReturn=false;
       pollForReply(120000, true);       // 回前台：耐心轮询最多2分钟；真捞不到=没送到过 → 自动重发那条
     }
+    else { loadServerChat(); }          // 普通回前台：同步一下——把你在 Telegram 那边聊的拉进来
   });
   async function requestReply(userApiContent, histText){
     if(inFlight) return;            // 防重入：同一时刻只允许一条在途，杜绝重复请求/重复说
@@ -1706,7 +1707,13 @@
     clearInterval(_recoverTimer);   // 停掉可能还挂着的恢复轮询——它每3秒整屏重画，会把直播气泡抹掉
     const reqStart=Date.now();
     startThinking();
-    const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
+    // 上下文直接从聊天记录(chatLog)现算——记录是跨设备合并过的唯一权威，
+    // Telegram 上聊的也在里面 → 网页和 TG 永远是同一个现场、同一个他。
+    // (chatLog 已含刚发的这条'me'占位，去掉尾部重复后再挂上真实内容——图片等富内容记录里只有占位文字)
+    let _ctx = chatLog.filter(m=>m&&(m.side==='me'||m.side==='you')&&(m.text||'').trim())
+                      .slice(-24).map(m=>({role:m.side==='me'?'user':'assistant',content:m.text}));
+    if(_ctx.length && _ctx[_ctx.length-1].role==='user' && _ctx[_ctx.length-1].content===histText) _ctx.pop();
+    const outgoing = _ctx.concat([{role:'user',content:userApiContent}]).slice(-24);
     try{
       // 先走流式（一个字一个字打出来）；流式起不来（老浏览器/代理不支持）才退回一次性等全文
       let data=null, streamed=false;

@@ -1925,8 +1925,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.7"
-OMBRE_WEB_VERSION_NOTE = "修「跳回昨晚话题」：上下文不再被错误合并；主动问候不再被抢跑掐掉"
+OMBRE_WEB_VERSION = "v1.8"
+OMBRE_WEB_VERSION_NOTE = "TG 合体：Telegram 和网页是同一个他——同人设、同记忆、同一个聊天现场"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2048,7 +2048,8 @@ def _if_static_block(meta: dict) -> str:
     return "\n\n".join(sp)
 
 
-def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, thread: str = "main") -> None:
+def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, thread: str = "main",
+                       ghost_user: bool = False) -> None:
     """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里（按线分文件）。
     这样就算闪闪发完就切屏、请求被手机挂断，他在后台把话说完后也会存在这儿，
     她回来一刷新就能看到——不丢、不报错（像 Telegram 那样后台把话留住）。
@@ -2074,12 +2075,15 @@ def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, t
             dk = f"{_now.year}-{_now.month}-{_now.day}"
         except Exception:
             ts, dk = "", ""
-        # 用户气泡：客户端发送时一般已存过，避免重复；最后一条不是这条才补
-        if not (log and log[-1].get("side") == "me" and (log[-1].get("text") or "") == (user_text or "")):
-            log.append({"side": "me", "text": user_text or "", "t": ts, "dk": dk})
+        # ghost_user=True（TG 主动问候等）：user_text 是系统指令、不是她说的话——只落他的回复，不伪造她的气泡
+        if not ghost_user:
+            # 用户气泡：客户端发送时一般已存过，避免重复；最后一条不是这条才补
+            if not (log and log[-1].get("side") == "me" and (log[-1].get("text") or "") == (user_text or "")):
+                log.append({"side": "me", "text": user_text or "", "t": ts, "dk": dk})
         for seg in segments:
             log.append({"side": "you", "text": seg, "t": ts, "dk": dk})
-        hist.append({"role": "user", "content": user_text or ""})
+        if not ghost_user:
+            hist.append({"role": "user", "content": user_text or ""})
         hist.append({"role": "assistant", "content": reply})
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"log": log[-400:], "hist": hist[-40:]}, f, ensure_ascii=False)
@@ -2467,6 +2471,9 @@ async def api_chat(request):
     if token_env and (body.get("token") or "") != token_env:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     thread = body.get("thread", "main") or "main"  # 当前所在的线（IF 线/主线）
+    # ghost_user：这条 user 消息是系统指令（TG 早安问候等"他主动开口"），不是她说的——
+    # 生成照常，但落盘时只存他的回复，不把指令伪造成她的气泡/上下文
+    ghost_user = bool(body.get("ghost_user"))
 
     api_key = (
         os.environ.get("LLM_API_KEY")
@@ -2909,7 +2916,7 @@ async def api_chat(request):
                             for i, s2 in sorted(tc_acc.items())])
                     rt = (rt or "").strip() or "（……）"
                     joined, segments, emotion, diary, think = _parse_reply(rt)
-                    _persist_web_reply(tok, user_text, segments, joined, thread)  # 切屏也不丢
+                    _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
                                   "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state})
                 except Exception as exc:  # noqa: BLE001
@@ -2949,7 +2956,7 @@ async def api_chat(request):
                 rt = await _run_chat(False)
             rt = rt or "（……）"
             joined, segments, emotion, diary, think = _parse_reply(rt)
-            _persist_web_reply(tok, user_text, segments, joined, thread)  # 切屏也不丢（按线分文件）
+            _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢（按线分文件）
             return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
 
         result = await asyncio.shield(_finish())

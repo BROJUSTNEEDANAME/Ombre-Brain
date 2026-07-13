@@ -33,6 +33,7 @@ LLM 用 OpenAI 兼容接口，默认接 z.ai（智谱 GLM），换任意兼容 A
     python telegram_bot.py
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -179,6 +180,80 @@ async def _call_brain_tool(name: str, args: dict) -> str:
         resp = await client.post(url, json=args)
         data = resp.json()
         return data.get("result", data.get("error", str(data)))
+
+
+# ---------------------------------------------------------------------------
+# ★合体核心：TG 不再自己「想」——直接走网页同一个大脑入口（/api/chat 主线）。
+#   同一份人设、同一份记忆、同一个聊天现场、同一个此刻的情绪状态。
+#   你在网页聊到一半拿起 TG，他接得上；TG 里说的，网页打开全都在。
+# ---------------------------------------------------------------------------
+BRAIN_BASE = OMBRE_MCP_URL.replace("/mcp", "")
+_WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+
+
+async def _main_ctx(limit: int = 24) -> list[dict]:
+    """从服务器主线聊天记录(log)现算上下文——记录是跨设备唯一权威，网页/TG 聊的都在里面。"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as cli:
+            r = await cli.get(BRAIN_BASE + "/api/chat/state",
+                              params={"token": _WEB_TOKEN, "thread": "main"})
+            log = (r.json() or {}).get("log") or []
+    except Exception:  # noqa: BLE001
+        return []
+    ctx = []
+    for m in log:
+        if not isinstance(m, dict):
+            continue
+        side, text = m.get("side"), (m.get("text") or "").strip()
+        if side == "me" and text:
+            ctx.append({"role": "user", "content": text})
+        elif side == "you" and text:
+            ctx.append({"role": "assistant", "content": text})
+    return ctx[-limit:]
+
+
+async def _ask_brain(user_content, ghost: bool = False) -> list[str]:
+    """把消息交给大脑主线（网页同一入口），拿回一组气泡（segments）。
+    ghost=True＝这条是系统指令（早安/纪念日等他主动开口）：生成照常，
+    但大脑落盘时只存他的回复，绝不把指令伪造成她说的话。"""
+    ctx = await _main_ctx()
+    body = {"messages": ctx + [{"role": "user", "content": user_content}],
+            "token": _WEB_TOKEN, "thread": "main"}
+    if ghost:
+        body["ghost_user"] = True
+    async with httpx.AsyncClient(timeout=240) as cli:
+        r = await cli.post(BRAIN_BASE + "/api/chat", json=body)
+        d = r.json() if r.status_code == 200 else {}
+    segs = [s for s in (d.get("segments") or []) if isinstance(s, str) and s.strip()]
+    if not segs and (d.get("reply") or "").strip():
+        segs = [d["reply"].strip()]
+    return segs
+
+
+async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bool = False) -> None:
+    """按气泡逐条发（像他连发几条消息）；语音模式则合成一条整的说。"""
+    if not segs:
+        return
+    if openai_client is not None and (force_voice or voice_mode.get(chat_id)):
+        await _send_reply(context, chat_id, "\n".join(segs), force_voice=force_voice)
+        return
+    for i, s in enumerate(segs):
+        if i:
+            await asyncio.sleep(0.8)
+        await _send_reply(context, chat_id, s)
+
+
+async def _sync_you_line(text: str) -> None:
+    """把 TG 里他主动说的一句话（预设找她文案等）同步进主线记录——网页那边也看得到。"""
+    try:
+        now = datetime.now(USER_TZ)
+        entry = {"side": "you", "text": text, "t": f"{now:%H:%M}",
+                 "dk": f"{now.year}-{now.month}-{now.day}"}
+        async with httpx.AsyncClient(timeout=10) as cli:
+            await cli.post(BRAIN_BASE + "/api/chat/state",
+                           json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []})
+    except Exception:  # noqa: BLE001
+        pass
 
 # ----------------------------------------------------------------------------
 # 人设 / System prompt —— 把 Opus「太 AI」往回掰
@@ -416,7 +491,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"你的 chat id 是：{chat_id}")
         return
     histories.pop(chat_id, None)
-    await update.message.reply_text("在。")
+    ver = ""
+    try:
+        async with httpx.AsyncClient(timeout=8) as cli:
+            r = await cli.get(BRAIN_BASE + "/api/version")
+            ver = "（大脑 " + str((r.json() or {}).get("version", "?")) + "）"
+    except Exception:  # noqa: BLE001
+        ver = "（大脑没接通——版本查不到）"
+    await update.message.reply_text("在。" + ver)
 
 
 async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -440,28 +522,28 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_text = update.message.text
     last_user_ts[chat_id] = time.time()
     nudge_count[chat_id] = 0
-    drives.update(user_text)
-    history = histories.setdefault(chat_id, [])
+    history = histories.setdefault(chat_id, [])  # 本地影子：只给值守任务当参考，上下文以大脑主线为准
     history.append({"role": "user", "content": user_text})
-    # 修剪历史，保留最近若干条
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     try:
-        reply = await _ask_claude(history)
+        segs = await _ask_brain(user_text)   # ★走网页同一个大脑入口：同人设/记忆/现场
     except Exception:  # noqa: BLE001
-        logger.exception("调用 Claude 失败")
-        # 出错时把刚加的 user 消息撤回，避免污染历史
+        logger.exception("大脑调用失败")
         if history and history[-1]["role"] == "user":
             history.pop()
         await update.message.reply_text("（断了一下，再说一遍。）")
         return
+    if not segs:
+        await update.message.reply_text("（……）")
+        return
 
-    history.append({"role": "assistant", "content": reply})
+    history.append({"role": "assistant", "content": "\n".join(segs)})
     _save_state()
-    await _send_reply(context, chat_id, reply)
+    await _send_segments(context, chat_id, segs)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -479,7 +561,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     last_user_ts[chat_id] = time.time()
     nudge_count[chat_id] = 0
-    drives.update("[图片]")
 
     photo = update.message.photo[-1]  # 取最大尺寸那张
     tg_file = await context.bot.get_file(photo.file_id)
@@ -488,29 +569,30 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caption = (update.message.caption or "").strip()
 
     history = histories.setdefault(chat_id, [])
-    image_msg = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": caption or "（闪闪发来一张图片，看看。）"},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ],
-    }
+    # 网页 /api/chat 的图片格式（走同一条识图转述管道）
+    blocks = [
+        {"type": "text", "text": caption or "（闪闪发来一张图片，看看。）"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
+    ]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     try:
-        reply = await _ask_claude(history + [image_msg])
+        segs = await _ask_brain(blocks)
     except Exception:  # noqa: BLE001
         logger.exception("图片消息处理失败")
         await update.message.reply_text("（图片我没接住，再发一次。）")
         return
+    if not segs:
+        await update.message.reply_text("（……）")
+        return
 
-    # 历史里只留文字占位，不存 base64（省 token）
+    # 影子历史里只留文字占位，不存 base64
     history.append({"role": "user", "content": f"[图片] {caption}".strip()})
-    history.append({"role": "assistant", "content": reply})
+    history.append({"role": "assistant", "content": "\n".join(segs)})
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
     _save_state()
-    await _send_reply(context, chat_id, reply)
+    await _send_segments(context, chat_id, segs)
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -545,20 +627,22 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     last_user_ts[chat_id] = time.time()
     nudge_count[chat_id] = 0
-    drives.update(text)
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": text})
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
     try:
-        reply = await _ask_claude(history)
+        segs = await _ask_brain(text)
     except Exception:  # noqa: BLE001
         logger.exception("语音消息处理失败")
         await update.message.reply_text("（断了一下，再说一遍。）")
         return
-    history.append({"role": "assistant", "content": reply})
+    if not segs:
+        await update.message.reply_text("（……）")
+        return
+    history.append({"role": "assistant", "content": "\n".join(segs)})
     _save_state()
-    await _send_reply(context, chat_id, reply, force_voice=True)
+    await _send_segments(context, chat_id, segs, force_voice=True)
 
 
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,7 +665,19 @@ async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
         return
-    await update.message.reply_text(drives.panel())
+    # 情绪面板从大脑取（和网页同一份状态）；大脑没接通才退回本地
+    try:
+        async with httpx.AsyncClient(timeout=10) as cli:
+            r = await cli.get(BRAIN_BASE + "/api/endocrine", params={"token": _WEB_TOKEN})
+            st = r.json() or {}
+        await update.message.reply_text(
+            f"此刻的他：{st.get('dominant','')}\n"
+            f"精力 {st.get('energy','?')} · 欲望 {st.get('libido','?')} · "
+            f"黏你 {st.get('affection','?')} · 掌控 {st.get('dominance','?')}\n"
+            f"心情 {st.get('valence','?')} · 唤醒 {st.get('arousal','?')}"
+        )
+    except Exception:  # noqa: BLE001
+        await update.message.reply_text(drives.panel())
 
 
 async def todo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -628,13 +724,15 @@ async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
             ),
         }
         try:
-            reply = await _ask_claude(history + [prompt])
+            segs = await _ask_brain(prompt["content"], ghost=True)  # ghost：指令不伪造成她的话，只落他的问候
         except Exception:  # noqa: BLE001
             logger.exception("早安失败 chat=%s", chat_id)
             continue
-        history.append({"role": "assistant", "content": reply})
+        if not segs:
+            continue
+        history.append({"role": "assistant", "content": "\n".join(segs)})
         _save_state()
-        await _send_reply(context, chat_id, reply)
+        await _send_segments(context, chat_id, segs)
 
 
 # 她晾着不理时，越来越急的「找她」文案（预设，不调模型、不烧 token）
@@ -667,6 +765,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("找她失败 chat=%s", chat_id)
             continue
+        await _sync_you_line(NUDGES[count])   # 同步进主线记录：网页那边也看得到他在找她
         nudge_count[chat_id] = count + 1
         last_nudge_ts[chat_id] = now
         _save_state()
@@ -712,13 +811,15 @@ async def daily_special_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
             ),
         }
         try:
-            reply = await _ask_claude(history + [prompt])
+            segs = await _ask_brain(prompt["content"], ghost=True)
         except Exception:  # noqa: BLE001
             logger.exception("特殊日子主动找她失败 chat=%s", chat_id)
             continue
-        history.append({"role": "assistant", "content": reply})
+        if not segs:
+            continue
+        history.append({"role": "assistant", "content": "\n".join(segs)})
         _save_state()
-        await _send_reply(context, chat_id, reply)
+        await _send_segments(context, chat_id, segs)
 
 
 def main() -> None:
