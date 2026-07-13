@@ -1904,8 +1904,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.2"
-OMBRE_WEB_VERSION_NOTE = "流式改走 SSE，穿透 Tailscale Funnel 缓冲，真·逐字"
+OMBRE_WEB_VERSION = "v1.3"
+OMBRE_WEB_VERSION_NOTE = "修好逐字输出：气泡不再被轮询重画/去重吞掉"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2907,9 +2907,9 @@ async def api_chat(request):
                         break
                     yield ("data: " + json.dumps(item, ensure_ascii=False) + "\n\n").encode("utf-8")
 
+            # 注：不手动塞 Connection 头——连接管理交给 uvicorn/h11，乱塞会在收尾时踩出 RESET
             return StreamingResponse(_sse(), media_type="text/event-stream",
-                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
-                                              "Connection": "keep-alive"})
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         async def _finish() -> dict:
             """生成回复 + 解析标签 + 落服务器端记录。整块用 asyncio.shield 包住，

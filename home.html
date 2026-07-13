@@ -1392,6 +1392,7 @@
     return out;
   }
   async function loadServerChat(){
+    if(typeof inFlight!=='undefined' && inFlight) return;  // 正在流式打字：绝不整屏重画（会把直播气泡抹掉）；等这轮说完再同步
     try{
       const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(curThread));
       const data=await res.json();
@@ -1528,7 +1529,8 @@
       }
     }
     function destroy(){ rows.forEach(r=>r.remove()); rows.length=0; cur=null; }
-    return { feed, destroy, gotAny:()=>shown };
+    function texts(){ return rows.map(r=>{ const sp=r.querySelector('.btxt'); return sp?sp.textContent:''; }); }
+    return { feed, destroy, texts, gotAny:()=>shown };
   }
   async function streamReply(outgoing){
     const ctrl=new AbortController(); let idleT=null;
@@ -1540,37 +1542,59 @@
     if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
     const sink=makeStreamSink();
     let done=null, first=true, got=false;
+    const rd=res.body.getReader();
     try{
-      const rd=res.body.getReader(); const dec=new TextDecoder(); let carry='';
+      const dec=new TextDecoder(); let carry='';
+      const eat=(line)=>{
+        line=line.replace(/^data:\s?/,'').trim();   // SSE 的 data: 前缀剥掉；裸 ndjson 也照吃
+        if(!line || line[0]===':') return;           // 空行(SSE事件分隔)/注释行(: 开头)跳过
+        let j; try{ j=JSON.parse(line); }catch(e){ return; }
+        if(j.t==='d'){ if(first){ stopThinking(); first=false; } got=true; sink.feed(j.x); }
+        else if(j.t==='done'){ done=j; }
+        else if(!j.t && j.reply!==undefined){ done=j; }   // 服务端还是旧版(整包JSON)：当done用，别退回去重新生成一遍
+      };
       while(true){
         const {value, done:eof}=await rd.read();
         arm();
-        if(eof) break;
+        if(eof){ if(carry.trim()) eat(carry); break; }   // 收尾帧就算没带换行也别丢
         carry+=dec.decode(value,{stream:true});
         let nl;
-        while((nl=carry.indexOf('\n'))>=0){
-          let line=carry.slice(0,nl); carry=carry.slice(nl+1);
-          line=line.replace(/^data:\s?/,'').trim();   // SSE 的 data: 前缀剥掉；裸 ndjson 也照吃
-          if(!line || line[0]===':') continue;         // 空行(SSE事件分隔)/注释行(: 开头)跳过
-          let j; try{ j=JSON.parse(line); }catch(e){ continue; }
-          if(j.t==='d'){ if(first){ stopThinking(); first=false; } got=true; sink.feed(j.x); }
-          else if(j.t==='done'){ done=j; }
-          else if(!j.t && j.reply!==undefined){ done=j; }   // 服务端还是旧版(整包JSON)：当done用，别退回去重新生成一遍
-        }
+        while((nl=carry.indexOf('\n'))>=0){ const line=carry.slice(0,nl); carry=carry.slice(nl+1); eat(line); }
+        if(done) break;   // done 到手就收工，我方主动断开——不给连接收尾出幺蛾子的机会
       }
     }catch(e){
-      clearTimeout(idleT); sink.destroy();
-      if(got){ pollForReply(120000); return null; }   // 半路断线：服务器会写完存好，别重发，去捞
-      throw e;                                          // 一个字没收到 → 让外层退回非流式重来
+      clearTimeout(idleT);
+      // done 已经到手 → 这单赢了，尾巴上的断线(RESET等)不作数，照常落定
+      if(!done){
+        if(got){
+          // 有字但没等到 done：把已经打出来的字先落成正式消息（绝不让说过的话消失），再轮询跟服务器对账
+          const seen=sink.texts?sink.texts():[];
+          sink.destroy();
+          seen.forEach(s=>{ if(s&&s.trim()) addMsg('you',s.trim()); });
+          stopThinking(); pollForReply(60000); return null;
+        }
+        sink.destroy(); throw e;   // 一个字没收到 → 让外层退回非流式重来
+      }
     }
+    try{ rd.cancel(); }catch(e){}
     clearTimeout(idleT);
-    if(!done){ sink.destroy(); if(got){ pollForReply(120000); return null; } throw new Error('stream no done'); }
-    // 落定：直播气泡换成正式消息（进 chatLog、可收藏、挂心里话），文字以服务器清洗后的为准
+    if(!done){
+      // 流正常结束却没有 done：有字就本地落定+对账，没字才报错
+      if(got){
+        const seen=sink.texts?sink.texts():[];
+        sink.destroy();
+        seen.forEach(s=>{ if(s&&s.trim()) addMsg('you',s.trim()); });
+        stopThinking(); pollForReply(60000); return null;
+      }
+      sink.destroy(); throw new Error('stream no done');
+    }
+    // 落定：直播气泡换成正式消息（进 chatLog、可收藏、挂心里话），文字以服务器清洗后的为准。
+    // 注意：这里绝不做「和历史消息比对去重」——他的短句（嗯。/睡吧。）本来就会重复，
+    // 吃掉重复=吃掉他说的话（踩过坑：去重把整条回复吞了，看起来像"回复消失"）。
+    // 流式一条流一个 done，不存在非流式那种重发复读问题。
     sink.destroy();
     const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||'（……）'];
-    const recent=new Set(chatLog.filter(m=>m.side==='you').slice(-6).map(m=>(m.text||'').trim()));
-    const seen=new Set();
-    const fin=segs.map(s=>(s||'').trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
+    const fin=segs.map(s=>(s||'').trim()).filter(Boolean);
     stopThinking();
     fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):''));
     petCtl && petCtl.fromType(true);
@@ -1659,6 +1683,7 @@
   async function requestReply(userApiContent, histText){
     if(inFlight) return;            // 防重入：同一时刻只允许一条在途，杜绝重复请求/重复说
     inFlight=true;
+    clearInterval(_recoverTimer);   // 停掉可能还挂着的恢复轮询——它每3秒整屏重画，会把直播气泡抹掉
     const reqStart=Date.now();
     startThinking();
     const outgoing = chatHistory.concat([{role:'user',content:userApiContent}]).slice(-24);
