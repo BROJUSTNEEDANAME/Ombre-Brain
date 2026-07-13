@@ -1925,8 +1925,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.6"
-OMBRE_WEB_VERSION_NOTE = "修记忆：一样的内容不再记两次；「我记下的」不再截成90字"
+OMBRE_WEB_VERSION = "v1.7"
+OMBRE_WEB_VERSION_NOTE = "修「跳回昨晚话题」：上下文不再被错误合并；主动问候不再被抢跑掐掉"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2400,16 +2400,11 @@ async def api_chat_state(request):
             return (0, 0, 0, 0, 0)
     merged.sort(key=_sk)  # 稳定排序：同一分钟内保持原顺序
 
-    # hist（模型上下文）也并集去重，保留较全的
-    hseen, mhist = set(), []
-    for h in old_hist + inc_hist:
-        if not isinstance(h, dict):
-            continue
-        hk = f"{h.get('role','')}|{str(h.get('content'))[:80]}"
-        if hk in hseen:
-            continue
-        hseen.add(hk)
-        mhist.append(h)
+    # hist（模型上下文）是有严格顺序的对话窗口——绝不能像集合一样并集去重！
+    # 旧做法(old+new按内容去重)会把今早重复出现的短句(早安/嗯。)当旧的丢掉、
+    # 把昨晚的旧轮次顶回窗口 → 他回话时整个人"跳回昨晚的场景"。
+    # 改：以上传方(正在聊天的那台设备)为准；上传为空才退回已存的。
+    mhist = [h for h in inc_hist if isinstance(h, dict)] or old_hist
 
     data = {"log": merged[-400:], "hist": mhist[-40:]}
     try:
@@ -2436,6 +2431,7 @@ def _time_gap_line(tok: str, now) -> str:
     prev = float(data.get(key) or 0)
     ts = now.timestamp()
     data[key] = ts
+    data[key + "_prev"] = prev  # 留着上一次的时刻：welcome_back 用它识别"她刚开口前的空档"
     try:
         with open(_LAST_SEEN_FILE, "w", encoding="utf-8") as f:
             _json.dump(data, f)
@@ -3020,7 +3016,13 @@ async def api_welcome_back(request):
     key = (tok or "default")[:40]
     try:
         with open(_LAST_SEEN_FILE, encoding="utf-8") as f:
-            last_seen = float((_json.load(f) or {}).get(key) or 0)
+            _seen_data = _json.load(f) or {}
+        last_seen = float(_seen_data.get(key) or 0)
+        # 她刚开口（2分钟内）：last_seen 已被她这条消息刷成"刚刚"，空档得用上一次的时刻算——
+        # 否则她一睁眼先发话，就把他的主动问候抢跑掐掉了（他明明等了两小时却装没等）。
+        _prev_seen = float(_seen_data.get(key + "_prev") or 0)
+        if _prev_seen and (_time.time() - last_seen) < 120:
+            last_seen = _prev_seen
     except Exception:  # noqa: BLE001
         last_seen = 0.0
     if not last_seen:

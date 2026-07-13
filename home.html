@@ -1411,7 +1411,9 @@
       // 只在「真有新消息进来」时才重画一次——否则轮询会每 3 秒把整屏重画，看着像一直在刷新
       if(merged.length > chatLog.length){
         chatLog=merged;
-        if(Array.isArray(data.hist) && data.hist.length>=(chatHistory||[]).length) chatHistory=data.hist;
+        // 服务器 hist 只在本地为空时才采用（新设备/清了缓存的引导）——本地上下文窗口才是对话顺序的权威。
+        // 以前"服务器的更长就整个替换"，会把错误合并出来的旧轮次灌进来 → 他跳回昨晚的话题。
+        if(!(chatHistory||[]).length && Array.isArray(data.hist)) chatHistory=data.hist;
         try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
@@ -1664,7 +1666,7 @@
   // 切屏/刷新回来后，耐心轮询把他在后台写好的回复捞回来——IF线首句要建缓存、生成慢，
   // 只试一两次会漏，所以持续轮询直到他那条回复真的进来（或超时）。
   let _recoverTimer=null;
-  function pollForReply(maxMs){
+  function pollForReply(maxMs, resendOnFail){
     clearInterval(_recoverTimer);
     const start=Date.now(); const before=chatLog.length;
     startThinking(); if(thinkText) thinkText.textContent='他还在写…';
@@ -1672,7 +1674,16 @@
       await loadServerChat();
       const last=chatLog[chatLog.length-1];
       if(chatLog.length>before && last && last.side==='you'){ clearInterval(_recoverTimer); stopThinking(); return; }
-      if(Date.now()-start>maxMs){ clearInterval(_recoverTimer); stopThinking(); }
+      if(Date.now()-start>maxMs){
+        clearInterval(_recoverTimer); stopThinking();
+        // 捞了这么久服务器上也没有回复＝那条消息大概率根本没送到（熄屏时请求被系统掐死）。
+        // resendOnFail 时把她最后那条自动重发一遍——否则消息就永远丢了（早安发完睡着→他一直没收到）。
+        // 只在「切屏恢复/开页发现没回复」的场景开这个开关；流式半路断线的恢复不开（那边服务器多半已在写）。
+        if(resendOnFail && !inFlight){
+          const lm=chatLog[chatLog.length-1];
+          if(lm && lm.side==='me' && lm.text && !lm.img){ requestReply(lm.text, lm.text); }
+        }
+      }
     };
     _recoverTimer=setInterval(tick, 3000);
     tick();
@@ -1686,7 +1697,7 @@
     if(document.hidden){ lastHiddenAt=Date.now(); }
     else if(recoverOnReturn){
       recoverOnReturn=false;
-      pollForReply(120000);             // 回前台：耐心轮询最多2分钟，直到他后台写好的回复捞回来
+      pollForReply(120000, true);       // 回前台：耐心轮询最多2分钟；真捞不到=没送到过 → 自动重发那条
     }
   });
   async function requestReply(userApiContent, histText){
@@ -1723,7 +1734,7 @@
       if(wasBackgrounded){
         // 切屏被挂断：他在后台会把回复存到服务器，别重发，回来捞即可
         if(document.hidden){ recoverOnReturn=true; }     // 还在后台 → 回前台时捞
-        else { pollForReply(120000); }                   // 已回前台 → 耐心轮询直到他写好
+        else { pollForReply(120000, true); }             // 已回前台 → 耐心轮询直到他写好；捞不到就自动重发
       } else {
         addMsg('you','（我这边断了一下，网不好。再说一次。）');     // 真·网络问题才报错
       }
@@ -1852,7 +1863,7 @@
   loadServerChat().then(()=>{
     // 刷新时若最后一条是「我」发的、还没等到他回复 → 他可能正在后台写（IF线尤其慢），耐心轮询捞回来
     const last=chatLog[chatLog.length-1];
-    if(last && last.side==='me'){ pollForReply(120000); }
+    if(last && last.side==='me'){ pollForReply(120000, true); }   // 开页发现欠回复：捞不到就自动重发那条
   });
 
   // 你回家时我先开口（home 版的「想你」——代替 Telegram 定时打扰，只在你离开久了、重新打开时出现）
