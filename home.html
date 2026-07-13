@@ -1507,20 +1507,37 @@
     scroll.appendChild(row); toBottom();
     return row;
   }
-  // 边收边滤：吞掉 [emo]/[think]/[diary] 标签、按 ‖ 切气泡。标签可能被网络拆成两半，先扣住半截再决定
+  // 边收边滤：吞掉 [emo]/[think]/[diary] 标签、按 ‖ 切气泡。标签可能被网络拆成两半，先扣住半截再决定。
+  // ★打字机节奏器：不管字是怎么一坨涌进来的（GLM5.1想完一口气喷/网络突发攒包），
+  //   屏幕上永远按真人打字的节奏一个一个蹦——积压越多打得越快，但绝不瞬贴。
   function makeStreamSink(){
     const rows=[]; let cur=null, hold='', shown=false;
+    const q=[]; let timer=null, onDrain=null; const BR='\u0000';   // 打字机队列 + 换气泡标记(控制字符,正文里不会出现)
     const ensure=()=>{ if(!cur){ cur=liveBubbleNew(); rows.push(cur); } return cur.querySelector('.btxt'); };
     const TAGRE=/^\[(?:emo|diary|think):[^\]\n]*\]/;                  // 完整标签
     const OPENRE=/^\[(?:emo|diary|think):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
     const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?)?$/; // 半截标签名
-    function put(x){ if(!x) return; const sp=ensure(); sp.textContent+=x; shown=true; toBottom(); }
+    function pump(){
+      if(timer) return;
+      timer=setInterval(()=>{
+        let n=Math.max(1, Math.ceil(q.length/80));    // 每30ms打1个字；积压多时加速追赶，但始终是"打出来"的
+        while(n-- && q.length){
+          const c=q.shift();
+          if(c===BR){ cur=null; }
+          else { const sp=ensure(); sp.textContent+=c; shown=true; }
+        }
+        toBottom();
+        if(!q.length){ clearInterval(timer); timer=null; if(onDrain){ const f=onDrain; onDrain=null; f(); } }
+      }, 30);
+    }
+    function put(x){ if(!x) return; for(const ch of x) q.push(ch); pump(); }
+    function brk(){ q.push(BR); pump(); }
     function feed(chunk){
       let s=hold+chunk; hold='';
       while(s){
         const br=s.indexOf('‖'), lb=s.indexOf('[');
         if(lb===-1 && br===-1){ put(s); return; }
-        if(br!==-1 && (lb===-1 || br<lb)){ put(s.slice(0,br)); cur=null; s=s.slice(br+1); continue; }
+        if(br!==-1 && (lb===-1 || br<lb)){ put(s.slice(0,br)); brk(); s=s.slice(br+1); continue; }
         put(s.slice(0,lb)); s=s.slice(lb);
         const m=s.match(TAGRE);
         if(m){ s=s.slice(m[0].length); continue; }                     // 完整标签 → 吞掉不显示
@@ -1528,9 +1545,10 @@
         put('['); s=s.slice(1);                                         // 就是普通中括号，放行
       }
     }
-    function destroy(){ rows.forEach(r=>r.remove()); rows.length=0; cur=null; }
+    function whenDrained(cb){ if(!q.length && !timer) cb(); else onDrain=cb; }  // 等打字机把队列敲完
+    function destroy(){ clearInterval(timer); timer=null; q.length=0; rows.forEach(r=>r.remove()); rows.length=0; cur=null; }
     function texts(){ return rows.map(r=>{ const sp=r.querySelector('.btxt'); return sp?sp.textContent:''; }); }
-    return { feed, destroy, texts, gotAny:()=>shown };
+    return { feed, destroy, texts, whenDrained, gotAny:()=>shown };
   }
   async function streamReply(outgoing){
     const ctrl=new AbortController(); let idleT=null;
@@ -1550,6 +1568,7 @@
         if(!line || line[0]===':') return;           // 空行(SSE事件分隔)/注释行(: 开头)跳过
         let j; try{ j=JSON.parse(line); }catch(e){ return; }
         if(j.t==='d'){ if(first){ stopThinking(); first=false; } got=true; sink.feed(j.x); }
+        else if(j.t==='r'){ if(thinkText) thinkText.textContent='他在想……'; }   // GLM5.1 深度思考期心跳:让"正在想"是真的在想
         else if(j.t==='done'){ done=j; }
         else if(!j.t && j.reply!==undefined){ done=j; }   // 服务端还是旧版(整包JSON)：当done用，别退回去重新生成一遍
       };
@@ -1588,6 +1607,8 @@
       }
       sink.destroy(); throw new Error('stream no done');
     }
+    // 先等打字机把队列里的字敲完（GLM5.1一口气喷来的字还在一个个蹦），最多等20s兜底
+    if(sink.whenDrained){ await new Promise(res=>{ const t=setTimeout(res,20000); sink.whenDrained(()=>{ clearTimeout(t); res(); }); }); }
     // 落定：直播气泡换成正式消息（进 chatLog、可收藏、挂心里话），文字以服务器清洗后的为准。
     // 注意：这里绝不做「和历史消息比对去重」——他的短句（嗯。/睡吧。）本来就会重复，
     // 吃掉重复=吃掉他说的话（踩过坑：去重把整条回复吞了，看起来像"回复消失"）。
