@@ -1901,6 +1901,20 @@ async def _llm_create(client, **kw):
     return await client.chat.completions.create(**kw)
 
 
+# ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
+# 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
+# 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
+OMBRE_WEB_VERSION = "v1.1"
+OMBRE_WEB_VERSION_NOTE = "流式输出：他一个字一个字打出来 + 版本号系统"
+
+
+@mcp.custom_route("/api/version", methods=["GET"])
+async def api_version(request):
+    """网页开页时查当前版本；和 localStorage 里存的对比，变了就弹「已更新至 …」。"""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"version": OMBRE_WEB_VERSION, "note": OMBRE_WEB_VERSION_NOTE})
+
+
 async def _bg_run_tool(fn, args):
     """后台执行一个大脑工具（如 hold/grow：写库+算embedding），出错只记日志、不影响对话。"""
     try:
