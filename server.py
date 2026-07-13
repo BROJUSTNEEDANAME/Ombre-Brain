@@ -1873,6 +1873,18 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 _IMG_DESC_CACHE: dict = {}  # 图片→识图转述 缓存（按图片指纹），同一张图只识一次
+_BG_TASKS: set = set()      # 后台任务引用（防止被 GC）——写记忆等慢活丢这里跑，不拖住回复
+
+
+async def _bg_run_tool(fn, args):
+    """后台执行一个大脑工具（如 hold/grow：写库+算embedding），出错只记日志、不影响对话。"""
+    try:
+        await fn(**args)
+    except Exception as e:  # noqa: BLE001
+        try:
+            logger.warning(f"后台记忆工具失败: {e}")
+        except Exception:  # noqa: BLE001
+            pass
 # 情绪日历的 12 个心情词（和 home.html 的 EMO 一致）；模型没自打 [emo] 时用来兜底判定
 _EMO_WORDS = ["沉默", "担心你", "想靠近你", "心疼你", "烦躁", "空", "占有", "安定", "害羞", "吃醋", "火辣", "欲望"]
 
@@ -2699,20 +2711,26 @@ async def api_chat(request):
                         args = json.loads(tc.function.arguments or "{}")
                     except Exception:  # noqa: BLE001
                         args = {}
-                    # 探测「我」是否往大脑里记了东西（hold / grow），网页显示「已记录」
+                    fn = _TOOL_DISPATCH.get(name)
+                    # 写记忆（hold/grow）要算 embedding，走外部 API 可能等几十秒——绝不能拖住回复。
+                    # 丢到后台跑，立刻回「已记下」，他照常把话说完；记忆在后台悄悄存好。
                     if name in ("hold", "grow"):
                         c = args.get("content")
                         if c:
                             recorded.append(str(c)[:90])
-                    fn = _TOOL_DISPATCH.get(name)
-                    try:
-                        # 关键：给工具执行加超时。hold/grow 要写库+算embedding，一旦卡住会把整条回复无限期挂死
-                        # （网页只能干等180s，期间她发不出话）。超时就跳过，让他照常把话说完。
-                        res = await asyncio.wait_for(fn(**args), timeout=20) if fn else f"unknown tool: {name}"
-                    except asyncio.TimeoutError:
-                        res = "（这步太慢，先跳过了）"
-                    except Exception as e:  # noqa: BLE001
-                        res = f"工具失败: {e}"
+                        if fn:
+                            _t = asyncio.create_task(_bg_run_tool(fn, args))
+                            _BG_TASKS.add(_t)
+                            _t.add_done_callback(_BG_TASKS.discard)
+                        res = "已记下（后台保存中）"
+                    else:
+                        # 读类工具（breath/read/pulse…）他需要结果才能接着答，照样等，但加超时防卡死
+                        try:
+                            res = await asyncio.wait_for(fn(**args), timeout=15) if fn else f"unknown tool: {name}"
+                        except asyncio.TimeoutError:
+                            res = "（这步太慢，先跳过了）"
+                        except Exception as e:  # noqa: BLE001
+                            res = f"工具失败: {e}"
                     msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(res)[:8000]})
             return out
 
