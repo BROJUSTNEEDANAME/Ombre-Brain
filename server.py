@@ -1878,6 +1878,27 @@ _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 _IMG_DESC_CACHE: dict = {}  # 图片→识图转述 缓存（按图片指纹），同一张图只识一次
 _BG_TASKS: set = set()      # 后台任务引用（防止被 GC）——写记忆等慢活丢这里跑，不拖住回复
+_RECENT_MEMS: list = []     # 最近记过的内容 [(时刻,内容)]——15分钟内几乎一样的不再重复写
+
+
+def _mem_dup_check(content: str) -> bool:
+    """写记忆前的查重：15 分钟内记过高度相似（≥88%）的就拦下，防「换个说法再记一遍」。
+    不重复时顺手登记本条。大脑自己的合并去重是异步的，几秒内连着写两条相似的会撞车漏合——这里在门口先拦。"""
+    import time as _time
+    now = _time.monotonic()
+    _RECENT_MEMS[:] = [(t, c) for (t, c) in _RECENT_MEMS if now - t < 900][-12:]
+    try:
+        from rapidfuzz import fuzz
+        for _t, c in _RECENT_MEMS:
+            # 阈值 75＝大脑合并去重的同一条线：反正≥75会被合并成同一个桶，就别写第二遍
+            if fuzz.ratio(content[:300], c[:300]) >= 75:
+                return True
+    except Exception:  # noqa: BLE001 — 没装 rapidfuzz 就退化成前缀比对
+        for _t, c in _RECENT_MEMS:
+            if content[:120] == c[:120]:
+                return True
+    _RECENT_MEMS.append((now, content))
+    return False
 
 # GLM-4.5 起是混合推理模型：不传参数时"深度思考"默认开着——每条回复都先在后台
 # 憋一大段看不见的推理再开口，这是"他半天不说话"的最大来源。聊天陪伴不需要解题式
@@ -1904,8 +1925,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.5"
-OMBRE_WEB_VERSION_NOTE = "修「记完记忆旧消息像被吞」：老消息不再跳到聊天最顶上（无打字机版）"
+OMBRE_WEB_VERSION = "v1.6"
+OMBRE_WEB_VERSION_NOTE = "修记忆：一样的内容不再记两次；「我记下的」不再截成90字"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2753,14 +2774,20 @@ async def api_chat(request):
                     args = {}
                 fn = _TOOL_DISPATCH.get(name)
                 if name in ("hold", "grow"):
-                    c = args.get("content")
-                    if c:
-                        recorded.append(str(c)[:90])
-                    if fn:
-                        _t = asyncio.create_task(_bg_run_tool(fn, args))
-                        _BG_TASKS.add(_t)
-                        _t.add_done_callback(_BG_TASKS.discard)
-                    res = "已记下（后台保存中）"
+                    c = str(args.get("content") or "")
+                    if c and _mem_dup_check(c):
+                        # 15分钟内记过几乎一样的 → 不再写第二遍，并明确告诉他已存好、别再补刀
+                        res = "刚才已经记过几乎一样的内容了，没有重复保存。已存好，不用再记。"
+                    else:
+                        if c:
+                            recorded.append(c[:300])   # 给前端「我记下的」展示用；大脑里存的是全文
+                        if fn:
+                            _t = asyncio.create_task(_bg_run_tool(fn, args))
+                            _BG_TASKS.add(_t)
+                            _t.add_done_callback(_BG_TASKS.discard)
+                        # 回执带上存了什么的摘要——他看得到自己记了什么，就不会不放心再换个说法记一遍
+                        _head = c[:60].replace("\n", " ")
+                        res = "已记下（后台保存中）：" + _head + ("…" if len(c) > 60 else "")
                 else:
                     try:
                         res = await asyncio.wait_for(fn(**args), timeout=15) if fn else f"unknown tool: {name}"
