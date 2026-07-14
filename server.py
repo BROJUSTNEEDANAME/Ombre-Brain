@@ -1925,8 +1925,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.8"
-OMBRE_WEB_VERSION_NOTE = "TG 合体：Telegram 和网页是同一个他——同人设、同记忆、同一个聊天现场"
+OMBRE_WEB_VERSION = "v1.9"
+OMBRE_WEB_VERSION_NOTE = "高欲望＝暗红入夜，高支配＝他话里的特殊词发光（顺手修掉从没生效过的旧发光）"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])

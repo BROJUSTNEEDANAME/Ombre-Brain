@@ -75,6 +75,29 @@
     --sh-float: 0 12px 40px rgba(0, 0, 0, 0.55);
     --grain: 0.05;
   }
+  /* ---------- 欲望入夜：暗红（libido 冲高时整个页面沉进暗红里） ---------- */
+  body.desire-red {
+    --bg: #150507;
+    --bg-grad: radial-gradient(135% 100% at 50% 0%, #220A0E 0%, #170608 60%, #100405 100%);
+    --surface: #241014;
+    --surface-2: #2D141A;
+    --bubble-me: linear-gradient(160deg, #A5323F 0%, #7E2531 100%);
+    --bubble-me-text: #FCEDEA;
+    --bubble-you: #251015;
+    --bubble-you-text: #EFDCD8;
+    --text: #EFDCD8;
+    --text-dim: #A17B7C;
+    --text-faint: #6E5152;
+    --accent: #D9525F;
+    --accent-warm: #E26E70;
+    --accent-soft: rgba(217, 82, 95, 0.14);
+    --hair: rgba(160, 80, 90, 0.22);
+    --hair-strong: rgba(160, 80, 90, 0.36);
+    --nav-bg: rgba(20, 6, 8, 0.74);
+    --header-bg: rgba(20, 6, 8, 0.62);
+    --composer-glass: rgba(24, 8, 10, 0.55);
+    --field-glass: rgba(255, 235, 235, 0.06);
+  }
   /* 布局尺寸变量：JS 实时填，给各固定层用 */
   :root { --app-h: 100vh; --kb: 0px; --header-h: 0px; --topnav-h: 0px; --footer-h: 0px; --composer-blur: 22px; }
 
@@ -188,7 +211,10 @@
   .mem-body.open { display: block; }
   /* 欲望内分泌视觉：dominance 高 → 他的话暗自发光；libido 高 → 拉窗帘(深色) */
   /* dom 冲高 → 他的话暗自发光（挂在他的气泡上；之前误挂在她的橙色气泡上，橙光配橙底根本看不见） */
-  body.dom-glow .row.him .bubble { color: var(--text); text-shadow: 0 0 8px rgba(255,167,89,.6), 0 0 22px rgba(255,140,60,.32); transition: text-shadow .9s ease; }
+  /* 支配值冲高：他话里的特殊词妖冶发光。（旧版整段发光的选择器写的是 .row.him，
+     但气泡真实类名是 .row.you——所以那效果从来没亮过；现在改成按词发光） */
+  body.dom-glow .row.you .gword { color: #FF5F6E; font-weight: 600; text-shadow: 0 0 7px rgba(255,70,90,.70), 0 0 18px rgba(255,40,70,.40); transition: text-shadow .6s ease, color .6s ease; }
+  body.desire-red.dom-glow .row.you .gword { color: #FF6F7C; text-shadow: 0 0 8px rgba(255,80,100,.80), 0 0 22px rgba(255,50,80,.45); }
   /* 收藏标记 */
   .row.fav .bubble { box-shadow: 0 0 0 2px var(--accent), var(--sh-bubble); }
   /* 流式直播气泡：末尾一根呼吸的小竖线，像他正在打字 */
@@ -1422,6 +1448,13 @@
       }
     }catch(e){}
   }
+  // 特殊词发光：高 dom 时他话里的这些词会亮起来（想换词就改这个列表）
+  const GLOW_WORDS=['乖','听话','我的','过来','别动','看着我','别躲','坐好','girl','дорогая','solnyshko','жена','闪闪'];
+  const _gre=new RegExp('('+GLOW_WORDS.join('|')+')','gi');
+  function _glowify(t){
+    const esc=(''+t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');  // 先转义再包词，杜绝注入
+    return esc.replace(_gre,'<span class="gword">$1</span>');
+  }
   function renderBubble(side,text,t,img,think,msg){
     if(side==='sys'){ const d=document.createElement('div'); d.className='sysnote'; d.textContent=text; scroll.appendChild(d); toBottom(); return; }
     if(!(text&&(''+text).trim()) && !img) return;   // 空气泡（没文字也没图）不渲染
@@ -1430,7 +1463,9 @@
     const bub=row.querySelector('.bubble'), wrap=row.querySelector('.bubble-wrap');
     if(img){ bub.classList.add('has-img'); const im=document.createElement('img'); im.className='bimg'; im.src=img; im.onload=toBottom; bub.appendChild(im); }
     let sp=null;
-    if(text){ sp=document.createElement('div'); sp.className='btxt'; sp.textContent=text; bub.appendChild(sp); }
+    if(text){ sp=document.createElement('div'); sp.className='btxt';
+      if(side==='you'){ sp.innerHTML=_glowify(text); } else { sp.textContent=text; }  // 他的话包发光词（平时隐形，dom冲高才亮）
+      bub.appendChild(sp); }
     // 仿 Telegram：时间嵌进文字流末尾——同一行放得下就跟在句尾右侧，放不下才换行贴右（不再隔空行）
     const tin=document.createElement('span'); tin.className='tin'; tin.textContent=(t||now()); (sp||bub).appendChild(tin);
     // 他没说出口的心里话([think])，默认缩着，点开看。注意：这是他的内心念头，不是存进大脑的记忆。
@@ -1635,11 +1670,13 @@
       lastEndo=st; try{ localStorage.setItem('endoState',JSON.stringify(st)); }catch(e){}
       const _em=document.getElementById('endoModal');
       if(_em&&_em.classList.contains('show')&&typeof renderEndoPanel==='function') renderEndoPanel();
-      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配冲高 → 他的话暗自发光
-      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下入夜
+      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配冲高 → 他话里的特殊词发光
+      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下沉进暗红
         _desireDim=true; document.documentElement.setAttribute('data-theme','dark');
+        document.body.classList.add('desire-red');
       }else if(!st.dim && _desireDim){                                 // 欲望消退 → 退回她自己的主题设定
-        _desireDim=false; if(typeof applyTheme==='function') applyTheme();
+        _desireDim=false; document.body.classList.remove('desire-red');
+        if(typeof applyTheme==='function') applyTheme();
       }
     }catch(e){}
   }
