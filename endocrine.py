@@ -157,6 +157,21 @@ def block() -> str:
     return "【当前状态·内分泌】" + s
 
 
+def set_levels(**kw) -> dict:
+    """手动调值（1-10）：他（模型的 set_state 工具）或她（面板）直接拉高/压低状态。
+    只改传入的字段，其余不动；改完立刻重算 dim/glow 档位并落盘。"""
+    for k in ("energy", "libido", "affection", "dominance"):
+        if k in kw and kw[k] is not None:
+            try:
+                _state[k] = _clamp(float(kw[k]))
+            except Exception:  # noqa: BLE001
+                pass
+    _update_mode_flags()
+    _state["lastUpdatedAt"] = time.time()
+    _save()
+    return state()
+
+
 def calm() -> dict:
     """她手动让他冷静：欲望/支配降回安全区，入夜和发光立即退出。"""
     _state["libido"] = min(_state["libido"], 4.0)

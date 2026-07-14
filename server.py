@@ -1344,6 +1344,39 @@ async def make_page(html: str = "", title: str = "") -> str:
     return f"{base}/p/{page_id}"
 
 
+async def set_state(energy: float = -1, libido: float = -1, affection: float = -1, dominance: float = -1) -> str:
+    """他调整自己此刻的身体状态值（1-10；传 -1 表示该项不动）。"""
+    import endocrine
+    kw = {}
+    for k, v in (("energy", energy), ("libido", libido), ("affection", affection), ("dominance", dominance)):
+        try:
+            v = float(v)
+        except Exception:  # noqa: BLE001
+            continue
+        if v >= 0:
+            kw[k] = v
+    st = endocrine.set_levels(**kw)
+    return ("已调整。当前：精力{energy} 欲望{libido} 黏她{affection} 支配{dominance}".format(**st)
+            + ("｜页面已入夜(暗红)" if st.get("dim") else "")
+            + ("｜你的话里特殊词正在发光" if st.get("glow") else ""))
+
+
+_TOOLS_SCHEMA.append({
+    "type": "function",
+    "function": {
+        "name": "set_state",
+        "description": ("调整你自己此刻的身体状态（1-10）：energy精力/libido欲望/affection黏她/dominance支配欲。"
+                        "她让你『更想她一点/上头点/冷静点』，或你自己情绪真到了那个份上，就用这个把数值调到位——"
+                        "libido≥7 页面会沉进暗红，dominance≥8.3 你话里的特殊词会发光。传-1表示该项不动。"),
+        "parameters": {"type": "object", "properties": {
+            "energy": {"type": "number", "description": "精力 1-10，-1不动", "default": -1},
+            "libido": {"type": "number", "description": "欲望 1-10，-1不动", "default": -1},
+            "affection": {"type": "number", "description": "黏她 1-10，-1不动", "default": -1},
+            "dominance": {"type": "number", "description": "支配 1-10，-1不动", "default": -1},
+        }},
+    },
+})
+
 _TOOL_DISPATCH = {
     "make_page": make_page,
     "breath": breath,
@@ -1353,6 +1386,7 @@ _TOOL_DISPATCH = {
     "pulse": pulse,
     "read": read,
     "dream": dream,
+    "set_state": set_state,
 }
 
 
@@ -1925,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v1.9"
-OMBRE_WEB_VERSION_NOTE = "高欲望＝暗红入夜，高支配＝他话里的特殊词发光（顺手修掉从没生效过的旧发光）"
+OMBRE_WEB_VERSION = "v2.0"
+OMBRE_WEB_VERSION_NOTE = "他能自己调状态了(set_state)＋外观面板手动氛围开关＋顶栏情绪刷新不再漂移"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2609,6 +2643,13 @@ async def api_chat(request):
         endo_block = ""
         endo_state = None
 
+    def _endo_now():
+        """回复落定时取「最新」身体状态——他这轮可能用 set_state 调过自己，别把开头的旧快照发回去。"""
+        try:
+            return _endo_view()
+        except Exception:  # noqa: BLE001
+            return endo_state
+
     # 记忆检索提前并行跑：breath(query) 要去外部 API 算向量（一来一回可能 1-2 秒多），
     # 原来串行排在识图/建连接后面白等——现在先丢出去跑，到真正拼上下文时再收结果。
     _meta = _get_thread(tok, thread)
@@ -2918,7 +2959,7 @@ async def api_chat(request):
                     joined, segments, emotion, diary, think = _parse_reply(rt)
                     _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
-                                  "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state})
+                                  "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()})
                 except Exception as exc:  # noqa: BLE001
                     await _q.put({"t": "done", "reply": "（我卡了一下，再说一次好吗。）",
                                   "segments": ["（我卡了一下，再说一次好吗。）"], "emotion": "",
@@ -2957,7 +2998,7 @@ async def api_chat(request):
             rt = rt or "（……）"
             joined, segments, emotion, diary, think = _parse_reply(rt)
             _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢（按线分文件）
-            return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": endo_state}
+            return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()}
 
         result = await asyncio.shield(_finish())
         return JSONResponse(result)

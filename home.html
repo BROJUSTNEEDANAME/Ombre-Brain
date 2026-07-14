@@ -865,6 +865,11 @@
         <button data-md="glm-5.1">GLM 5.1</button>
         <button data-md="glm-4.6">GLM 4.6</button>
       </div>
+      <div class="skin-label">氛围（手动开关，不看他的状态）</div>
+      <div class="skin-theme" id="skinVibe">
+        <button data-vb="red">暗红入夜</button>
+        <button data-vb="glow">词语发光</button>
+      </div>
       <div class="skin-label">预设套装</div>
       <div class="skin-presets" id="skinPresets"></div>
       <div class="skin-label">自定义</div>
@@ -1662,7 +1667,18 @@
     document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') wb(); });
   })();
   // 欲望内分泌 → 网页视觉：libido 高直接入夜(正经深色主题,字看得清)、dominance 高他的话暗自发光；消退自动切回
-  let _desireDim=false, lastEndo=null;
+  let _endoDim=false, _endoGlow=false, lastEndo=null;
+  // 手动氛围开关（外观面板）：不看他的状态，想开就开；和自动触发是「或」的关系
+  let manualVibe={red:false,glow:false}; try{ manualVibe=Object.assign(manualVibe, JSON.parse(localStorage.getItem('manualVibe')||'{}')); }catch(e){}
+  function _applyFx(){
+    const red=manualVibe.red||_endoDim, glow=manualVibe.glow||_endoGlow;
+    document.body.classList.toggle('dom-glow', glow);
+    const had=document.body.classList.contains('desire-red');
+    if(red && !had){ document.documentElement.setAttribute('data-theme','dark'); document.body.classList.add('desire-red'); }
+    else if(!red && had){ document.body.classList.remove('desire-red'); if(typeof applyTheme==='function') applyTheme(); }
+    const box=document.getElementById('skinVibe');
+    if(box) box.querySelectorAll('button').forEach(b=>b.classList.toggle('on', !!manualVibe[b.dataset.vb]));
+  }
   try{ lastEndo=JSON.parse(localStorage.getItem('endoState')||'null'); }catch(e){}
   function applyEndocrine(st){
     try{
@@ -1670,14 +1686,8 @@
       lastEndo=st; try{ localStorage.setItem('endoState',JSON.stringify(st)); }catch(e){}
       const _em=document.getElementById('endoModal');
       if(_em&&_em.classList.contains('show')&&typeof renderEndoPanel==='function') renderEndoPanel();
-      document.body.classList.toggle('dom-glow', !!st.glow);          // 支配冲高 → 他话里的特殊词发光
-      if(st.dim && !_desireDim){                                       // 欲望冲上阈值 → 唰一下沉进暗红
-        _desireDim=true; document.documentElement.setAttribute('data-theme','dark');
-        document.body.classList.add('desire-red');
-      }else if(!st.dim && _desireDim){                                 // 欲望消退 → 退回她自己的主题设定
-        _desireDim=false; document.body.classList.remove('desire-red');
-        if(typeof applyTheme==='function') applyTheme();
-      }
+      _endoDim=!!st.dim; _endoGlow=!!st.glow;   // 自动触发（内分泌阈值）
+      _applyFx();                                // 和手动开关合并后统一上/卸妆
     }catch(e){}
   }
   // 带超时的请求。只在「很快就失败」（请求根本没到、服务器没处理）时重试一次，避免重复生成/重复说。
@@ -2387,9 +2397,17 @@
       }catch(e){}
       setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
     };
-    // 开页先把他当前的身体状态捞回来（顺带恢复拉窗帘/发光）
+    // 开页先把他当前的身体状态捞回来（恢复入夜/发光 + 顶栏情绪同步——以前刷新后顶栏会掉回默认"安定"）
     fetch('api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
-      .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined') applyEndocrine(st); }).catch(()=>{});
+      .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined'){ applyEndocrine(st); if(st.dominant&&typeof setEmotion==='function') setEmotion(st.dominant); } }).catch(()=>{});
+    // 手动氛围开关接线 + 开页恢复上次的手动选择
+    const vb=document.getElementById('skinVibe');
+    if(vb) vb.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+      manualVibe[b.dataset.vb]=!manualVibe[b.dataset.vb];
+      try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
+      _applyFx();
+    });
+    _applyFx();
   })();
   // 日记/日历 收起+展开（默认收起，先看「我记下的」）
   (function(){
