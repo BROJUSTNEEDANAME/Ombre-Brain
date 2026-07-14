@@ -1588,7 +1588,10 @@
     const arm=()=>{ clearTimeout(idleT); idleT=setTimeout(()=>ctrl.abort(),120000); }; // 120s 没动静才算断
     arm();
     const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, stream:true }),
+      // client_dk/t：把手机自己的日期/时刻发给服务器落盘用——否则服务器盖洛杉矶时区的戳，
+      // 和手机本地戳对不上，半夜发消息时同一条回复被打成两个日期→排到"昨天"滚出屏幕(像消失)
+      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, stream:true,
+                            client_dk:(typeof tKey==='function'?tKey():''), client_t:now() }),
       signal:ctrl.signal });
     if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
     const sink=makeStreamSink();
@@ -1768,7 +1771,8 @@
       catch(e){ streamed=false; }
       if(streamed && data===null){ return; }          // 半路断线：已转入轮询捞服务器存好的回复
       if(!streamed){
-        data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel });
+        data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel,
+                              client_dk:(typeof tKey==='function'?tKey():''), client_t:now() });
         await showReply(data);
       }
       const reply=(data&&data.reply)||'（……）';

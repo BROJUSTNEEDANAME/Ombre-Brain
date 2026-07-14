@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.0"
-OMBRE_WEB_VERSION_NOTE = "他能自己调状态了(set_state)＋外观面板手动氛围开关＋顶栏情绪刷新不再漂移"
+OMBRE_WEB_VERSION = "v2.1"
+OMBRE_WEB_VERSION_NOTE = "修半夜发消息回复像消失：日期戳统一用手机时区，不再排到昨天滚出屏幕"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2083,7 +2083,7 @@ def _if_static_block(meta: dict) -> str:
 
 
 def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, thread: str = "main",
-                       ghost_user: bool = False) -> None:
+                       ghost_user: bool = False, client_dk: str = "", client_t: str = "") -> None:
     """把这一轮（她的消息 + 他的回复）落到服务器端聊天记录里（按线分文件）。
     这样就算闪闪发完就切屏、请求被手机挂断，他在后台把话说完后也会存在这儿，
     她回来一刷新就能看到——不丢、不报错（像 Telegram 那样后台把话留住）。
@@ -2099,16 +2099,16 @@ def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, t
             data = {}
         log = data.get("log") or []
         hist = data.get("hist") or []
+        # 优先用手机传来的日期/时刻（和手机本地时区一致）；没有才退回服务器的洛杉矶时区。
+        # 这样服务器存的这条和手机自己存的那条 dk/t 完全一致 → 同步合并成一条，不再错位分裂。
         try:
             from zoneinfo import ZoneInfo
             _now = datetime.now(ZoneInfo("America/Los_Angeles"))
-            ts = _now.strftime("%H:%M")
-            # dk＝客户端的日期键（格式必须和网页 tKey() 一致：不补零）。
-            # 以前这里不写 dk，客户端合并排序把没日期的当 1970 年→老消息整段跳到聊天最顶上，
-            # 看起来像"记完记忆消息被吞了"。
-            dk = f"{_now.year}-{_now.month}-{_now.day}"
+            ts = client_t or _now.strftime("%H:%M")
+            # dk 格式必须和网页 tKey() 一致：不补零
+            dk = client_dk or f"{_now.year}-{_now.month}-{_now.day}"
         except Exception:
-            ts, dk = "", ""
+            ts, dk = (client_t or ""), (client_dk or "")
         # ghost_user=True（TG 主动问候等）：user_text 是系统指令、不是她说的话——只落他的回复，不伪造她的气泡
         if not ghost_user:
             # 用户气泡：客户端发送时一般已存过，避免重复；最后一条不是这条才补
@@ -2508,6 +2508,10 @@ async def api_chat(request):
     # ghost_user：这条 user 消息是系统指令（TG 早安问候等"他主动开口"），不是她说的——
     # 生成照常，但落盘时只存他的回复，不把指令伪造成她的气泡/上下文
     ghost_user = bool(body.get("ghost_user"))
+    # client_dk/client_t：手机自己的日期键/时刻，落盘用它别用服务器的洛杉矶时区——否则半夜发消息时
+    # 服务器盖的日期和手机不一致，同一条回复被打成两个日期，同步时错位到别的天（视觉上像"消失"）
+    client_dk = (body.get("client_dk") or "").strip()
+    client_t = (body.get("client_t") or "").strip()
 
     api_key = (
         os.environ.get("LLM_API_KEY")
@@ -2957,7 +2961,7 @@ async def api_chat(request):
                             for i, s2 in sorted(tc_acc.items())])
                     rt = (rt or "").strip() or "（……）"
                     joined, segments, emotion, diary, think = _parse_reply(rt)
-                    _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢
+                    _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
                                   "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()})
                 except Exception as exc:  # noqa: BLE001
@@ -2997,7 +3001,7 @@ async def api_chat(request):
                 rt = await _run_chat(False)
             rt = rt or "（……）"
             joined, segments, emotion, diary, think = _parse_reply(rt)
-            _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user)  # 切屏也不丢（按线分文件）
+            _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢（按线分文件）
             return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()}
 
         result = await asyncio.shield(_finish())
