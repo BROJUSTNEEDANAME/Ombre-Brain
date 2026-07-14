@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.1"
-OMBRE_WEB_VERSION_NOTE = "修半夜发消息回复像消失：日期戳统一用手机时区，不再排到昨天滚出屏幕"
+OMBRE_WEB_VERSION = "v2.2"
+OMBRE_WEB_VERSION_NOTE = "彻底修消息分裂：按内容去重(忽略时区日期)，我的话不再消失、退出重进不再有两条一样的"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2417,10 +2417,14 @@ async def api_chat_state(request):
         existing, old_hist = [], []
 
     def _mk(m):
-        return f"{m.get('dk','')}|{m.get('side','')}|{m.get('t','')}|{(m.get('text') or '')[:60]}"
+        # 按内容去重，★不含 dk/t★：时区错位会给同一条盖不同日期/时刻，只有认内容才能合成一条，
+        # 否则服务器越存越多重复、每次 GET 又把重复吐回手机（"退出重进出现两条一样的"）。
+        txt = " ".join(str(m.get("text") or "").split())[:100]
+        img = ("#" + str(len(str(m.get("img")))) if m.get("img") else "")
+        return f"{m.get('side','')}|{txt}{img}"
 
     seen, merged = set(), []
-    for m in existing + incoming:  # 已存的在前，上传的补新的进来
+    for m in existing + incoming:  # 已存的在前，上传的补新的进来；同内容只留第一份
         if not isinstance(m, dict):
             continue
         k = _mk(m)
@@ -2430,12 +2434,20 @@ async def api_chat_state(request):
         merged.append(m)
 
     def _sk(m):
+        # dk 缺失时用「今天」而不是 1970，避免没日期的老消息被排到最顶（视觉上像消息乱序/丢失）
+        _dk = m.get("dk") or ""
         try:
-            y, mo, d = (int(x) for x in (m.get("dk") or "1970-1-1").split("-"))
+            if _dk:
+                y, mo, d = (int(x) for x in _dk.split("-"))
+            else:
+                from datetime import datetime as _dt
+                from zoneinfo import ZoneInfo as _ZI
+                _n = _dt.now(_ZI("America/Los_Angeles"))
+                y, mo, d = _n.year, _n.month, _n.day
             hh, mm = (int(x) for x in (m.get("t") or "0:0").split(":"))
             return (y, mo, d, hh, mm)
         except Exception:  # noqa: BLE001
-            return (0, 0, 0, 0, 0)
+            return (9999, 0, 0, 0, 0)
     merged.sort(key=_sk)  # 稳定排序：同一分钟内保持原顺序
 
     # hist（模型上下文）是有严格顺序的对话窗口——绝不能像集合一样并集去重！
