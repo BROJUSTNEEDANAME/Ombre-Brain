@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.5"
-OMBRE_WEB_VERSION_NOTE = "修「记忆一记回复就没了」：他边说边记时，正文不再被当碎碎念丢掉"
+OMBRE_WEB_VERSION = "v2.6"
+OMBRE_WEB_VERSION_NOTE = "治记忆重复：写入串行化，相似记忆写前先落库再搜，能合并的不再各记一遍"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -1970,10 +1970,20 @@ async def api_version(request):
     return JSONResponse({"version": OMBRE_WEB_VERSION, "note": OMBRE_WEB_VERSION_NOTE})
 
 
+_MEM_WRITE_LOCK: "asyncio.Lock | None" = None
+
+
 async def _bg_run_tool(fn, args):
-    """后台执行一个大脑工具（如 hold/grow：写库+算embedding），出错只记日志、不影响对话。"""
+    """后台执行一个大脑工具（如 hold/grow：写库+算embedding），出错只记日志、不影响对话。
+    ★串行化：记忆写入必须一条一条来——否则几条相似记忆并发写时，彼此的向量还没算好就各自
+    新建了（竞态），导致"同一件事记了好几遍"。加锁后 A 完全落库(含向量)B 才开始搜，
+    B 就能搜到 A 并合并。"""
+    global _MEM_WRITE_LOCK
+    if _MEM_WRITE_LOCK is None:
+        _MEM_WRITE_LOCK = asyncio.Lock()
     try:
-        await fn(**args)
+        async with _MEM_WRITE_LOCK:
+            await fn(**args)
     except Exception as e:  # noqa: BLE001
         try:
             logger.warning(f"后台记忆工具失败: {e}")
