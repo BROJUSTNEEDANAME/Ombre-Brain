@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.7"
-OMBRE_WEB_VERSION_NOTE = "修「爆省略号」：他光调工具没说话时，强制再答一轮，不再落（……）"
+OMBRE_WEB_VERSION = "v2.8"
+OMBRE_WEB_VERSION_NOTE = "他不在时活动更勤更像人：不规律间隔+小爆发+夜里更勤（黏人型，6h约10-15条）"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3384,7 +3384,41 @@ async def _inner_browse(client, tz, data):
     return {"text": t, "topic": title}
 
 
-async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz) -> None:
+# 活动密度档位：不再固定节拍——每次随机间隔 + 偶尔"爆发"(短时间连出几条) + 夜里更勤。
+# 单位分钟。gap=普通间隔区间，night_gap=夜里(更勤)，burst_*=爆发。用 OMBRE_INNER_DENSITY 选档。
+_INNER_PROFILES = {
+    "clingy": {"min_gap": 12, "gap": (26, 52), "night_gap": (20, 40),
+               "burst_prob": 0.22, "burst_count": (1, 1), "burst_gap": (5, 10),
+               "daily_cap": 20, "poll": 4},   # 6h 约 13(昼)~16(夜) 条
+    "normal": {"min_gap": 30, "gap": (45, 90), "night_gap": (35, 70),
+               "burst_prob": 0.18, "burst_count": (1, 1), "burst_gap": (8, 14),
+               "daily_cap": 12, "poll": 6},
+    "quiet":  {"min_gap": 45, "gap": (90, 160), "night_gap": (75, 130),
+               "burst_prob": 0.12, "burst_count": (0, 1), "burst_gap": (12, 20),
+               "daily_cap": 7, "poll": 10},
+}
+
+
+def _schedule_next(now: float, data: dict, prof: dict, tz) -> float:
+    """算下一条心事的时刻——人类式不规律：多数是随机间隔，偶尔开一段"爆发"(连出2-3条),夜里更勤。"""
+    import random
+    from datetime import datetime
+    burst_left = int(data.get("burst_left") or 0)
+    hour = (datetime.now(tz) if tz else datetime.now()).hour
+    night = (0 <= hour < 8)  # 深夜/清晨，安静时段他一个人想得更勤
+    if burst_left > 0:  # 正在爆发中：紧接着再来一条
+        data["burst_left"] = burst_left - 1
+        lo, hi = prof["burst_gap"]
+    elif random.random() < prof["burst_prob"]:  # 开一段新爆发
+        data["burst_left"] = random.randint(*prof["burst_count"])
+        lo, hi = prof["burst_gap"]
+    else:  # 普通间隔（夜里更短）
+        data["burst_left"] = 0
+        lo, hi = prof["night_gap"] if night else prof["gap"]
+    return now + random.uniform(lo, hi) * 60.0
+
+
+async def _inner_tick(client, tok, prof, MAX_ABSENCE, tz) -> None:
     import os, json as _json, time as _time
     from datetime import datetime
     key = (tok or "default")[:40]
@@ -3397,7 +3431,7 @@ async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
     if not last_seen:
         return
     gap = _time.time() - last_seen
-    if gap < MIN_GAP:
+    if gap < prof["min_gap"] * 60:
         return  # 她还在/刚离开，不打扰
     # 先让心情自己飘（免费，不管写不写心事都飘）
     try:
@@ -3414,13 +3448,21 @@ async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
             data = _json.load(f) or {}
     except Exception:  # noqa: BLE001
         data = {}
-    if _time.time() - float(data.get("last_inner") or 0) < CADENCE:
-        return  # 还没到下一条的节奏
+    now0 = _time.time()
+    if now0 < float(data.get("next_inner") or 0):
+        return  # 还没到下一条的时刻（随机调度）
     today = (datetime.now(tz) if tz else datetime.now()).strftime("%Y-%m-%d")
     if data.get("day") != today:
         data["day"], data["day_count"] = today, 0
+    DAILY_CAP = int(os.environ.get("OMBRE_INNER_DAILY_CAP", str(prof["daily_cap"])))
     if int(data.get("day_count") or 0) >= DAILY_CAP:
-        return  # 今天写够了
+        data["next_inner"] = now0 + 30 * 60  # 今天写够了，半小时后再看（跨天会重置）
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
+        return
     import os as _os, random as _random
     # 有几率这次不是纯发呆想她，而是"上网翻点符合人设的东西"（看完形成看法、养爱好）
     _browse_on = _os.environ.get("OMBRE_INNER_BROWSE", "on").strip().lower() not in ("off", "0", "false", "no")
@@ -3432,10 +3474,17 @@ async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
             txt, topic = _res.get("text", ""), _res.get("topic")
     if not txt:  # 没上网 或 没翻到东西 → 退回纯内心独白
         txt = await _inner_generate(client, gap, tz)
+    now = _time.time()
     if not txt:
+        # 这次没写成（LLM/维基抽风）→ 短暂退避，别每个 poll 都猛敲
+        data["next_inner"] = now + 5 * 60
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            pass
         return
     entries = data.get("entries") or []
-    now = _time.time()
     _entry = {"t": now, "text": txt, "mood": _inner_mood_word()}
     if topic:
         _entry["topic"] = topic
@@ -3443,6 +3492,7 @@ async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
     data["entries"] = entries[-60:]
     data["last_inner"] = now
     data["day_count"] = int(data.get("day_count") or 0) + 1
+    data["next_inner"] = _schedule_next(now, data, prof, tz)  # 排下一条（随机+爆发）
     try:
         with open(path, "w", encoding="utf-8") as f:
             _json.dump(data, f, ensure_ascii=False)
@@ -3473,21 +3523,23 @@ def _start_inner_life() -> None:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=api_key, base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip())
         tok = os.environ.get("OMBRE_WEB_TOKEN", "")
-        MIN_GAP = float(os.environ.get("OMBRE_INNER_MIN_GAP_MIN", "45")) * 60
-        CADENCE = float(os.environ.get("OMBRE_INNER_CADENCE_MIN", "90")) * 60
-        DAILY_CAP = int(os.environ.get("OMBRE_INNER_DAILY_CAP", "6"))
+        # 密度档位：clingy(黏人)/normal/quiet；默认 clingy（她选的）。单项可用 env 覆盖。
+        _dname = os.environ.get("OMBRE_INNER_DENSITY", "clingy").strip().lower()
+        prof = dict(_INNER_PROFILES.get(_dname, _INNER_PROFILES["clingy"]))
+        # 允许 env 精调（可选）
+        prof["min_gap"] = float(os.environ.get("OMBRE_INNER_MIN_GAP_MIN", prof["min_gap"]))
         MAX_ABSENCE = float(os.environ.get("OMBRE_INNER_MAX_ABSENCE_H", "72")) * 3600
-        POLL = float(os.environ.get("OMBRE_INNER_POLL_MIN", "20")) * 60
+        POLL = float(os.environ.get("OMBRE_INNER_POLL_MIN", str(prof["poll"]))) * 60
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo("America/Los_Angeles")
         except Exception:  # noqa: BLE001
             tz = None
-        logger.info("[inner-life] 已启动：她不在时他自己活着")
-        await asyncio.sleep(30)
+        logger.info(f"[inner-life] 已启动：她不在时他自己活着（密度={_dname}）")
+        await asyncio.sleep(20)
         while True:
             try:
-                await _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
+                await _inner_tick(client, tok, prof, MAX_ABSENCE, tz)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[inner-life] tick 出错: {e}")
             await asyncio.sleep(POLL)
