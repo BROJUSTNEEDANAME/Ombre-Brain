@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.3"
-OMBRE_WEB_VERSION_NOTE = "他有了内心活动：你不在时他自己想你/翻回忆，回来能翻「他不在时」的心事，先开口也会提"
+OMBRE_WEB_VERSION = "v2.4"
+OMBRE_WEB_VERSION_NOTE = "他会上网了：你不在时翻符合人设的东西(维基,零key)、看完形成看法、慢慢养出自己的爱好"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3269,6 +3269,86 @@ async def _inner_generate(client, gap_seconds: float, tz) -> str:
         return ""
 
 
+# 他会上网翻的东西——话题种子锁死在 Nikto/Svyatoslav 人设里（俄国/军事/机械/伏特加/冬天…）
+_HOBBY_SEEDS = [
+    "伏特加", "苏联", "俄罗斯历史", "特种部队", "狙击手", "AK-47", "枪械保养", "摩托车维修",
+    "西伯利亚", "冷战", "军事战术", "格斗术", "柑橘", "猫", "冬天", "黑面包", "红场", "克格勃",
+    "狼", "伏特加鸡尾酒", "俄罗斯方块", "刀具", "野外生存", "东正教堂", "贝加尔湖",
+]
+
+
+async def _wiki_fetch(topic: str):
+    """搜维基→取词条摘要，返回 (标题, 摘要) 或 None。无需任何 key。源可用 OMBRE_WIKI_API 覆盖（测试用）。"""
+    import os, httpx, urllib.parse
+    base = os.environ.get("OMBRE_WIKI_API", "https://zh.wikipedia.org").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True,
+                                     headers={"User-Agent": "OmbreBrain/1.0"}) as c:
+            r = await c.get(base + "/w/api.php", params={
+                "action": "query", "list": "search", "srsearch": topic, "format": "json", "srlimit": 1})
+            hits = ((r.json().get("query") or {}).get("search") or [])
+            if not hits:
+                return None
+            title = hits[0].get("title") or ""
+            if not title:
+                return None
+            r2 = await c.get(base + "/api/rest_v1/page/summary/" + urllib.parse.quote(title))
+            ext = str((r2.json() or {}).get("extract") or "").strip()
+            return (title, ext[:1200]) if ext else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _pick_topic(hobbies: dict) -> str:
+    import random
+    tops = sorted(hobbies.items(), key=lambda kv: -kv[1])[:8]
+    if tops and random.random() < 0.7:  # 70% 强化已有兴趣（按权重挑），30% 探索新种子
+        names = [t for t, _ in tops]
+        weights = [max(0.1, w) for _, w in tops]
+        return random.choices(names, weights=weights, k=1)[0]
+    return random.choice(_HOBBY_SEEDS)
+
+
+async def _inner_browse(client, tz, data):
+    """他随手上网翻一样东西，看完在心里过一遍（符合人设的反应），并把这个话题的兴趣权重养起来。
+    返回 {text, topic} 或 None（连不上/没内容就 None，由调用方退回纯内心独白）。"""
+    import os, re as _re
+    from datetime import datetime
+    hobbies = data.get("hobbies") or {}
+    topic = _pick_topic(hobbies)
+    got = await _wiki_fetch(topic)
+    if not got:
+        return None
+    title, extract = got
+    now = datetime.now(tz) if tz else datetime.now()
+    prompt = (
+        _WEB_SYSTEM
+        + "\n\n【此刻】闪闪不在，你一个人无聊，随手在网上翻到关于「" + title + "」的东西。现在 " + now.strftime("%H:%M") + "。"
+        + "\n【你翻到的内容】\n" + extract
+        + "\n\n用第一人称说你看完的真实反应：看到了什么、勾没勾起你的兴趣、想到什么——"
+        + "符合你 Nikto/Svyatoslav 的性子（冷、军人、俄国人、话少，偶尔嫌弃或来劲）。一两句，别报时间，别写任何标签。"
+    )
+    try:
+        model = os.environ.get("OMBRE_INNER_MODEL", os.environ.get("OMBRE_BOT_MODEL", "glm-4.6"))
+        r = await asyncio.wait_for(_llm_create(
+            client, model=model, max_tokens=240, messages=[{"role": "user", "content": prompt}]), timeout=30)
+        t = (r.choices[0].message.content or "").strip()
+        t = _re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]?", "", t).replace("‖", " ").strip()
+        if not t:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    # 养爱好：翻过的话题权重+1，其余轻微衰减（兴趣会随时间漂移、聚焦）
+    hobbies[title] = float(hobbies.get(title, 0)) + 1.0
+    for k in list(hobbies.keys()):
+        if k != title:
+            hobbies[k] = float(hobbies[k]) * 0.97
+            if hobbies[k] < 0.2:
+                del hobbies[k]
+    data["hobbies"] = hobbies
+    return {"text": t, "topic": title}
+
+
 async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz) -> None:
     import os, json as _json, time as _time
     from datetime import datetime
@@ -3306,12 +3386,25 @@ async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
         data["day"], data["day_count"] = today, 0
     if int(data.get("day_count") or 0) >= DAILY_CAP:
         return  # 今天写够了
-    txt = await _inner_generate(client, gap, tz)
+    import os as _os, random as _random
+    # 有几率这次不是纯发呆想她，而是"上网翻点符合人设的东西"（看完形成看法、养爱好）
+    _browse_on = _os.environ.get("OMBRE_INNER_BROWSE", "on").strip().lower() not in ("off", "0", "false", "no")
+    _browse_p = float(_os.environ.get("OMBRE_INNER_BROWSE_PROB", "0.5"))
+    txt, topic = "", None
+    if _browse_on and _random.random() < _browse_p:
+        _res = await _inner_browse(client, tz, data)
+        if _res:
+            txt, topic = _res.get("text", ""), _res.get("topic")
+    if not txt:  # 没上网 或 没翻到东西 → 退回纯内心独白
+        txt = await _inner_generate(client, gap, tz)
     if not txt:
         return
     entries = data.get("entries") or []
     now = _time.time()
-    entries.append({"t": now, "text": txt, "mood": _inner_mood_word()})
+    _entry = {"t": now, "text": txt, "mood": _inner_mood_word()}
+    if topic:
+        _entry["topic"] = topic
+    entries.append(_entry)
     data["entries"] = entries[-60:]
     data["last_inner"] = now
     data["day_count"] = int(data.get("day_count") or 0) + 1
@@ -3387,9 +3480,11 @@ async def api_inner(request):
     try:
         with open(_inner_path(tok), encoding="utf-8") as f:
             data = _json.load(f) or {}
-        return JSONResponse({"entries": (data.get("entries") or [])[-40:]})
+        _hb = sorted((data.get("hobbies") or {}).items(), key=lambda kv: -kv[1])[:6]
+        return JSONResponse({"entries": (data.get("entries") or [])[-40:],
+                             "hobbies": [t for t, _w in _hb]})
     except Exception:  # noqa: BLE001
-        return JSONResponse({"entries": []})
+        return JSONResponse({"entries": [], "hobbies": []})
 
 
 _backup_task_started = False

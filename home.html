@@ -260,6 +260,7 @@
   .inner-head { text-align: center; font-size: 12px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 14px; padding: 7px 16px; cursor: pointer; box-shadow: var(--sh-soft); }
   .inner-body { display: none; margin-top: 7px; }
   .inner-body.open { display: block; }
+  .inner-hobby { font-size: 12px; color: var(--accent); text-align: center; margin: 2px 0 8px; opacity: .9; }
   .inner-item { background: var(--surface-2); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; margin: 6px 0; }
   .inner-t { font-size: 11px; color: var(--text-faint); margin-bottom: 3px; }
   .inner-x { font-size: 14px; line-height: 1.55; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
@@ -1671,16 +1672,19 @@
     return done;
   }
   // 「他不在时」时间线：她回来把他一个人时想的那些心事拉出来，做成一张可展开的卡（只提示新的）
-  function renderInnerCard(items){
+  function renderInnerCard(items, hobbies){
     if(!items||!items.length) return;
     const wrap=document.createElement('div'); wrap.className='inner-card';
     const head=document.createElement('div'); head.className='inner-head';
     const label='💭 你不在的时候，他想了这些（'+items.length+'）';
     head.textContent=label+' · 点开';
     const body=document.createElement('div'); body.className='inner-body';
+    if(hobbies&&hobbies.length){ const hb=document.createElement('div'); hb.className='inner-hobby';
+      hb.textContent='🎯 他最近在意：'+hobbies.slice(0,5).join('、'); body.appendChild(hb); }
     items.forEach(e=>{ const d=document.createElement('div'); d.className='inner-item';
       const w=new Date((e.t||0)*1000); const hh=('0'+w.getHours()).slice(-2)+':'+('0'+w.getMinutes()).slice(-2);
-      const meta=document.createElement('div'); meta.className='inner-t'; meta.textContent=hh+(e.mood?(' · '+e.mood):'');
+      const meta=document.createElement('div'); meta.className='inner-t';
+      meta.textContent=hh+(e.mood?(' · '+e.mood):'')+(e.topic?('  🔎 看了《'+e.topic+'》'):'');
       const tx=document.createElement('div'); tx.className='inner-x'; tx.textContent=(''+(e.text||''));
       d.appendChild(meta); d.appendChild(tx); body.appendChild(d); });
     head.onclick=()=>{ const open=body.classList.toggle('open'); head.textContent=(open?'💭 收起':label+' · 点开'); toBottom(); };
@@ -1693,7 +1697,7 @@
       if(!es.length) return;
       let seenAt=0; try{ seenAt=parseFloat(localStorage.getItem('innerSeenAt')||'0')||0; }catch(e){}
       const show = seenAt ? es.filter(e=>(e.t||0)>seenAt) : es.slice(-3);   // 首次给最近3条，之后只给新的
-      if(show.length) renderInnerCard(show);
+      if(show.length) renderInnerCard(show, (d&&d.hobbies)||[]);
       try{ localStorage.setItem('innerSeenAt', String(es[es.length-1].t||0)); }catch(e){}
     }catch(e){}
   }
