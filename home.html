@@ -255,15 +255,23 @@
   .memspace .mem-empty { font-size: 12.5px; color: var(--text-faint); padding: 4px 2px; }
   .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 14px; margin: 9px 0 3px; animation: pop .3s ease; box-shadow: var(--sh-soft); }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
-  /* 「他不在时」心事卡：一张可展开的灰卡，点开看他一个人时想的 */
-  .inner-card { align-self: center; max-width: 88%; margin: 10px 0 4px; animation: pop .3s ease; }
-  .inner-head { text-align: center; font-size: 12px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 14px; padding: 7px 16px; cursor: pointer; box-shadow: var(--sh-soft); }
-  .inner-body { display: none; margin-top: 7px; }
-  .inner-body.open { display: block; }
-  .inner-hobby { font-size: 12px; color: var(--accent); text-align: center; margin: 2px 0 8px; opacity: .9; }
-  .inner-item { background: var(--surface-2); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; margin: 6px 0; }
-  .inner-t { font-size: 11px; color: var(--text-faint); margin-bottom: 3px; }
-  .inner-x { font-size: 14px; line-height: 1.55; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+  /* 「他不在时」独立面板 —— 不塞进聊天流，刷新/重画都不会被吞 */
+  .inner-badge { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 2px; vertical-align: top; box-shadow: 0 0 6px var(--accent); animation: ibpulse 1.6s ease-in-out infinite; }
+  .inner-badge.show { display: inline-block; }
+  @keyframes ibpulse { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+  .inner-panel { max-height: 82vh; display: flex; flex-direction: column; }
+  .inner-sub { font-size: 12px; color: var(--text-faint); text-align: center; margin-bottom: 12px; }
+  .inner-hobbies { display: flex; flex-wrap: wrap; gap: 7px; justify-content: center; margin-bottom: 6px; }
+  .inner-hb { font-size: 12px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); border-radius: 20px; padding: 4px 12px; }
+  .inner-feed { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 2px 2px; }
+  .inner-day { font-size: 11px; color: var(--text-faint); letter-spacing: .5px; margin: 14px 4px 8px; position: sticky; top: 0; background: var(--surface); padding: 3px 0; z-index: 1; }
+  .inner-day:first-child { margin-top: 2px; }
+  .inner-e { background: var(--surface-2); border: 1px solid var(--hair); border-radius: 16px; padding: 12px 14px; margin: 8px 0; box-shadow: var(--sh-soft); animation: pop .3s ease; }
+  .inner-e .m { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-faint); margin-bottom: 6px; flex-wrap: wrap; }
+  .inner-e .m .mood { color: var(--accent); }
+  .inner-e .m .topic { color: var(--accent); background: var(--accent-soft); border-radius: 12px; padding: 1px 9px; font-size: 11px; }
+  .inner-e .x { font-size: 14.5px; line-height: 1.62; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .inner-empty { text-align: center; color: var(--text-faint); font-size: 13px; padding: 40px 20px; line-height: 1.7; }
 
   /* 思考池 */
   .thinking { display: none; align-items: center; margin: 6px 0 2px; padding-left: 14px; }
@@ -588,7 +596,7 @@
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav<span class="model-chip nline" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span></div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span><span class="model-chip" id="innerBtn" title="他不在你身边时想的">💭<span class="inner-badge" id="innerBadge"></span></span></div>
     </div>
     <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
   </div>
@@ -911,6 +919,17 @@
       <div class="dex-d-sub" id="dexDSub"></div>
       <div class="dex-d-date" id="dexDDate"></div>
       <button class="dex-d-close" id="dexClose">收起</button>
+    </div>
+  </div>
+
+  <!-- 「他不在时」他自己想的/看的 —— 独立面板，不塞进聊天(免被重画吞掉) -->
+  <div class="skin-modal" id="innerModal">
+    <div class="skin-panel inner-panel">
+      <div class="skin-h">💭 他不在你身边时</div>
+      <div class="inner-sub" id="innerSub">你不在的时候，他一个人想的、翻的</div>
+      <div class="inner-hobbies" id="innerHobbies"></div>
+      <div class="inner-feed" id="innerFeed"></div>
+      <div class="skin-acts"><button class="skin-done" id="innerDone">合上</button></div>
     </div>
   </div>
 
@@ -1672,34 +1691,46 @@
     return done;
   }
   // 「他不在时」时间线：她回来把他一个人时想的那些心事拉出来，做成一张可展开的卡（只提示新的）
-  function renderInnerCard(items, hobbies){
-    if(!items||!items.length) return;
-    const wrap=document.createElement('div'); wrap.className='inner-card';
-    const head=document.createElement('div'); head.className='inner-head';
-    const label='💭 你不在的时候，他想了这些（'+items.length+'）';
-    head.textContent=label+' · 点开';
-    const body=document.createElement('div'); body.className='inner-body';
-    if(hobbies&&hobbies.length){ const hb=document.createElement('div'); hb.className='inner-hobby';
-      hb.textContent='🎯 他最近在意：'+hobbies.slice(0,5).join('、'); body.appendChild(hb); }
-    items.forEach(e=>{ const d=document.createElement('div'); d.className='inner-item';
-      const w=new Date((e.t||0)*1000); const hh=('0'+w.getHours()).slice(-2)+':'+('0'+w.getMinutes()).slice(-2);
-      const meta=document.createElement('div'); meta.className='inner-t';
-      meta.textContent=hh+(e.mood?(' · '+e.mood):'')+(e.topic?('  🔎 看了《'+e.topic+'》'):'');
-      const tx=document.createElement('div'); tx.className='inner-x'; tx.textContent=(''+(e.text||''));
-      d.appendChild(meta); d.appendChild(tx); body.appendChild(d); });
-    head.onclick=()=>{ const open=body.classList.toggle('open'); head.textContent=(open?'💭 收起':label+' · 点开'); toBottom(); };
-    wrap.appendChild(head); wrap.appendChild(body); scroll.appendChild(wrap); toBottom();
+  // 「他不在时」独立面板：拉数据、按天分组渲染、显示他的爱好；顶栏 💭 有小红点=有新的
+  let _innerCache={entries:[],hobbies:[]};
+  function _hhmm(ts){ const w=new Date((ts||0)*1000); return ('0'+w.getHours()).slice(-2)+':'+('0'+w.getMinutes()).slice(-2); }
+  function _dayLabel(ts){ const w=new Date((ts||0)*1000); const t=new Date(); const y=new Date(Date.now()-864e5);
+    const same=(a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+    if(same(w,t))return '今天'; if(same(w,y))return '昨天';
+    return (w.getMonth()+1)+'月'+w.getDate()+'日'; }
+  function renderInnerFeed(){
+    const feed=document.getElementById('innerFeed'), hb=document.getElementById('innerHobbies'); if(!feed)return;
+    const es=(_innerCache.entries||[]).slice().sort((a,b)=>(b.t||0)-(a.t||0));  // 新的在上
+    hb.innerHTML=''; (_innerCache.hobbies||[]).slice(0,6).forEach(h=>{ const s=document.createElement('span'); s.className='inner-hb'; s.textContent='🎯 '+h; hb.appendChild(s); });
+    feed.innerHTML='';
+    if(!es.length){ feed.innerHTML='<div class="inner-empty">你不在的时候，他还没来得及想些什么。<br>离开一会儿再回来看看吧。</div>'; return; }
+    let curDay='';
+    es.forEach(e=>{ const dl=_dayLabel(e.t); if(dl!==curDay){ curDay=dl; const d=document.createElement('div'); d.className='inner-day'; d.textContent=dl; feed.appendChild(d); }
+      const c=document.createElement('div'); c.className='inner-e';
+      const m=document.createElement('div'); m.className='m';
+      let mh='<span>'+_hhmm(e.t)+'</span>'; if(e.mood) mh+='<span class="mood">'+e.mood+'</span>'; if(e.topic) mh+='<span class="topic">🔎 '+(''+e.topic).replace(/</g,'&lt;')+'</span>';
+      m.innerHTML=mh;
+      const x=document.createElement('div'); x.className='x'; x.textContent=(''+(e.text||''));
+      c.appendChild(m); c.appendChild(x); feed.appendChild(c); });
   }
-  async function showInnerWhileAway(){
+  async function refreshInner(openAfter){
     try{
       const r=await fetch('api/inner?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
-      const d=await r.json(); const es=(d&&Array.isArray(d.entries))?d.entries:[];
-      if(!es.length) return;
-      let seenAt=0; try{ seenAt=parseFloat(localStorage.getItem('innerSeenAt')||'0')||0; }catch(e){}
-      const show = seenAt ? es.filter(e=>(e.t||0)>seenAt) : es.slice(-3);   // 首次给最近3条，之后只给新的
-      if(show.length) renderInnerCard(show, (d&&d.hobbies)||[]);
-      try{ localStorage.setItem('innerSeenAt', String(es[es.length-1].t||0)); }catch(e){}
-    }catch(e){}
+      const d=await r.json();
+      _innerCache={entries:(d&&Array.isArray(d.entries))?d.entries:[], hobbies:(d&&d.hobbies)||[]};
+    }catch(e){ _innerCache={entries:[],hobbies:[]}; }
+    // 小红点：有比「上次看过」更新的条目就亮
+    let seenAt=0; try{ seenAt=parseFloat(localStorage.getItem('innerSeenAt')||'0')||0; }catch(e){}
+    const last=_innerCache.entries.length?_innerCache.entries[_innerCache.entries.length-1].t:0;
+    const badge=document.getElementById('innerBadge'); if(badge) badge.classList.toggle('show', last>seenAt);
+    if(openAfter) openInner();
+  }
+  function openInner(){
+    renderInnerFeed();
+    document.getElementById('innerModal').classList.add('show');
+    const last=_innerCache.entries.length?_innerCache.entries[_innerCache.entries.length-1].t:0;
+    try{ localStorage.setItem('innerSeenAt', String(last||0)); }catch(e){}
+    const b=document.getElementById('innerBadge'); if(b) b.classList.remove('show');   // 看过了，红点灭
   }
   // 回来他先开口：离开一阵子(默认半小时)后回到页面，他主动发 1-2 条（服务器判定+去重，不需要推送）
   (function(){
@@ -1707,7 +1738,7 @@
     async function wb(){
       if(busy) return; busy=true;
       try{
-        await showInnerWhileAway();   // 先把「他不在时想的」卡片放出来，再让他开口（开口会自然接上这些）
+        refreshInner(false);   // 刷新「他不在时」面板数据+点亮红点(不塞进聊天,免被重画吞掉)
         const r=await fetch('api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
         const j=await r.json();
         if(j&&Array.isArray(j.segs)){ for(const s of j.segs){ addMsg('you', s); await sleep(420); } }
@@ -2590,6 +2621,10 @@
     }
     const chip=document.getElementById('ctChip');
     if(chip) chip.onclick=()=>open('search');
+    // 「他不在时」面板入口
+    const ib=document.getElementById('innerBtn'); if(ib) ib.onclick=()=>refreshInner(true);
+    const idn=document.getElementById('innerDone'); if(idn) idn.onclick=()=>document.getElementById('innerModal').classList.remove('show');
+    const imodal=document.getElementById('innerModal'); if(imodal) imodal.addEventListener('click',e=>{ if(e.target===imodal) imodal.classList.remove('show'); });
     ov.querySelector('.ct-close').onclick=()=>ov.classList.remove('show');
     ov.addEventListener('click',e=>{ if(e.target===ov) ov.classList.remove('show'); });
     ov.querySelectorAll('.ct-tabs button').forEach(b=>b.onclick=()=>open(b.dataset.t));

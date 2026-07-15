@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.8"
-OMBRE_WEB_VERSION_NOTE = "他不在时活动更勤更像人：不规律间隔+小爆发+夜里更勤（黏人型，6h约10-15条）"
+OMBRE_WEB_VERSION = "v2.9"
+OMBRE_WEB_VERSION_NOTE = "「他不在时」独立面板(顶栏💭)：刷新不再被吞，按天分组、爱好标签，好看多了"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3567,11 +3567,21 @@ async def api_inner(request):
     try:
         with open(_inner_path(tok), encoding="utf-8") as f:
             data = _json.load(f) or {}
-        _hb = sorted((data.get("hobbies") or {}).items(), key=lambda kv: -kv[1])[:6]
-        return JSONResponse({"entries": (data.get("entries") or [])[-40:],
-                             "hobbies": [t for t, _w in _hb]})
     except Exception:  # noqa: BLE001
         return JSONResponse({"entries": [], "hobbies": []})
+    # hobbies 正常是 {话题:权重} 字典；万一格式异常也别让整个面板空掉（心事条目才是主角）
+    hobbies = data.get("hobbies")
+    try:
+        if isinstance(hobbies, dict):
+            top = [t for t, _w in sorted(hobbies.items(), key=lambda kv: -kv[1])[:6]]
+        elif isinstance(hobbies, list):
+            top = [str(x) for x in hobbies[:6]]
+        else:
+            top = []
+    except Exception:  # noqa: BLE001
+        top = []
+    entries = data.get("entries") if isinstance(data.get("entries"), list) else []
+    return JSONResponse({"entries": entries[-40:], "hobbies": top})
 
 
 _backup_task_started = False
