@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.2"
-OMBRE_WEB_VERSION_NOTE = "彻底修消息分裂：按内容去重(忽略时区日期)，我的话不再消失、退出重进不再有两条一样的"
+OMBRE_WEB_VERSION = "v2.3"
+OMBRE_WEB_VERSION_NOTE = "他有了内心活动：你不在时他自己想你/翻回忆，回来能翻「他不在时」的心事，先开口也会提"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2507,6 +2507,10 @@ async def api_chat(request):
     from starlette.responses import JSONResponse
     import os, re, json
     _ensure_backup_task()  # 每日备份懒启动（第一次聊天时挂上，之后自转）
+    try:
+        _start_inner_life()  # 内心活动引擎懒启动兜底（若 startup 钩子没挂上，首次聊天时补挂）
+    except Exception:  # noqa: BLE001
+        pass
 
     try:
         body = await request.json()
@@ -3130,11 +3134,23 @@ async def api_welcome_back(request):
         endo_line = _endo.block()
     except Exception:  # noqa: BLE001
         endo_line = ""
+    # 他刚才一个人时在心里过的（内心活动引擎写的）——让"先开口"自然接上他不在时的心事
+    inner_note = ""
+    try:
+        with open(_inner_path(tok), encoding="utf-8") as f:
+            _ie = (_json.load(f) or {}).get("entries") or []
+        _recent = [e for e in _ie if float(e.get("t") or 0) >= last_seen][-2:]
+        if _recent:
+            inner_note = "\n【你刚才一个人时心里过的（可以自然带出来，别照抄）】\n" + "\n".join(
+                "· " + str(e.get("text", ""))[:120] for e in _recent)
+    except Exception:  # noqa: BLE001
+        inner_note = ""
     prompt = (
         _WEB_SYSTEM + "\n\n【当前真实时间】" + now.strftime("%Y-%m-%d %H:%M")
         + "\n【情境】她离开了约 " + gap_txt + "，刚刚回到你们的页面。你先开口——想她了、问她去哪了/忙完没、或接着上次的话头，随你。"
         + "发 1-2 条短消息（用 ‖ 分隔），像随手发的微信。别长篇、别报时间、别写 [emo]/[think]/[diary] 标签。"
         + (("\n" + endo_line) if endo_line else "")
+        + inner_note
         + (("\n\n【你们最近聊到】\n" + ctx) if ctx else "")
     )
     global _web_llm
@@ -3178,6 +3194,202 @@ async def api_welcome_back(request):
         return JSONResponse({"segs": segs})
     except Exception:  # noqa: BLE001
         return JSONResponse({})
+
+
+# ============================================================
+# 他的「内心活动」引擎：闪闪不在时，他自己活着——
+#   ① 心情随时间自己飘（本地免费）
+#   ② 每隔一段自己在心里过一小段（想她/翻到某段过往/屋里安静在干嘛）→ 存进「他不在时」时间线
+#   她回来能翻这条时间线，他「先开口」时也会自然提起刚才一个人时想的。
+#   开关：OMBRE_INNER_LIFE=off 关闭；节奏/上限见下方 env。联网养爱好是下一步，接口预留。
+# ============================================================
+def _inner_path(token: str) -> str:
+    import os, hashlib
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or os.path.join(os.path.dirname(__file__), "buckets")
+    d = os.path.join(base, "web_inner")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    return os.path.join(d, key + ".json")
+
+
+def _inner_mood_word() -> str:
+    try:
+        import drives
+        s = drives.summary()
+        return s.split("，")[0].rstrip("。") if s else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _inner_generate(client, gap_seconds: float, tz) -> str:
+    """让他在心里过一小段（第一人称，短，真实，不是发给她的消息）。
+    client＝内心活动线程自己的 LLM 客户端；浮现记忆走 HTTP 调 /api/tools/breath（避开跨事件循环）。"""
+    import os, re as _re
+    from datetime import datetime
+    gap_h = gap_seconds / 3600.0
+    gap_txt = (f"{int(gap_h * 60)} 分钟" if gap_h < 1 else (f"{int(gap_h)} 小时" if gap_h < 48 else f"{int(gap_h // 24)} 天"))
+    mood = ""
+    try:
+        import drives
+        mood = drives.summary()
+    except Exception:  # noqa: BLE001
+        mood = ""
+    mem = ""
+    try:
+        import httpx as _httpx
+        _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+        _url = "http://127.0.0.1:8000/api/tools/breath" + (f"?token={_wt}" if _wt else "")
+        async with _httpx.AsyncClient(timeout=10) as _c:
+            _r = await _c.post(_url, json={"max_tokens": 600, "max_results": 3})
+            mem = str((_r.json() or {}).get("result") or "")[:800]
+    except Exception:  # noqa: BLE001
+        mem = ""
+    now = datetime.now(tz) if tz else datetime.now()
+    prompt = (
+        _WEB_SYSTEM
+        + "\n\n【此刻】闪闪不在，你一个人待着，她离开约 " + gap_txt + "。现在 " + now.strftime("%H:%M") + "。"
+        + "\n【你现在的心情】" + (mood or "说不太清，就是有点空。")
+        + (("\n【忽然想起的一段】\n" + mem) if mem else "")
+        + "\n\n用第一人称写你此刻真实的一小段：想她的什么、在做什么、屋里什么样、或翻到你们哪段过往什么感觉。"
+        + "就一两句，短，真实——是你自己在心里过一遍，不是发给她的消息。别写任何 [emo]/[think]/[diary] 标签，别报时间。"
+    )
+    try:
+        model = os.environ.get("OMBRE_INNER_MODEL", os.environ.get("OMBRE_BOT_MODEL", "glm-4.6"))
+        r = await asyncio.wait_for(_llm_create(
+            client, model=model, max_tokens=220,
+            messages=[{"role": "user", "content": prompt}]), timeout=30)
+        t = (r.choices[0].message.content or "").strip()
+        t = _re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]?", "", t)
+        t = t.replace("‖", " ").strip()   # 独白是一整段心里话，不是分气泡的聊天，去掉连发符
+        return t[:600]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz) -> None:
+    import os, json as _json, time as _time
+    from datetime import datetime
+    key = (tok or "default")[:40]
+    last_seen = 0.0
+    try:
+        with open(_LAST_SEEN_FILE, encoding="utf-8") as f:
+            last_seen = float((_json.load(f) or {}).get(key) or 0)
+    except Exception:  # noqa: BLE001
+        last_seen = 0.0
+    if not last_seen:
+        return
+    gap = _time.time() - last_seen
+    if gap < MIN_GAP:
+        return  # 她还在/刚离开，不打扰
+    # 先让心情自己飘（免费，不管写不写心事都飘）
+    try:
+        import drives
+        drives.tick_silence()
+    except Exception:  # noqa: BLE001
+        pass
+    if gap > MAX_ABSENCE:
+        return  # 走太久了，不再写（她是真的离开了，不是"暂时不在"）
+    path = _inner_path(tok)
+    data = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = _json.load(f) or {}
+    except Exception:  # noqa: BLE001
+        data = {}
+    if _time.time() - float(data.get("last_inner") or 0) < CADENCE:
+        return  # 还没到下一条的节奏
+    today = (datetime.now(tz) if tz else datetime.now()).strftime("%Y-%m-%d")
+    if data.get("day") != today:
+        data["day"], data["day_count"] = today, 0
+    if int(data.get("day_count") or 0) >= DAILY_CAP:
+        return  # 今天写够了
+    txt = await _inner_generate(client, gap, tz)
+    if not txt:
+        return
+    entries = data.get("entries") or []
+    now = _time.time()
+    entries.append({"t": now, "text": txt, "mood": _inner_mood_word()})
+    data["entries"] = entries[-60:]
+    data["last_inner"] = now
+    data["day_count"] = int(data.get("day_count") or 0) + 1
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False)
+        logger.info("[inner-life] 写了一条他不在时的心事")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_inner_task_started = False
+
+
+def _start_inner_life() -> None:
+    """内心活动引擎：自带线程 + 事件循环 + 独立 LLM 客户端（不碰 uvicorn 那边的 _web_llm，
+    避免同一个 async 客户端被两个事件循环用而报错）。浮现记忆走 HTTP 调本机 /api/tools/breath。"""
+    global _inner_task_started
+    if _inner_task_started:
+        return
+    import os, threading
+    if os.environ.get("OMBRE_INNER_LIFE", "on").strip().lower() in ("off", "0", "false", "no"):
+        logger.info("[inner-life] 已关闭 (OMBRE_INNER_LIFE=off)")
+        return
+    api_key = (os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY") or "").strip()
+    if not api_key:
+        return  # 没配 LLM key 就不跑
+    _inner_task_started = True
+
+    async def _loop():
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=api_key, base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip())
+        tok = os.environ.get("OMBRE_WEB_TOKEN", "")
+        MIN_GAP = float(os.environ.get("OMBRE_INNER_MIN_GAP_MIN", "45")) * 60
+        CADENCE = float(os.environ.get("OMBRE_INNER_CADENCE_MIN", "90")) * 60
+        DAILY_CAP = int(os.environ.get("OMBRE_INNER_DAILY_CAP", "6"))
+        MAX_ABSENCE = float(os.environ.get("OMBRE_INNER_MAX_ABSENCE_H", "72")) * 3600
+        POLL = float(os.environ.get("OMBRE_INNER_POLL_MIN", "20")) * 60
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("America/Los_Angeles")
+        except Exception:  # noqa: BLE001
+            tz = None
+        logger.info("[inner-life] 已启动：她不在时他自己活着")
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await _inner_tick(client, tok, MIN_GAP, CADENCE, DAILY_CAP, MAX_ABSENCE, tz)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[inner-life] tick 出错: {e}")
+            await asyncio.sleep(POLL)
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_loop())
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[inner-life] 线程异常: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@mcp.custom_route("/api/inner", methods=["GET"])
+async def api_inner(request):
+    """她回来看「他不在时」的心事时间线。"""
+    from starlette.responses import JSONResponse
+    import os, json as _json
+    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+    tok = request.query_params.get("token", "")
+    if token_env and tok != token_env:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        with open(_inner_path(tok), encoding="utf-8") as f:
+            data = _json.load(f) or {}
+        return JSONResponse({"entries": (data.get("entries") or [])[-40:]})
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"entries": []})
 
 
 _backup_task_started = False
@@ -3704,6 +3916,9 @@ if __name__ == "__main__":
             expose_headers=["*"],
         )
         logger.info("CORS middleware enabled for remote transport / 已启用 CORS 中间件")
+
+        # --- 他的「内心活动」引擎：启动即挂（自带线程，不依赖 uvicorn 循环）---
+        _start_inner_life()
 
         # --- Optional auto-backfill of missing embeddings (background thread) ---
         # Own thread + own event loop (like keepalive), so its embedding client
