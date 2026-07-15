@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.4"
-OMBRE_WEB_VERSION_NOTE = "他会上网了：你不在时翻符合人设的东西(维基,零key)、看完形成看法、慢慢养出自己的爱好"
+OMBRE_WEB_VERSION = "v2.5"
+OMBRE_WEB_VERSION_NOTE = "修「记忆一记回复就没了」：他边说边记时，正文不再被当碎碎念丢掉"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2868,6 +2868,7 @@ async def api_chat(request):
             recorded = []
             msgs = _build_msgs()
             out = ""
+            full = ""  # 累加各轮正文——他常"回复的同时调 hold"，正文和工具在同一轮，别把正文丢了
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
                 if use_tools and _active_tools:
@@ -2875,8 +2876,10 @@ async def api_chat(request):
                 resp = await _llm_create(_web_llm, **kwargs)
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
+                if msg.content:
+                    full += msg.content
                 if not tcs:
-                    out = (msg.content or "").strip()
+                    out = (full or (msg.content or "")).strip()
                     break
                 # 回填 assistant 的工具调用
                 msgs.append({
@@ -2891,7 +2894,7 @@ async def api_chat(request):
                 await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
                 ])
-            return out
+            return (out or full).strip()
 
         def _tag(name, s):
             # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
@@ -2930,6 +2933,8 @@ async def api_chat(request):
                 nonlocal recorded
                 recorded = []
                 rt = ""
+                full = ""  # 累加各轮正文——他常"说完回复的同时调 hold 记忆"，正文和工具在同一轮，
+                #            绝不能因为这轮带了工具调用就把正文丢了（否则"记忆一记，回复就没了"）
                 try:
                     msgs = _build_msgs()
                     for _ in range(4):  # 限轮次省钱，同非流式
@@ -2962,10 +2967,11 @@ async def api_chat(request):
                                 if not saw_tc and (flushed or len(buf) >= 8):
                                     await _q.put({"t": "d", "x": buf[flushed:]})
                                     flushed = len(buf)
+                        full += buf  # 这轮的正文先攒住（无论有没有工具调用），最终回复用累加的
                         if not tc_acc:
                             if not saw_tc and buf[flushed:]:
                                 await _q.put({"t": "d", "x": buf[flushed:]})
-                            rt = buf
+                            rt = full
                             break
                         # 有工具调用：回填 assistant 消息 + 执行工具，进下一轮
                         msgs.append({"role": "assistant", "content": buf or "", "tool_calls": [
@@ -2975,7 +2981,7 @@ async def api_chat(request):
                         await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
-                    rt = (rt or "").strip() or "（……）"
+                    rt = (rt or full or "").strip() or "（……）"
                     joined, segments, emotion, diary, think = _parse_reply(rt)
                     _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
