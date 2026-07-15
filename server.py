@@ -1959,8 +1959,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v2.6"
-OMBRE_WEB_VERSION_NOTE = "治记忆重复：写入串行化，相似记忆写前先落库再搜，能合并的不再各记一遍"
+OMBRE_WEB_VERSION = "v2.7"
+OMBRE_WEB_VERSION_NOTE = "修「爆省略号」：他光调工具没说话时，强制再答一轮，不再落（……）"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2904,7 +2904,14 @@ async def api_chat(request):
                 await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
                 ])
-            return (out or full).strip()
+            out = (out or full).strip()
+            if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
+                try:
+                    _r2 = await _web_llm.chat.completions.create(model=model, max_tokens=web_max_tokens, messages=msgs)
+                    out = (_r2.choices[0].message.content or "").strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            return out
 
         def _tag(name, s):
             # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
@@ -2991,7 +2998,19 @@ async def api_chat(request):
                         await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
-                    rt = (rt or full or "").strip() or "（……）"
+                    rt = (rt or full or "").strip()
+                    if not rt:
+                        # 他把回合全用在调工具/记忆上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
+                        # 绝不落「（……）」（她说"你写吧"他却只记了个记忆就是这么来的）
+                        try:
+                            _r2 = await _web_llm.chat.completions.create(
+                                model=model, max_tokens=web_max_tokens, messages=msgs)
+                            rt = (_r2.choices[0].message.content or "").strip()
+                            if rt:
+                                await _q.put({"t": "d", "x": rt})  # 补推出来，直播别干等
+                        except Exception:  # noqa: BLE001
+                            pass
+                    rt = rt or "（……）"
                     joined, segments, emotion, diary, think = _parse_reply(rt)
                     _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
