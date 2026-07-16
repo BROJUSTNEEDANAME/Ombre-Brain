@@ -2018,8 +2018,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.2.1"
-OMBRE_WEB_VERSION_NOTE = "修复跨午夜后旧的主动问候被补成今天日期、以未来时刻跳到聊天底部"
+OMBRE_WEB_VERSION = "v3.2.2"
+OMBRE_WEB_VERSION_NOTE = "彻底拦截流式分包泄漏的 emo/think/diary 控制标签，并自动清理已有残片气泡"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2575,9 +2575,26 @@ async def api_chat_state(request):
         img = ("#" + str(len(str(m.get("img")))) if m.get("img") else "")
         return f"{m.get('side','')}|{txt}{img}"
 
+    def _clean_msg(m):
+        """Remove leaked model-control fragments from historical assistant bubbles."""
+        if not isinstance(m, dict) or m.get("side") != "you":
+            return m
+        import re as _re
+        text = str(m.get("text") or "")
+        text = _re.sub(
+            r"[\[［【]\s*(?:emo|diary|think|情绪|心情)\s*[:：][^\]］】\n]*(?:[\]］】]|$)",
+            "", text, flags=_re.I,
+        )
+        ew = "|".join(map(_re.escape, _EMO_WORDS))
+        text = _re.sub(r"(?m)^\s*[\]］】]?\s*(?:" + ew + r")\s*[\]］】]?\s*$", "", text).strip()
+        return {**m, "text": text}
+
     seen, merged, positions = set(), [], {}
-    for m in existing + incoming:  # 已存的在前，上传的补新的进来；同内容只留第一份
+    for raw in existing + incoming:  # 已存的在前，上传的补新的进来；同内容只留第一份
+        m = _clean_msg(raw)
         if not isinstance(m, dict):
+            continue
+        if m.get("side") == "you" and not (m.get("text") or "").strip() and not m.get("img"):
             continue
         k = _mk(m)
         if k in seen:
@@ -3069,11 +3086,11 @@ async def api_chat(request):
             return out
 
         def _tag(name, s):
-            # 先按闭合的抓；抓不到再按「没写 ] 」的抓到行尾/串尾（模型常漏右括号）
-            m = re.search(r"\[" + name + r":\s*([^\]\n]+?)\s*\]", s)
+            # 兼容 ASCII/中文括号冒号；抓不到闭合符时再抓到行尾。
+            m = re.search(r"[\[［【]" + name + r"\s*[:：]\s*([^\]］】\n]+?)\s*[\]］】]", s, re.I)
             if m:
                 return m.group(1).strip()
-            m = re.search(r"\[" + name + r":\s*([^\]\n]+)", s)
+            m = re.search(r"[\[［【]" + name + r"\s*[:：]\s*([^\]］】\n]+)", s, re.I)
             return m.group(1).strip() if m else ""
 
         def _parse_reply(rt):
@@ -3081,9 +3098,11 @@ async def api_chat(request):
             emotion = _tag("emo", rt)
             diary = _tag("diary", rt)
             think = _tag("think", rt)
-            # 剥掉标签：闭合的 + 没闭合的都清掉，绝不让 [diary:… 这种漏进聊天
-            s = re.sub(r"\[(?:emo|diary|think):[^\]\n]*\]", "", rt)   # 闭合
-            s = re.sub(r"\[(?:emo|diary|think):[^\]\n]*", "", s)       # 未闭合（到行尾/串尾）
+            # 剥掉完整/残缺控制标签；包括模型偶尔使用的中文括号和冒号。
+            s = re.sub(r"[\[［【]\s*(?:emo|diary|think|情绪|心情)\s*[:：][^\]］】\n]*(?:[\]］】]|$)", "", rt, flags=re.I)
+            # 流中断偶尔只留下 `占有]`；仅删除独占一行的控制词，不动正常句子。
+            _ew = "|".join(map(re.escape, _EMO_WORDS))
+            s = re.sub(r"(?m)^\s*[\]］】]?\s*(?:" + _ew + r")\s*[\]］】]?\s*$", "", s)
             s = s.strip()
             # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
             # 没打就用内分泌+15维情绪算出的主导词（零成本）。

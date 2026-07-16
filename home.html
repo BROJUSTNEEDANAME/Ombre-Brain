@@ -1508,7 +1508,12 @@
   // 没 dk 的补成今天（否则被当 1970 排到最顶）。再按时间稳定排序。绝不因为时区差把消息拆成两条。
   function _mergeLogs(a,b){
     const seen=new Set(), out=[];
-    (a||[]).concat(b||[]).forEach(raw=>{ if(!raw||typeof raw!=='object')return; const m=_repairLegacyDate(raw);
+    (a||[]).concat(b||[]).forEach(raw=>{ if(!raw||typeof raw!=='object')return; let m=_repairLegacyDate(raw);
+      if(m.side==='you'){
+        const cleaned=cleanAssistantText(m.text);
+        if(!cleaned && !m.img) return;
+        if(cleaned!==(m.text||'')) m=Object.assign({},m,{text:cleaned});
+      }
       const k=_msgSig(m); if(seen.has(k))return; seen.add(k);
       out.push(m);
     });
@@ -1545,12 +1550,23 @@
   // 特殊词发光：高 dom 时他话里的这些词会亮起来（想换词就改这个列表）
   const GLOW_WORDS=['乖','听话','我的','过来','别动','看着我','别躲','坐好','girl','дорогая','solnyshko','жена','闪闪'];
   const _gre=new RegExp('('+GLOW_WORDS.join('|')+')','gi');
+  const CONTROL_EMOTIONS=['沉默','担心你','想靠近你','心疼你','烦躁','空','占有','安定','害羞','吃醋','火辣','欲望'];
+  const _orphanEmotion=new RegExp('(^|\\n)\\s*[\\]】］]?\\s*('+CONTROL_EMOTIONS.join('|')+')\\s*[\\]】］]?\\s*(?=\\n|$)','g');
+  function cleanAssistantText(value){
+    let s=''+(value||'');
+    // 同时兼容模型偶尔写出的英文/中文括号和冒号；这些都是控制元数据，不是台词。
+    s=s.replace(/[\[［【]\s*(?:emo|diary|think|情绪|心情)\s*[:：][^\]］】\n]*(?:[\]］】]|$)/gi,'');
+    // 流中断时可能只剩 `占有]` 这一截；仅删除独占一行的情绪词，不碰正常句子里的“占有”。
+    s=s.replace(_orphanEmotion,(all,lead)=>lead);
+    return s;
+  }
   function _glowify(t){
     const esc=(''+t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');  // 先转义再包词，杜绝注入
     return esc.replace(_gre,'<span class="gword">$1</span>');
   }
   function renderBubble(side,text,t,img,think,msg){
     if(side==='sys'){ const d=document.createElement('div'); d.className='sysnote'; d.textContent=text; scroll.appendChild(d); toBottom(); return; }
+    if(side==='you') text=cleanAssistantText(text);
     if(!(text&&(''+text).trim()) && !img) return;   // 空气泡（没文字也没图）不渲染
     const row=document.createElement('div'); row.className='row '+side;
     row.innerHTML='<div class="av">'+(side==='you'?'◐':'你')+'</div><div class="bubble-wrap"><div class="bubble"></div></div>';
@@ -1586,7 +1602,7 @@
     }
     scroll.appendChild(row); toBottom();
   }
-  function addMsg(side,text,img,think){ if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
+  function addMsg(side,text,img,think){ if(side==='you')text=cleanAssistantText(text).trim(); if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
   let thinkTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
@@ -1628,7 +1644,7 @@
     // 去重：本轮内重复的段、以及和最近已显示气泡重复的，都丢掉（防模型/重发造成的重复说）
     const recent=new Set(chatLog.filter(m=>m.side==='you').slice(-6).map(m=>(m.text||'').trim()));
     const seen=new Set();
-    segs=segs.map(s=>(s||'').trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
+    segs=segs.map(s=>cleanAssistantText(s).trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
     if(!segs.length) return;                       // 全是重复 → 一句都不发，避免复读
     stopThinking();
     const _think=(data&&data.think)||'';           // 他这轮的内心/记忆，挂到最后一条气泡上，默认缩着
@@ -1654,7 +1670,7 @@
     const TAGRE=/^\[(?:emo|diary|think):[^\]\n]*\]/;                  // 完整标签
     const OPENRE=/^\[(?:emo|diary|think):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
     const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?)?$/; // 半截标签名
-    function put(x){ if(!x) return; const sp=ensure(); sp.textContent+=x; shown=true; toBottom(); }
+    function put(x){ if(!x) return; const sp=ensure(); sp.textContent=cleanAssistantText(sp.textContent+x); shown=!!sp.textContent; toBottom(); }
     function feed(chunk){
       let s=hold+chunk; hold='';
       while(s){
@@ -1737,7 +1753,7 @@
     // 流式一条流一个 done，不存在非流式那种重发复读问题。
     sink.destroy();
     const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||'（……）'];
-    const fin=segs.map(s=>(s||'').trim()).filter(Boolean);
+    const fin=segs.map(s=>cleanAssistantText(s).trim()).filter(Boolean);
     stopThinking();
     fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):''));
     petCtl && petCtl.fromType(true);
