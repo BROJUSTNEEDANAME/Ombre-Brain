@@ -2018,8 +2018,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.2.2"
-OMBRE_WEB_VERSION_NOTE = "彻底拦截流式分包泄漏的 emo/think/diary 控制标签，并自动清理已有残片气泡"
+OMBRE_WEB_VERSION = "v3.2.3"
+OMBRE_WEB_VERSION_NOTE = "修复已被写成今天未来时刻的旧问候，并让手机校正后的日期覆盖服务器错误日期"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2590,7 +2590,9 @@ async def api_chat_state(request):
         return {**m, "text": text}
 
     seen, merged, positions = set(), [], {}
-    for raw in existing + incoming:  # 已存的在前，上传的补新的进来；同内容只留第一份
+    all_logs = existing + incoming
+    for source_i, raw in enumerate(all_logs):
+        from_phone = source_i >= len(existing)
         m = _clean_msg(raw)
         if not isinstance(m, dict):
             continue
@@ -2598,10 +2600,10 @@ async def api_chat_state(request):
             continue
         k = _mk(m)
         if k in seen:
-            # 旧版主动问候没存 dk；手机回传的是同一条但有正确本地日期。
-            # 去重时不能让旧的残缺元数据压住新的，否则它会永远在午夜后乱跳。
+            # 手机是显示时间的权威：它会修复无 dk、以及已被污染成“今天未来时刻”的旧问候。
+            # 去重时必须让手机校正后的元数据覆盖服务器旧值，否则错误会永久复活。
             old = merged[positions[k]]
-            if not old.get("dk") and m.get("dk"):
+            if from_phone and m.get("dk"):
                 merged[positions[k]] = {**old, **m}
             continue
         seen.add(k)

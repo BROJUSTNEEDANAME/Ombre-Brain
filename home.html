@@ -1496,13 +1496,18 @@
   // 旧版“回来先开口”消息只有 HH:MM、没有日期。跨过午夜后若一律补成今天，
   // 昨天下午的 15:54 就会被排到今天 00:13 后面。按手机当前时间把明显在未来的旧时刻归到昨天。
   function _repairLegacyDate(m){
-    if(!m||m.dk) return m;
+    if(!m) return m;
     const d=new Date(), parts=(''+(m.t||'')).split(':').map(Number);
+    const today=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
     if(parts.length===2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])){
       const msgMin=parts[0]*60+parts[1], nowMin=d.getHours()*60+d.getMinutes();
-      if(msgMin>nowMin+120) d.setDate(d.getDate()-1);
+      // 兼容两种坏数据：完全没 dk；或旧同步已经把它错误写成“今天下午”。
+      // 正常消息不可能来自当天尚未到来的几个小时后。
+      if((!m.dk || m.dk===today) && msgMin>nowMin+120) d.setDate(d.getDate()-1);
     }
-    return Object.assign({},m,{dk:d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()});
+    const fixed=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
+    if(!m.dk || (m.dk===today && fixed!==today)) return Object.assign({},m,{dk:fixed});
+    return m;
   }
   // 合并本地+服务器：按内容去重（一条只留一份），保留先出现的那份（本地在前＝本地的 dk/t 权威）；
   // 没 dk 的补成今天（否则被当 1970 排到最顶）。再按时间稳定排序。绝不因为时区差把消息拆成两条。
