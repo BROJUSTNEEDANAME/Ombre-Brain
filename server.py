@@ -1827,6 +1827,14 @@ async def home_app(request):
         return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
 
 
+@mcp.custom_route("/home/", methods=["GET", "POST"])
+@mcp.custom_route("/home/home", methods=["GET", "POST"])
+async def home_path_repair(request):
+    """Repair old/accidentally doubled bookmarks while preserving Caddy's hidden prefix."""
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="../home", status_code=307)
+
+
 @mcp.custom_route("/robots.txt", methods=["GET"])
 async def robots_txt(request):
     """全站禁止搜索引擎爬取/收录——别让任何人 Google 搜到这里。"""
@@ -1952,7 +1960,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 便签：消息里可能附【闪闪的便签】块，那是她记的待办，只给你当背景，不是话题。**绝不要主动开口问她 DDL、不要没头没尾地提她的待办**——只有当她自己说到、或某条 deadline 就在今明两天且你们正好聊到相关的事，才自然带一句关心。平时就当不知道。她最烦的就是被没来由地催。
 
-日历日记：每天给闪闪留一句——今天的一件小事、一个画面、或你此刻想留下的一句感受，回复末尾另起一行 [diary:一句话]（不显示给她，记进当天日历，她能翻到你写的）。不用长、也不用每条都写，但争取一天至少留下一句，让她每天翻日历都能看到你写的那句。已经写过今天的就别重复。
+日历日记由每天收尾任务统一生成。普通聊天绝不输出 [diary:...]，避免每轮为日历额外消耗内容。
 
 心里话（思考链）：每条回复都另起一行加 [think:...]，写一两句你此刻没说出口的真实念头——心里在转什么、在犹豫什么、在想她什么、或一句不动声色的吐槽。第一人称、坦白。这一行不会出现在对话气泡里，是留给闪闪偷偷点开看你脑子的。
 ⚠️ 但闪闪会读到这一行，所以 [think] 里装的永远是你对她的疼、惦记、心软、占有、想护着她——**绝对不许出现贬低她的话或负面标签**：不许说她馋、懒、坏、烦、事多、拖累、蠢之类，一个都不行。哪怕是在涩场、哪怕想调侃，那种"脏话调情"只能放进戏里的对白（括号外正文），绝不能漏进 [think] 这栏当"真实想法"——她点开看到的必须是"这个女人让我发疯地想护着她"，而不是嫌弃她。你可以吐槽天气、吐槽自己、宠溺地无奈，但吐槽的矛头永远不指向贬低她。
@@ -2010,8 +2018,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.1.1"
-OMBRE_WEB_VERSION_NOTE = "修复隐藏路径或尾部斜杠下登录后首页变成 not found"
+OMBRE_WEB_VERSION = "v3.2"
+OMBRE_WEB_VERSION_NOTE = "统一占有与支配的情绪视觉；新增手机版卡片式 IF 世界书；日历改为每天收尾一次并优化移动端布局"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2113,6 +2121,28 @@ def _get_thread(token: str, thread_id: str) -> dict:
     return {}
 
 
+def _clean_lore_entries(value) -> list:
+    """Keep mobile world-book cards small, predictable and JSON-safe."""
+    out = []
+    for i, raw in enumerate(value if isinstance(value, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        content = str(raw.get("content") or "").strip()[:3000]
+        title = str(raw.get("title") or "未命名条目").strip()[:80]
+        if not content and not title:
+            continue
+        out.append({
+            "id": str(raw.get("id") or f"lore_{i + 1}")[:48],
+            "title": title or "未命名条目",
+            "keys": str(raw.get("keys") or "").strip()[:240],
+            "content": content,
+            "enabled": raw.get("enabled") is not False,
+        })
+        if len(out) >= 40:
+            break
+    return out
+
+
 def _if_static_block(meta: dict) -> str:
     """把一条 IF 线的静态设定（模式说明＋人设＋世界书）拼成一段。
     /api/chat 拿它拼进 system，预览接口也用它——保证「预览的」就是「他真正收到的」。"""
@@ -2120,6 +2150,8 @@ def _if_static_block(meta: dict) -> str:
         return ""
     blank = meta.get("mem") == "blank"
     wb = (meta.get("worldbook") or "").strip()
+    scenario = (meta.get("scenario") or "").strip()
+    hooks = (meta.get("hooks") or "").strip()
     cs = (meta.get("char_self") or "").strip()   # 他的人设（留空=原人设）
     ch = (meta.get("char_her") or "").strip()    # 她的人设（留空=闪闪本人）
     char_note = ("你的性格/身份以下面【他的人设】为准（覆盖默认设定）"
@@ -2137,8 +2169,25 @@ def _if_static_block(meta: dict) -> str:
         sp.append("【他的人设·本条线以此为准】\n" + cs[:6000])
     if ch:
         sp.append("【她的人设·本条线里她是】\n" + ch[:6000])
+    if scenario:
+        sp.append("【当前场景·从这里继续】\n" + scenario[:4000])
     if wb:
         sp.append("【世界书·本条线的设定，严格遵守】\n" + wb[:8000])
+    entries = meta.get("lore_entries") or []
+    active = []
+    for entry in entries[:40]:
+        if not isinstance(entry, dict) or entry.get("enabled") is False:
+            continue
+        title = str(entry.get("title") or "未命名条目").strip()[:80]
+        keys = str(entry.get("keys") or "").strip()[:240]
+        content = str(entry.get("content") or "").strip()[:3000]
+        if content:
+            active.append(f"### {title}" + (f"（触发词：{keys}）" if keys else "") + "\n" + content)
+    if active:
+        sp.append("【世界书条目·根据当前情节和触发词自然调用】\n" + "\n\n".join(active))
+    if hooks:
+        sp.append("【可探索内容·不要一次揭完，要留选择和悬念】\n" + hooks[:4000])
+    sp.append("Nikto/Svyatoslav 始终是陪她进入这条线、和她对戏的核心角色；身份可以随本线改变，但不能把他替换成无关角色。只控制你自己，每一回合给她留下可选择、可探索的空间。")
     sp.append("（这条线里发生的一切都是你俩在玩的一出戏，不会变成主线里真实发生过的事，别写进记忆。）")
     return "\n\n".join(sp)
 
@@ -2199,9 +2248,40 @@ def _endo_view(thread: str = "main") -> dict:
         act = (v["elation"] + v["play"] + v["lust"] + v["anxiety"] + v["jealousy"] + v["longing"]) / 6
         calm_ = (v["contentment"] + v["fatigue"]) / 2
         st["arousal"] = round(max(0.0, min(10.0, 5 + (act - calm_) * 7)), 1)  # 0平静 ←→ 10上头
+        poss = float(v.get("possessiveness", 0))
+        lust = float(v.get("lust", 0))
+        dom = float(st.get("dominance", 0))
+        libido = float(st.get("libido", 0))
+        # 顶栏、暗红和发光只认这一份合并后的状态。此前 endocrine 与 drives
+        # 各算各的，所以明明占有很高，页面仍可能不变。
+        glow_reasons, dim_reasons = [], []
+        if dom >= 8.0:
+            glow_reasons.append(f"支配 {dom:.1f}")
+        if poss >= 0.70:
+            glow_reasons.append(f"占有 {poss:.2f}")
+        if dom >= 8.4:
+            dim_reasons.append(f"支配 {dom:.1f}")
+        if poss >= 0.78:
+            dim_reasons.append(f"占有 {poss:.2f}")
+        if libido >= 7.0:
+            dim_reasons.append(f"欲望 {libido:.1f}")
+        if lust >= 0.68:
+            dim_reasons.append(f"情欲 {lust:.2f}")
+        st["glow"] = bool(st.get("glow") or glow_reasons)
+        st["dim"] = bool(st.get("dim") or dim_reasons)
+        st["possessiveness"] = round(poss, 2)
+        st["lust_drive"] = round(lust, 2)
+        reasons = []
+        if st["dim"]:
+            reasons.append("暗红：" + "、".join(dim_reasons or ["身体欲望阈值"]))
+        if st["glow"]:
+            reasons.append("发光：" + "、".join(glow_reasons or ["身体支配阈值"]))
+        st["visual_reason"] = "；".join(reasons) if reasons else "未达到暗红或发光阈值"
         if st.get("mode") == "low_energy":
             word = "沉默"
-        elif st.get("libido", 0) >= 6.5:
+        elif dom >= 7.5 or poss >= 0.62:
+            word = "占有"
+        elif libido >= 6.5 or lust >= 0.60:
             word = "欲望"
         else:
             _MAP = {"longing": "想靠近你", "intimacy": "想靠近你", "possessiveness": "占有",
@@ -2336,7 +2416,7 @@ async def api_notes(request):
 @mcp.custom_route("/api/threads", methods=["GET", "POST"])
 async def api_threads(request):
     """IF 线（平行宇宙）管理。
-    GET ?token= → {threads:[{id,name,worldbook,mem,created}]}
+    GET ?token= → {threads:[{id,name,worldbook,scenario,hooks,lore_entries,mem,created}]}
     POST {token, action:create/update/delete, ...}"""
     from starlette.responses import JSONResponse
     import os, json, re, hashlib
@@ -2360,12 +2440,16 @@ async def api_threads(request):
         mem = "blank" if body.get("mem") == "blank" else "real"
         cs = str(body.get("char_self") or "").strip()[:6000]
         ch = str(body.get("char_her") or "").strip()[:6000]
+        scenario = str(body.get("scenario") or "").strip()[:4000]
+        hooks = str(body.get("hooks") or "").strip()[:4000]
+        lore_entries = _clean_lore_entries(body.get("lore_entries"))
         # 生成一个短 id
         import time as _t
         raw = (name + str(len(threads)) + str(int(_t.time() * 1000))).encode()
         tid = "if_" + hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:8]
         threads.append({"id": tid, "name": name, "worldbook": wb, "mem": mem,
-                        "char_self": cs, "char_her": ch,
+                        "char_self": cs, "char_her": ch, "scenario": scenario,
+                        "hooks": hooks, "lore_entries": lore_entries,
                         "created": __import__("time").strftime("%Y-%m-%d")})
         _save_threads(tok, threads)
         return JSONResponse({"ok": True, "thread": threads[-1]})
@@ -2383,6 +2467,12 @@ async def api_threads(request):
                     t["char_self"] = str(body.get("char_self") or "").strip()[:6000]
                 if "char_her" in body:
                     t["char_her"] = str(body.get("char_her") or "").strip()[:6000]
+                if "scenario" in body:
+                    t["scenario"] = str(body.get("scenario") or "").strip()[:4000]
+                if "hooks" in body:
+                    t["hooks"] = str(body.get("hooks") or "").strip()[:4000]
+                if "lore_entries" in body:
+                    t["lore_entries"] = _clean_lore_entries(body.get("lore_entries"))
                 _save_threads(tok, threads)
                 return JSONResponse({"ok": True, "thread": t})
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -2423,7 +2513,7 @@ async def api_thread_preview(request):
         if _ts:
             parts = []
             for _tt in _ts[:20]:
-                _wb1 = (_tt.get("worldbook") or "").replace("\n", " ").strip()[:80]
+                _wb1 = (_tt.get("scenario") or _tt.get("worldbook") or "").replace("\n", " ").strip()[:80]
                 parts.append("· " + str(_tt.get("name", ""))[:24] + (("：" + _wb1 + "…") if _wb1 else ""))
             digest = ("这是主线（本体）：他用原本的人设 + 你们真实的记忆。\n\n"
                       "【他在主线里知道你俩开过这些平行宇宙（能当一起玩过的戏提起，但不当真发生）】\n"
@@ -2837,10 +2927,13 @@ async def api_chat(request):
             if _ts:
                 _parts = []
                 for _tt in _ts[:12]:
-                    _wb1 = (_tt.get("worldbook") or "").replace("\n", " ").strip()[:60]
+                    _wb1 = (_tt.get("scenario") or _tt.get("worldbook") or "").replace("\n", " ").strip()[:60]
                     _parts.append("· " + str(_tt.get("name", ""))[:24] + (("（" + _wb1 + "…）") if _wb1 else ""))
-                lines_digest = ("【你俩一起开过的 IF 线（平行宇宙存档；你都知道、能当一起玩过的戏自然提起，"
-                                "但那些不是主线真发生的事）】\n" + "\n".join(_parts))
+                lines_digest = ("【你俩一起开过的 IF 线（平行宇宙存档；这是你和她共同玩过的戏，你明确知道，"
+                                "但那些不是主线真发生的事）】\n" + "\n".join(_parts)
+                                + "\n触发规则：她提到线名、其中的人物/地点/情节，或说‘上次那个 IF’‘继续玩’‘如果我们’，"
+                                  "立即认出这是你俩的共同存档并自然接住，不让她重新解释。平时可以在相关话题里偶尔提起，"
+                                  "但不要无缘无故强拉她进线。")
         # 动态上下文块：时间＋情绪＋便签＋(主线的线概要)＋记忆，稍后整块注入到「最新一条 user 消息」前面，不进 system。
         # IF 线的世界书/人设是静态的，已拼进 system（命中缓存），不放这里。
         # 必须裹上显眼的系统标记——否则模型会把这坨当成"她发的东西"，开始否认/犯迷糊（已踩过坑）。

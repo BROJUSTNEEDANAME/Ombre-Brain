@@ -66,3 +66,40 @@ def test_sensitive_gate_does_not_trust_missing_forwarded_header(monkeypatch):
     assert server._sensitive_gate(public) is False
     assert server._sensitive_gate(local) is True
     assert server._sensitive_gate(bearer) is True
+
+
+def test_visual_state_uses_both_dominance_and_possessiveness(tmp_path):
+    import drives
+    import endocrine
+    import server
+
+    _reset_endocrine(endocrine, tmp_path / "endocrine.json")
+    _reset_drives(drives, tmp_path / "drives.json")
+    endocrine.set_levels(thread="if_a", dominance=8.6, libido=3)
+    high_dom = server._endo_view("if_a")
+    assert high_dom["glow"] is True
+    assert high_dom["dim"] is True
+    assert "支配" in high_dom["visual_reason"]
+
+    endocrine.set_levels(thread="if_b", dominance=3, libido=3)
+    drives._get_state("if_b")["v"]["possessiveness"] = 0.82
+    high_poss = server._endo_view("if_b")
+    assert high_poss["glow"] is True
+    assert high_poss["dim"] is True
+    assert high_poss["dominant"] == "占有"
+    assert "占有" in high_poss["visual_reason"]
+
+
+def test_structured_if_worldbook_is_injected():
+    import server
+
+    block = server._if_static_block({
+        "name": "雪原线",
+        "scenario": "两人在废弃哨站醒来。",
+        "hooks": "无线电里有一个不该存在的呼号。",
+        "lore_entries": [{"title": "北塔", "keys": "塔,无线电", "content": "午夜才会亮灯。", "enabled": True}],
+    })
+    assert "当前场景" in block and "废弃哨站" in block
+    assert "北塔" in block and "午夜才会亮灯" in block
+    assert "可探索内容" in block and "呼号" in block
+    assert "Nikto/Svyatoslav 始终" in block

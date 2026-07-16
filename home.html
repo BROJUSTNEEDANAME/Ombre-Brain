@@ -285,10 +285,10 @@
   /* ---------- 导航：收进 header 的菜单按钮，点开下拉，腾出整页空间 ---------- */
   .nav-backdrop { position: fixed; inset: 0; z-index: 40; background: transparent; display: none; }
   .nav-backdrop.open { display: block; }
-  .topnav { position: fixed; left: 12px; top: calc(var(--header-h) - 2px); z-index: 41;
+  .topnav { position: fixed; right: 12px; top: calc(var(--header-h) - 2px); z-index: 41;
     display: flex; flex-direction: column; gap: 2px; min-width: 178px;
     background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 6px; box-shadow: var(--sh-bubble);
-    opacity: 0; transform: translateY(-10px) scale(.96); transform-origin: top left; pointer-events: none;
+    opacity: 0; transform: translateY(-10px) scale(.96); transform-origin: top right; pointer-events: none;
     transition: opacity .18s ease, transform .18s cubic-bezier(.2,.8,.2,1); }
   .topnav.open { opacity: 1; transform: none; pointer-events: auto; }
   .topnav button { display: flex; align-items: center; gap: 13px; width: 100%; padding: 10px 14px; border: none; background: none; border-radius: 11px; cursor: pointer; color: var(--text); font-size: 15px; font-family: inherit; text-align: left; transition: background .15s; }
@@ -540,6 +540,18 @@
   .note-item .nddl { font-size: 11px; color: var(--accent); background: var(--accent-soft); padding: 3px 9px; border-radius: 10px; flex: 0 0 auto; }
   .note-item .ndel { border: none; background: none; color: var(--text-faint); font-size: 17px; cursor: pointer; padding: 0 2px; }
   .brain-list { display: flex; flex-direction: column; gap: 8px; }
+  #brainList { max-height: min(48vh, 430px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-right: 3px; scroll-behavior: smooth; }
+  .brain-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .brain-scroll-ctl { display:flex; gap:6px; }
+  .brain-scroll-ctl button { width:34px; height:30px; border:1px solid var(--hair); border-radius:10px; background:var(--surface); color:var(--text-dim); font-size:16px; }
+  .thread-card { max-width:390px; max-height:calc(100dvh - 34px); overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .tf-label { font-size:12px; color:var(--text-dim); margin:12px 2px 6px; }
+  .tf-field { width:100%; box-sizing:border-box; padding:10px; border-radius:11px; border:1px solid var(--hair); background:var(--surface-2); color:var(--text); font-size:13.5px; line-height:1.55; resize:vertical; }
+  .lore-card { border:1px solid var(--hair); background:var(--surface-2); border-radius:12px; padding:10px; margin-bottom:8px; }
+  .lore-top { display:flex; align-items:center; gap:7px; }
+  .lore-title { flex:1; font-size:13.5px; font-weight:600; }
+  .lore-card button { border:1px solid var(--hair); background:var(--surface); color:var(--text-dim); border-radius:8px; padding:4px 8px; }
+  .lore-preview { font-size:11.5px; color:var(--text-faint); margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .brain-item { display: flex; align-items: flex-start; gap: 10px; background: var(--surface); border: 1px solid var(--hair); border-radius: 14px; padding: 11px 13px; box-shadow: var(--sh-soft); }
   .brain-item .bt { flex: 1; font-size: 13.5px; line-height: 1.55; color: var(--text); }
   .brain-item .bk { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; margin-top: 2px; }
@@ -605,16 +617,16 @@
   <input type="file" id="avatarFile" accept="image/*" style="display:none">
   <input type="file" id="bgFile" accept="image/*" style="display:none">
   <div class="header">
-    <button class="icon-btn" id="navBtn" title="去别的板块"></button>
+    <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav<span class="model-chip nline" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span></div>
       <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span><span class="model-chip" id="innerBtn" title="他不在你身边时想的">💭<span class="inner-badge" id="innerBadge"></span></span></div>
     </div>
-    <button class="icon-btn" id="skinBtn" title="外观 / 主题"></button>
+    <button class="icon-btn" id="navBtn" title="去别的板块"></button>
   </div>
 
-  <!-- 导航菜单（点 header 左上角按钮展开；选「聊天」即返回） -->
+  <!-- 导航菜单（点 header 右上角按钮展开；选「聊天」即返回） -->
   <div class="nav-backdrop" id="navBackdrop"></div>
   <nav class="topnav" id="nav">
     <button class="on" data-go="chat" data-ic="chat">聊天</button>
@@ -733,7 +745,7 @@
           <div><div class="mist-emo" id="mistEmo">安定</div><div class="mist-sub">我今天的心情</div></div>
         </div>
 
-        <div class="bhead"><span class="t">我记下的</span></div>
+        <div class="brain-head"><div class="bhead"><span class="t">我记下的</span></div><div class="brain-scroll-ctl"><button id="brainUp" aria-label="向上翻">↑</button><button id="brainDown" aria-label="向下翻">↓</button></div></div>
         <div class="bsub">聊天时我往脑子里记的东西，都在这——像翻我的仓库。</div>
         <div class="brain-list" id="brainList"></div>
 
@@ -830,17 +842,28 @@
 
   <!-- 线（IF 平行宇宙）面板 -->
   <div class="think-modal" id="threadModal">
-    <div class="think-card" style="max-width:360px">
+    <div class="think-card thread-card">
       <div class="think-card-h">🌌 平行宇宙 · 你俩的线</div>
       <div id="threadList"></div>
       <button class="think-card-close" id="threadNew" style="margin-top:12px;border-color:var(--accent);color:var(--accent)">＋ 开一条新线</button>
       <!-- 新建/编辑表单 -->
       <div id="threadForm" style="display:none;margin-top:12px;text-align:left">
-        <input id="tfName" placeholder="线的名字（如：海盗AU / 校园线）" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:14px;margin-bottom:8px">
-        <textarea id="tfWorld" placeholder="世界书：这条线的世界/背景/规矩……（可留空）。写太长不影响速度，会被缓存。" rows="4" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
-        <textarea id="tfCharSelf" placeholder="他的人设（留空＝原来的他）：这条线里他是谁、什么性格/身份" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
-        <textarea id="tfCharHer" placeholder="她的人设（留空＝你自己）：这条线里你是谁、什么身份" rows="3" style="width:100%;box-sizing:border-box;padding:10px;border-radius:11px;border:1px solid var(--hair);background:var(--surface-2);color:var(--text);font-size:13.5px;line-height:1.6;resize:vertical;margin-bottom:8px"></textarea>
-        <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:6px">进这条线，他记得现实里的你俩吗？</div>
+        <div class="tf-label">线名</div><input id="tfName" class="tf-field" placeholder="如：海盗 AU / 校园线">
+        <div class="tf-label">从哪里开始</div><textarea id="tfScenario" class="tf-field" rows="3" placeholder="开场地点、此刻发生的事、你们目前的关系。下次可直接改这里继续。"></textarea>
+        <div class="tf-label">Nikto 在这条线里是谁</div><textarea id="tfCharSelf" class="tf-field" rows="3" placeholder="留空＝主线的 Nikto；这里只改变他的身份或处境，不会把他换成别人。"></textarea>
+        <div class="tf-label">你在这条线里是谁</div><textarea id="tfCharHer" class="tf-field" rows="3" placeholder="你的身份、能力、与他的关系。留空＝你自己。"></textarea>
+        <div class="tf-label">世界总览（兼容原来的整段世界书）</div><textarea id="tfWorld" class="tf-field" rows="4" placeholder="世界背景、时代、共同规则。已有内容会原样保留。"></textarea>
+        <div class="tf-label">可探索内容</div><textarea id="tfHooks" class="tf-field" rows="3" placeholder="秘密、冲突、目标、待发现地点；Nikto 会逐步展开，不一次讲完。"></textarea>
+        <div class="tf-label">世界书卡片 <span style="opacity:.65">（手机上逐条编辑）</span></div>
+        <div id="loreList"></div>
+        <button type="button" class="think-card-close" id="loreAdd" style="margin:4px 0 10px;border-style:dashed">＋ 新增世界书条目</button>
+        <div id="loreEditor" class="lore-card" style="display:none">
+          <input id="loreTitle" class="tf-field" placeholder="条目标题（人物 / 地点 / 规则）">
+          <input id="loreKeys" class="tf-field" style="margin-top:7px" placeholder="触发词，用逗号分隔">
+          <textarea id="loreContent" class="tf-field" rows="4" style="margin-top:7px" placeholder="条目内容"></textarea>
+          <div style="display:flex;gap:7px;margin-top:7px"><button type="button" id="loreSave" style="flex:1">保存条目</button><button type="button" id="loreCancel" style="flex:1">取消</button></div>
+        </div>
+        <div class="tf-label">进这条线，他记得现实里的你俩吗？</div>
         <div class="skin-theme" style="margin-bottom:10px">
           <button type="button" class="tf-mem on" data-mem="real">带现实记忆</button>
           <button type="button" class="tf-mem" data-mem="blank">白纸开局</button>
@@ -1409,6 +1432,7 @@
     el.innerHTML='';
     items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span><button class="bdel" title="删掉这条记忆">×</button>'; d.querySelector('.bt').textContent=r.text; d.querySelector('.bdel').onclick=()=>{ if(confirm('删掉这条？会进回收站，后悔了能恢复。')) forgetBrain(r.text); }; el.appendChild(d); });
   }
+  ['brainUp','brainDown'].forEach((id,i)=>{ const b=document.getElementById(id); if(b)b.onclick=()=>{ const el=document.getElementById('brainList'); if(el)el.scrollBy({top:(i?1:-1)*Math.max(180,el.clientHeight*.78),behavior:'smooth'}); }; });
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
   function toBottom(){ requestAnimationFrame(()=>{ scroll.scrollTop=scroll.scrollHeight; }); }
@@ -1880,7 +1904,7 @@
       // 顶栏情绪 = 面板同一个来源（身体状态算出的主导情绪），保证俩一致；没有就退回他自标的
       const _emo=(data&&data.endocrine&&data.endocrine.dominant)||(data&&data.emotion)||'';
       if(_emo) setEmotion(_emo);
-      if(data&&data.diary && typeof addDiaryEntry==='function') addDiaryEntry(data.diary);
+      // 日历由每天收尾任务统一总结；普通聊天不再逐条写雾气/日记，省 token。
       if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
       if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
     }catch(e){
@@ -1950,7 +1974,8 @@
     const rows=[{id:'main',name:'主线',worldbook:'你俩真实的关系。记忆写这儿。',mem:''}].concat(threadsList);
     rows.forEach(t=>{
       const on=t.id===curThread?' on':'';
-      const sub=t.id==='main'?'本体 · 真实主线':((t.mem==='blank'?'白纸开局':'带现实记忆')+(t.worldbook?' · '+t.worldbook.replace(/\n/g,' ').slice(0,28):''));
+      const brief=t.scenario||t.worldbook||((t.lore_entries||[])[0]||{}).content||'';
+      const sub=t.id==='main'?'本体 · 真实主线':((t.mem==='blank'?'白纸开局':'带现实记忆')+(brief?' · '+brief.replace(/\n/g,' ').slice(0,28):''));
       const act=t.id==='main'?'<span class="tr-act" data-peek="main" title="看他在主线知道哪些IF线">👁</span>':'<span class="tr-act" data-peek="'+t.id+'" title="看他收到的设定">👁</span><span class="tr-act" data-edit="'+t.id+'">✎</span><span class="tr-act" data-del="'+t.id+'">🗑</span>';
       html+='<div class="thread-row'+on+'" data-go="'+t.id+'"><div class="tr-main"><div class="tr-name">'+(t.id==='main'?'🏠 主线':'🌌 '+_esc(t.name))+'</div><div class="tr-sub">'+_esc(sub)+'</div></div>'+act+'</div>';
     });
@@ -1965,6 +1990,8 @@
     if(!t||t.id==='main') return '';
     const p=[t.mem==='blank'?'白纸开局':'带现实记忆'];
     if((t.worldbook||'').trim()) p.push('世界书✓');
+    if((t.scenario||'').trim()) p.push('开场✓');
+    if(Array.isArray(t.lore_entries)&&t.lore_entries.length) p.push(t.lore_entries.length+'张条目✓');
     if((t.char_self||'').trim()) p.push('他的人设✓');
     if((t.char_her||'').trim()) p.push('她的人设✓');
     return '🌌 已进入「'+t.name+'」· '+p.join(' · ')+' —— 设定已加载，他这条线按这个演';
@@ -1977,13 +2004,30 @@
     b.textContent=(d&&d.text)?d.text:'（读不到设定）';
     m.classList.add('show');
   }
-  let _editId=null, _formMem='real';
+  let _editId=null, _formMem='real', _formLore=[], _loreEdit=-1;
+  function renderLoreCards(){
+    const box=document.getElementById('loreList'); if(!box) return;
+    if(!_formLore.length){ box.innerHTML='<div class="brain-empty" style="padding:8px 2px 12px">还没有条目。把人物、地点和规则拆成卡片，会比一大段更好改。</div>'; return; }
+    box.innerHTML='';
+    _formLore.forEach((x,i)=>{ const d=document.createElement('div'); d.className='lore-card';
+      d.innerHTML='<div class="lore-top"><input type="checkbox" '+(x.enabled!==false?'checked':'')+'><span class="lore-title"></span><button type="button" data-e>编辑</button><button type="button" data-d>×</button></div><div class="lore-preview"></div>';
+      d.querySelector('.lore-title').textContent=x.title||'未命名条目'; d.querySelector('.lore-preview').textContent=(x.keys?'触发：'+x.keys+' · ':'')+(x.content||'暂无内容');
+      d.querySelector('input').onchange=e=>{ _formLore[i].enabled=e.target.checked; };
+      d.querySelector('[data-e]').onclick=()=>openLoreEditor(i); d.querySelector('[data-d]').onclick=()=>{ _formLore.splice(i,1); renderLoreCards(); };
+      box.appendChild(d);
+    });
+  }
+  function openLoreEditor(i){ _loreEdit=typeof i==='number'?i:-1; const x=_loreEdit>=0?_formLore[_loreEdit]:{};
+    document.getElementById('loreTitle').value=x.title||''; document.getElementById('loreKeys').value=x.keys||''; document.getElementById('loreContent').value=x.content||'';
+    document.getElementById('loreEditor').style.display='block'; document.getElementById('loreContent').focus();
+  }
   function openForm(id){
     _editId=id||null;
     const f=document.getElementById('threadForm'); const nm=document.getElementById('tfName'); const wd=document.getElementById('tfWorld');
-    const cs=document.getElementById('tfCharSelf'), cbh=document.getElementById('tfCharHer');
-    if(id){ const t=threadsList.find(x=>x.id===id)||{}; nm.value=t.name||''; wd.value=t.worldbook||''; cs.value=t.char_self||''; cbh.value=t.char_her||''; _formMem=t.mem==='blank'?'blank':'real'; }
-    else { nm.value=''; wd.value=''; cs.value=''; cbh.value=''; _formMem='real'; }
+    const cs=document.getElementById('tfCharSelf'), cbh=document.getElementById('tfCharHer'), sc=document.getElementById('tfScenario'), hk=document.getElementById('tfHooks');
+    if(id){ const t=threadsList.find(x=>x.id===id)||{}; nm.value=t.name||''; wd.value=t.worldbook||''; cs.value=t.char_self||''; cbh.value=t.char_her||''; sc.value=t.scenario||''; hk.value=t.hooks||''; _formLore=Array.isArray(t.lore_entries)?JSON.parse(JSON.stringify(t.lore_entries)):[]; _formMem=t.mem==='blank'?'blank':'real'; }
+    else { nm.value=''; wd.value=''; cs.value=''; cbh.value=''; sc.value=''; hk.value=''; _formLore=[]; _formMem='real'; }
+    document.getElementById('loreEditor').style.display='none'; renderLoreCards();
     document.querySelectorAll('.tf-mem').forEach(b=>b.classList.toggle('on',b.dataset.mem===_formMem));
     f.style.display='block'; document.getElementById('threadNew').style.display='none';
   }
@@ -1994,6 +2038,9 @@
     const pm=document.getElementById('previewModal'); if(pm){ document.getElementById('previewClose').onclick=()=>pm.classList.remove('show'); pm.onclick=e=>{ if(e.target===pm) pm.classList.remove('show'); }; }
     modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
     document.getElementById('threadNew').onclick=()=>openForm(null);
+    document.getElementById('loreAdd').onclick=()=>openLoreEditor(-1);
+    document.getElementById('loreCancel').onclick=()=>document.getElementById('loreEditor').style.display='none';
+    document.getElementById('loreSave').onclick=()=>{ const x={id:_loreEdit>=0?_formLore[_loreEdit].id:'lore_'+Date.now(),title:document.getElementById('loreTitle').value.trim()||'未命名条目',keys:document.getElementById('loreKeys').value.trim(),content:document.getElementById('loreContent').value.trim(),enabled:_loreEdit>=0?_formLore[_loreEdit].enabled!==false:true}; if(_loreEdit>=0)_formLore[_loreEdit]=x; else _formLore.push(x); document.getElementById('loreEditor').style.display='none'; renderLoreCards(); };
     document.getElementById('tfCancel').onclick=()=>{ document.getElementById('threadForm').style.display='none'; document.getElementById('threadNew').style.display='block'; };
     document.querySelectorAll('.tf-mem').forEach(b=>b.onclick=()=>{ _formMem=b.dataset.mem; document.querySelectorAll('.tf-mem').forEach(x=>x.classList.toggle('on',x===b)); });
     document.getElementById('tfSave').onclick=async()=>{
@@ -2001,7 +2048,9 @@
       const worldbook=document.getElementById('tfWorld').value.trim();
       const char_self=document.getElementById('tfCharSelf').value.trim();
       const char_her=document.getElementById('tfCharHer').value.trim();
-      const body={token:(window.OMBRE_TOKEN||''),name,worldbook,char_self,char_her,mem:_formMem};
+      const scenario=document.getElementById('tfScenario').value.trim();
+      const hooks=document.getElementById('tfHooks').value.trim();
+      const body={token:(window.OMBRE_TOKEN||''),name,worldbook,char_self,char_her,scenario,hooks,lore_entries:_formLore,mem:_formMem};
       if(_editId){ body.action='update'; body.id=_editId; } else { body.action='create'; }
       let created=null;
       try{ const r=await fetch('api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); created=d.thread; }catch(e){}
@@ -2402,29 +2451,33 @@
   // ================= 日历：情绪雾气 + 我的日记 + 便签 =================
   let moods={}; try{ moods=JSON.parse(localStorage.getItem('moods'))||{}; }catch(e){}
   let diary={}; try{ diary=JSON.parse(localStorage.getItem('diary'))||{}; }catch(e){}
-  function tKey(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
+  function dayKey(d){ d=d||new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
+  function tKey(){ return dayKey(new Date()); }
   function calVisible(){ const p=document.querySelector('.page[data-page="cal"]'); return p&&p.classList.contains('active'); }
   function renderMist(){ const e=moods[tKey()]||'安定', c=EMO[e]||'#7FA877', o=document.getElementById('mistOrb'); if(o){ o.style.setProperty('--mist',c); document.getElementById('mistEmo').textContent=e; } }
   function setMood(emotion,dk){ if(!EMO[emotion]) return; moods[dk||tKey()]=emotion; localStorage.setItem('moods',JSON.stringify(moods)); renderMist(); if(calVisible()) renderCal(); pushPrefs(); }
   function addDiaryEntry(text,dk){ const k=dk||tKey(); (diary[k]=diary[k]||[]).push(text); localStorage.setItem('diary',JSON.stringify(diary)); if(calVisible()) renderCal(); pushPrefs(); }
-  // 每天一总结：昨天聊过但日历还没上色 → 自动收尾一次（心情+一句日记），不用按钮、不打扰当下
-  (function(){
+  // 每天只在 23:30 收尾一次；若当时没开页面，次日首次打开补昨天。一次总结同时生成雾气和一句日记。
+  async function summarizeDay(d){
+    const dk=dayKey(d), done='daysumDone:'+dk;
+    if(localStorage.getItem(done)) return;
+    const msgs=(chatLog||[]).filter(m=>m.dk===dk && m.side!=='sys' && m.text);
+    if(msgs.length<2){ localStorage.setItem(done,'empty'); return; }
+    const text=msgs.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
     try{
-      const d=new Date(Date.now()-86400000);
-      const yk=d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
-      if(localStorage.getItem('daysumAuto')===yk) return;
-      if(moods[yk]){ localStorage.setItem('daysumAuto',yk); return; }
-      const ymsgs=(chatLog||[]).filter(m=>m.dk===yk && m.side!=='sys' && m.text);
-      if(ymsgs.length<2){ localStorage.setItem('daysumAuto',yk); return; }
-      const text=ymsgs.map(m=>(m.side==='me'?'闪闪：':'我：')+m.text).join('\n');
-      fetch('api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text,moods:Object.keys(EMO)})})
-        .then(r=>r.json()).then(dd=>{
-          if(dd&&dd.mood) setMood(dd.mood, yk);
-          if(dd&&dd.note) addDiaryEntry('【昨日】'+dd.note, yk);
-          localStorage.setItem('daysumAuto',yk);
-        }).catch(()=>{});
+      const r=await fetch('api/daysummary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),text,moods:Object.keys(EMO)})});
+      const dd=await r.json();
+      if(dd&&dd.mood) setMood(dd.mood,dk);
+      if(dd&&dd.note) addDiaryEntry(dd.note,dk);
+      localStorage.setItem(done,'ok');
     }catch(e){}
+  }
+  (function scheduleDayClose(){
+    const nowD=new Date(), close=new Date(nowD); close.setHours(23,30,0,0);
+    const yesterday=new Date(nowD); yesterday.setDate(nowD.getDate()-1);
+    summarizeDay(yesterday);
+    if(nowD>=close) summarizeDay(nowD);
+    else setTimeout(()=>summarizeDay(new Date()), Math.max(1000,close-nowD));
   })();
 
   let mcalY, mcalM;
@@ -2467,21 +2520,21 @@
     if(st.affection>=8.5) return '想靠近你';
     return '安定';
   }
-  const ENDO_LABELS=[['energy','精力'],['libido','欲望'],['affection','黏你'],['dominance','占有']];
+  const ENDO_LABELS=[['energy','精力',1],['libido','欲望',1],['affection','黏你',1],['dominance','支配',1],['possessiveness','占有',10],['lust_drive','情欲',10]];
   function renderEndoPanel(){
     const st=lastEndo, box=document.getElementById('endoBars'); if(!box) return;
     const main=document.getElementById('endoMain'), dot=document.getElementById('endoDot'), modeEl=document.getElementById('endoMode');
     if(!st){ main.textContent='还没数据'; main.style.color='var(--text-dim)'; box.innerHTML=''; modeEl.textContent='跟我说句话，身体就动起来了。'; return; }
     const emo=endoEmotion(st);
     main.textContent=emo; main.style.color=(EMO[emo]||'var(--accent)');
-    box.innerHTML=ENDO_LABELS.map(([k,l])=>{
-      const v=Math.max(0,Math.min(10,+st[k]||0));
+    box.innerHTML=ENDO_LABELS.map(([k,l,mul])=>{
+      const v=Math.max(0,Math.min(10,(+st[k]||0)*mul));
       return '<div class="endo-row"><span class="endo-k">'+l+'</span><span class="endo-bar"><i style="width:'+(v*10)+'%"></i></span><span class="endo-v">'+v.toFixed(1)+'</span></div>';
     }).join('');
     if(dot){ const vx=(st.valence!=null?st.valence:st.libido), vy=(st.arousal!=null?st.arousal:st.dominance);
       dot.style.left=(Math.max(0,Math.min(10,vx))*10)+'%'; dot.style.bottom=(Math.max(0,Math.min(10,vy))*10)+'%'; }
     const modeTxt=st.mode==='low_energy'?'没电了（社畜档）':(st.mode==='high_drive'?'上头了':'平稳');
-    modeEl.textContent='状态：'+modeTxt+' · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
+    modeEl.textContent='状态：'+modeTxt+' · '+(st.visual_reason||'未达到暗红或发光阈值')+' · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
   }
   (function(){
     const modal=document.getElementById('endoModal'); if(!modal) return;
