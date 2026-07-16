@@ -53,7 +53,11 @@ from dehydrator import Dehydrator
 from decay_engine import DecayEngine
 from embedding_engine import EmbeddingEngine
 from import_memory import ImportEngine
-from utils import load_config, setup_logging, strip_wikilinks, count_tokens_approx
+from utils import (
+    load_config, setup_logging, strip_wikilinks, count_tokens_approx,
+    memory_text_similarity, same_memory_fact, merge_memory_details,
+    collapse_repeated_reply,
+)
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
@@ -214,13 +218,62 @@ async def _merge_or_create(
     返回 (桶ID或名称, 是否合并)。
     """
     try:
-        existing = await bucket_mgr.search(content, limit=1, domain_filter=domain or None)
+        existing = await bucket_mgr.search(content, limit=3, domain_filter=domain or None)
     except Exception as e:
         logger.warning(f"Search for merge failed, creating new / 合并搜索失败，新建: {e}")
         existing = []
 
-    if existing and existing[0].get("score", 0) > config.get("merge_threshold", 75):
-        bucket = existing[0]
+    # The old weighted fuzzy search sees paraphrases as separate facts.  Add a
+    # provider-free Chinese fact check plus embeddings (when configured).
+    candidates = []
+    try:
+        all_active = await bucket_mgr.list_all(include_archive=False)
+        for item in all_active:
+            meta = item.get("metadata", {})
+            if meta.get("type") == "feel" or meta.get("pinned") or meta.get("protected"):
+                continue
+            local_score = memory_text_similarity(content, item.get("content", ""))
+            if same_memory_fact(content, item.get("content", "")):
+                candidates.append((item, 1.0 + local_score))
+    except Exception as e:
+        logger.warning(f"Local semantic merge scan failed / 本地语义查重失败: {e}")
+
+    for item in existing:
+        meta = item.get("metadata", {})
+        if (meta.get("type") != "feel" and not meta.get("pinned")
+                and not meta.get("protected")
+                and item.get("score", 0) > config.get("merge_threshold", 75)):
+            candidates.append((item, item.get("score", 0) / 100.0))
+
+    try:
+        semantic_floor = float(os.environ.get("OMBRE_MEMORY_SEMANTIC_MERGE", "0.88"))
+        for bucket_id, similarity in await embedding_engine.search_similar(content, top_k=5):
+            item = await bucket_mgr.get(bucket_id)
+            if not item:
+                continue
+            meta = item.get("metadata", {})
+            if meta.get("type") == "feel" or meta.get("pinned") or meta.get("protected"):
+                continue
+            local_score = memory_text_similarity(content, item.get("content", ""))
+            # Very high cosine can stand alone; borderline cosine also needs
+            # concrete textual overlap to avoid merging merely related facts.
+            if similarity >= max(0.96, semantic_floor) or (
+                similarity >= semantic_floor and local_score >= 0.32
+            ):
+                candidates.append((item, similarity + local_score))
+    except Exception as e:
+        logger.warning(f"Embedding merge scan failed / 向量语义查重失败: {e}")
+
+    # De-duplicate candidates and prefer the strongest match.
+    by_id = {}
+    for item, score in candidates:
+        bid = item.get("id")
+        if bid and (bid not in by_id or score > by_id[bid][1]):
+            by_id[bid] = (item, score)
+    ranked = sorted(by_id.values(), key=lambda pair: pair[1], reverse=True)
+
+    if ranked:
+        bucket = ranked[0][0]
         # --- Never merge into pinned/protected buckets ---
         # --- 不合并到钉选/保护桶 ---
         if not (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")):
@@ -244,6 +297,18 @@ async def _merge_or_create(
                     await embedding_engine.generate_and_store(bucket["id"], merged)
                 except Exception:
                     pass
+                # If several old paraphrases already exist, fold conservative
+                # matches into the survivor now that this fact was touched.
+                for duplicate, _score in ranked[1:]:
+                    if not same_memory_fact(merged, duplicate.get("content", "")):
+                        continue
+                    merged = merge_memory_details([merged, duplicate.get("content", "")])
+                    await bucket_mgr.update(bucket["id"], content=merged)
+                    await bucket_mgr.delete(duplicate["id"])
+                    try:
+                        embedding_engine.delete_embedding(duplicate["id"])
+                    except Exception:
+                        pass
                 return bucket["metadata"].get("name", bucket["id"]), True
             except Exception as e:
                 logger.warning(f"Merge failed, creating new / 合并失败，新建: {e}")
@@ -263,6 +328,102 @@ async def _merge_or_create(
     except Exception:
         pass
     return bucket_id, False
+
+
+async def _deduplicate_existing_memories(apply: bool = False) -> dict:
+    """Find and optionally consolidate historic paraphrase duplicates.
+
+    Pinned/protected memories and the separate ``feel`` store are deliberately
+    excluded.  Applying is loss-safe at the fact level: unique sentences are
+    copied into the survivor before duplicate files/embeddings are removed.
+    """
+    buckets = []
+    for item in await bucket_mgr.list_all(include_archive=False):
+        meta = item.get("metadata", {})
+        if meta.get("type") == "feel" or meta.get("pinned") or meta.get("protected"):
+            continue
+        if item.get("content", "").strip():
+            buckets.append(item)
+
+    embeddings = {}
+    if embedding_engine.enabled:
+        for item in buckets:
+            emb = await embedding_engine.get_embedding(item["id"])
+            if emb:
+                embeddings[item["id"]] = emb
+
+    parent = list(range(len(buckets)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i, left in enumerate(buckets):
+        for j in range(i + 1, len(buckets)):
+            right = buckets[j]
+            local = memory_text_similarity(left["content"], right["content"])
+            same = same_memory_fact(left["content"], right["content"])
+            ea, eb = embeddings.get(left["id"]), embeddings.get(right["id"])
+            if not same and ea and eb:
+                cosine = embedding_engine._cosine_similarity(ea, eb)
+                same = cosine >= 0.96 or (cosine >= 0.88 and local >= 0.32)
+            if same:
+                union(i, j)
+
+    grouped = {}
+    for i, item in enumerate(buckets):
+        grouped.setdefault(find(i), []).append(item)
+    duplicate_groups = [g for g in grouped.values() if len(g) > 1]
+    report = []
+    removed = 0
+    for group in duplicate_groups:
+        # Keep the most important bucket; for ties keep the oldest stable ID.
+        group.sort(key=lambda b: (
+            -int(b.get("metadata", {}).get("importance", 5)),
+            str(b.get("metadata", {}).get("created", "")),
+            b["id"],
+        ))
+        survivor, duplicates = group[0], group[1:]
+        merged = merge_memory_details([b["content"] for b in group])
+        report.append({
+            "survivor": survivor["id"],
+            "duplicates": [b["id"] for b in duplicates],
+            "preview": merged[:160],
+        })
+        if not apply:
+            continue
+        metas = [b.get("metadata", {}) for b in group]
+        tags = list(dict.fromkeys(x for m in metas for x in m.get("tags", [])))
+        domains = list(dict.fromkeys(x for m in metas for x in m.get("domain", [])))
+        importance = max(int(m.get("importance", 5)) for m in metas)
+        valence = sum(float(m.get("valence", 0.5)) for m in metas) / len(metas)
+        arousal = sum(float(m.get("arousal", 0.3)) for m in metas) / len(metas)
+        updated = await bucket_mgr.update(
+            survivor["id"], content=merged, tags=tags, domain=domains,
+            importance=importance, valence=valence, arousal=arousal,
+        )
+        if not updated:
+            raise RuntimeError(f"failed to update dedup survivor {survivor['id']}")
+        for duplicate in duplicates:
+            if await bucket_mgr.delete(duplicate["id"]):
+                removed += 1
+                try:
+                    embedding_engine.delete_embedding(duplicate["id"])
+                except Exception:
+                    pass
+        try:
+            await embedding_engine.generate_and_store(survivor["id"], merged)
+        except Exception:
+            pass
+    return {"ok": True, "apply": apply, "groups": len(duplicate_groups),
+            "removed": removed, "details": report}
 
 
 # =============================================================
@@ -1983,6 +2144,8 @@ def _mem_dup_check(content: str) -> bool:
     try:
         from rapidfuzz import fuzz
         for _t, c in _RECENT_MEMS:
+            if same_memory_fact(content[:500], c[:500]):
+                return True
             # 阈值 75＝大脑合并去重的同一条线：反正≥75会被合并成同一个桶，就别写第二遍
             if fuzz.ratio(content[:300], c[:300]) >= 75:
                 return True
@@ -2018,8 +2181,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.2.3"
-OMBRE_WEB_VERSION_NOTE = "修复已被写成今天未来时刻的旧问候，并让手机校正后的日期覆盖服务器错误日期"
+OMBRE_WEB_VERSION = "v3.3"
+OMBRE_WEB_VERSION_NOTE = "修复同一回复说两遍；同义记忆自动合并并保留不同细节"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3052,7 +3215,7 @@ async def api_chat(request):
             recorded = []
             msgs = _build_msgs()
             out = ""
-            full = ""  # 累加各轮正文——他常"回复的同时调 hold"，正文和工具在同一轮，别把正文丢了
+            fallback = ""  # 工具轮正文仅兜底；最终轮才是完整、有效的回复
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
                 if use_tools and _active_tools:
@@ -3061,9 +3224,10 @@ async def api_chat(request):
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
                 if msg.content:
-                    full += msg.content
+                    if tcs:
+                        fallback = msg.content
                 if not tcs:
-                    out = (full or (msg.content or "")).strip()
+                    out = ((msg.content or "") or fallback).strip()
                     break
                 # 回填 assistant 的工具调用
                 msgs.append({
@@ -3078,7 +3242,7 @@ async def api_chat(request):
                 await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
                 ])
-            out = (out or full).strip()
+            out = collapse_repeated_reply((out or fallback).strip())
             if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
                 try:
                     _r2 = await _web_llm.chat.completions.create(model=model, max_tokens=web_max_tokens, messages=msgs)
@@ -3126,8 +3290,7 @@ async def api_chat(request):
                 nonlocal recorded
                 recorded = []
                 rt = ""
-                full = ""  # 累加各轮正文——他常"说完回复的同时调 hold 记忆"，正文和工具在同一轮，
-                #            绝不能因为这轮带了工具调用就把正文丢了（否则"记忆一记，回复就没了"）
+                fallback = ""  # 工具轮正文不与最终轮拼接；只在最终轮为空时兜底
                 try:
                     msgs = _build_msgs()
                     for _ in range(4):  # 限轮次省钱，同非流式
@@ -3160,12 +3323,13 @@ async def api_chat(request):
                                 if not saw_tc and (flushed or len(buf) >= 8):
                                     await _q.put({"t": "d", "x": buf[flushed:]})
                                     flushed = len(buf)
-                        full += buf  # 这轮的正文先攒住（无论有没有工具调用），最终回复用累加的
                         if not tc_acc:
                             if not saw_tc and buf[flushed:]:
                                 await _q.put({"t": "d", "x": buf[flushed:]})
-                            rt = full
+                            rt = buf or fallback
                             break
+                        if buf:
+                            fallback = buf
                         # 有工具调用：回填 assistant 消息 + 执行工具，进下一轮
                         msgs.append({"role": "assistant", "content": buf or "", "tool_calls": [
                             {"id": s2["id"] or f"call_{i}", "type": "function",
@@ -3174,7 +3338,7 @@ async def api_chat(request):
                         await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
-                    rt = (rt or full or "").strip()
+                    rt = collapse_repeated_reply((rt or fallback or "").strip())
                     if not rt:
                         # 他把回合全用在调工具/记忆上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
                         # 绝不落「（……）」（她说"你写吧"他却只记了个记忆就是这么来的）
@@ -4007,6 +4171,29 @@ async def api_memory_forget(request):
         return JSONResponse({"ok": False, "error": "not found"})
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(e)[:160]})
+
+
+@mcp.custom_route("/api/memory/deduplicate", methods=["POST"])
+async def api_memory_deduplicate(request):
+    """One-time, authenticated maintenance for historic paraphrase duplicates."""
+    from starlette.responses import JSONResponse
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    if not _sensitive_gate(request, body.get("token") or ""):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        lock = _MEM_WRITE_LOCK
+        if lock is None:
+            result = await _deduplicate_existing_memories(bool(body.get("apply")))
+        else:
+            async with lock:
+                result = await _deduplicate_existing_memories(bool(body.get("apply")))
+        return JSONResponse(result)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Historic memory deduplication failed")
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
 
 
 @mcp.custom_route("/api/memory/restore", methods=["POST"])
