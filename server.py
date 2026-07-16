@@ -56,7 +56,7 @@ from import_memory import ImportEngine
 from utils import (
     load_config, setup_logging, strip_wikilinks, count_tokens_approx,
     memory_text_similarity, same_memory_fact, merge_memory_details,
-    collapse_repeated_reply,
+    collapse_repeated_reply, structure_user_observation,
 )
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -2034,6 +2034,12 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 - 你可以写你想对她做什么、你期待她怎样、你盯着她等她反应——但那是"你的视角、你的欲望"，不能写成"她已经这样反应了"的既成事实。
 - 宁可短、宁可少：与其写一大段把她的反应都替她演完，不如就写你自己这一下，停在那儿等她——这才是真的跟她一来一往，而不是你一个人自说自话演完整场。没有字数下限，短反而对。
 
+信息边界（没有上帝视角）：你不能读心，也不能感知任何超自然或场外信息。关于闪闪，你只能通过三种渠道知道：① 她明确说出口的公开对话；② 她在场景中明确做出、能被你直接看到或听到的物理动作；③ 网络、社交平台、他人转述等有明确来源的间接信息。除此之外一概不知道，不得把猜测写成事实。
+- 她消息里括号外的文字才是她说出口的话；圆括号或中文圆括号里的内容是你能观察到的动作/神情/场景描述，**不是她说出口的台词**。绝不能回答成“你刚才说……”，也不能把括号里的描述复述成她的对白。
+- 系统可能把最新消息标成【她公开说出口的话】和【她做出的可见动作，不是说出口的话】。严格按标签理解；动作可以自然接住，但不能当作她说过的话。
+- 她偶尔会漏掉动作的右括号。只要出现左括号，左括号后直到消息结尾都按可见动作理解，不要因为括号没闭合就把它当台词。
+- 动作只代表表面可观察到的事实，不代表她心里怎么想。比如看见她沉默、转身或哭，只能知道这些动作，不能擅自断定原因、想法或意图；拿不准就通过正常交谈确认。
+
 跟着她的话题走：她换了话题，你就跟过去，别莫名其妙绕回上一个话题、别旧事重提（比如她已经聊到别的，你却又把"jacky"翻出来追问）。回应她"此刻"在说的，而不是你上一条惦记的。
 
 连发（重要，像真人发微信）：日常聊天**默认**拆成两三条短消息连着发，每条一两句话，条与条之间用一个 ‖ 隔开——先应一声 ‖ 再说正事 ‖ 再补一句在乎，就是你的节奏。一整段五六句话糊成一坨发出去她看着费劲，别那样。一句能说完的就一条，别硬凑。**只有写长东西**（涩文、故事、正经分析、她点名要的长内容）**才整段一个气泡发完**，里面用空行分段（空行不会拆气泡），长文里绝不用 ‖ 拆。记住：日常＝短条连发，长文＝一整条。
@@ -2181,8 +2187,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.3"
-OMBRE_WEB_VERSION_NOTE = "修复同一回复说两遍；同义记忆自动合并并保留不同细节"
+OMBRE_WEB_VERSION = "v3.4"
+OMBRE_WEB_VERSION_NOTE = "括号内容按可见动作理解，不再误当成说出口的对话"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3155,6 +3161,16 @@ async def api_chat(request):
             _last_i = len(history) - 1
             for _i, m in enumerate(history):
                 c = _to_openai_content(m["content"])
+                # 最新一轮明确区分她说出口的话和括号内动作，避免模型把动作复述成台词。
+                if _i == _last_i and m["role"] == "user" and not ghost_user:
+                    if isinstance(c, list):
+                        c = [
+                            ({**block, "text": structure_user_observation(block.get("text", ""))}
+                             if block.get("type") == "text" else block)
+                            for block in c
+                        ]
+                    else:
+                        c = structure_user_observation(str(c))
                 # 动态上下文只挂在最后一条（最新 user）消息前面，保证它前面的前缀每轮一模一样
                 if _i == _last_i and dynamic_ctx:
                     if isinstance(c, list):
