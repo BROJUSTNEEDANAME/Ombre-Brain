@@ -1760,7 +1760,7 @@ _HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
   button:active{transform:scale(.97)}
   .err{color:#d98a6a;font-size:12.5px;margin-top:14px;min-height:16px}
 </style></head><body>
-<form class="card" method="POST" action="home">
+<form class="card" method="POST" action="">
   <div class="title">家</div>
   <div class="sub">输入暗号进来</div>
   <input type="password" name="key" inputmode="numeric" autofocus placeholder="········" autocomplete="off">
@@ -1772,7 +1772,7 @@ _HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
 @mcp.custom_route("/home", methods=["GET", "POST"])
 async def home_app(request):
     """Serve the mobile 家 app。设了 OMBRE_HOME_PASSWORD 时先过登陆闸。"""
-    from starlette.responses import HTMLResponse, RedirectResponse
+    from starlette.responses import HTMLResponse
     import os
     no_cache = {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -1784,6 +1784,7 @@ async def home_app(request):
 
     # --- 登陆闸：只有设了 OMBRE_HOME_PASSWORD 才启用 ---
     home_pw = os.environ.get("OMBRE_HOME_PASSWORD", "").strip()
+    grant_cookie = False
     if home_pw:
         key = ""
         if request.method == "POST":
@@ -1793,16 +1794,17 @@ async def home_app(request):
                 key = ""
         if request.method == "POST":
             if key == home_pw:
-                # 暗号对 → 发 cookie（记一年）+ 跳回干净 home（相对路径，保住 Caddy 密钥前缀）
-                resp = RedirectResponse(url="home", status_code=303)
-                resp.set_cookie("home_auth", _home_session_value(home_pw), max_age=31536000,
-                                httponly=True, samesite="lax", secure=True, path="/")
-                return resp
-            # 暗号错 → 回登陆页带提示
-            return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", "暗号不对，再试一次。"),
-                                headers=no_cache, status_code=401)
+                # 暗号对：直接返回 app。不能用相对重定向——公网入口前有 Caddy
+                # 隐藏路径，且用户收藏的网址可能带尾部 /；重定向会偶发拼成
+                # .../home/home，让手机收到 9 字节的 `not found`。
+                grant_cookie = True
+            if not grant_cookie:
+                # 暗号错 → 回登陆页带提示
+                return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", "暗号不对，再试一次。"),
+                                    headers=no_cache, status_code=401)
         import hmac
-        if not hmac.compare_digest(request.cookies.get("home_auth", ""), _home_session_value(home_pw)):
+        if not grant_cookie and not hmac.compare_digest(
+                request.cookies.get("home_auth", ""), _home_session_value(home_pw)):
             # 没登陆 → 给登陆页
             return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", ""), headers=no_cache)
 
@@ -1816,7 +1818,11 @@ async def home_app(request):
         html = html.replace("__OMBRE_WEB_TOKEN_JSON__", json.dumps(
             os.environ.get("OMBRE_WEB_TOKEN", ""), ensure_ascii=False
         ))
-        return HTMLResponse(html, headers=no_cache)
+        resp = HTMLResponse(html, headers=no_cache)
+        if grant_cookie:
+            resp.set_cookie("home_auth", _home_session_value(home_pw), max_age=31536000,
+                            httponly=True, samesite="lax", secure=True, path="/")
+        return resp
     except FileNotFoundError:
         return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
 
@@ -2004,8 +2010,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.1"
-OMBRE_WEB_VERSION_NOTE = "主线与每条 IF 线拥有各自独立的情绪状态；外观面板可完整滚动并修复顶部遮挡，同时加固记忆接口安全"
+OMBRE_WEB_VERSION = "v3.1.1"
+OMBRE_WEB_VERSION_NOTE = "修复隐藏路径或尾部斜杠下登录后首页变成 not found"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
