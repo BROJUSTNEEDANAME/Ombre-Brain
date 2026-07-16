@@ -1645,14 +1645,21 @@
     scroll.appendChild(row); toBottom();
   }
   function addMsg(side,text,img,think){ if(side==='you')text=cleanAssistantText(text).trim(); if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
-  let thinkTimer=null, petBusy=false, petCtl=null;
+  let thinkTimer=null, thinkWarnTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
     thinking.classList.add('show'); toBottom();
     thinkTimer=setInterval(()=>{ thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)]; },1600);
+    clearTimeout(thinkWarnTimer);
+    thinkWarnTimer=setTimeout(()=>{ clearInterval(thinkTimer); thinkText.textContent='模型响应偏慢，正在确认连接和额度…'; },20000);
     petCtl && petCtl.toType();          // 我在回话时它坐到小终端前打字
   }
-  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); petCtl && petCtl.fromType(false); }
+  function stopThinking(){ thinking.classList.remove('show'); clearInterval(thinkTimer); clearTimeout(thinkWarnTimer); petCtl && petCtl.fromType(false); }
+  function showChatError(data){
+    stopThinking();
+    const msg=(data&&data.error_message)||'聊天请求失败，请稍后再试。';
+    renderBubble('sys','⚠ '+msg);
+  }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){} // 上下文，持久化（按当前线）
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
@@ -1788,6 +1795,9 @@
         stopThinking(); pollForReply(60000); return null;
       }
       sink.destroy(); throw new Error('stream no done');
+    }
+    if(done.error_code){
+      sink.destroy(); stopThinking(); return done;
     }
     // 落定：直播气泡换成正式消息（进 chatLog、可收藏、挂心里话），文字以服务器清洗后的为准。
     // 注意：这里绝不做「和历史消息比对去重」——他的短句（嗯。/睡吧。）本来就会重复，
@@ -1963,8 +1973,10 @@
       if(!streamed){
         data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel,
                               client_dk:(typeof tKey==='function'?tKey():''), client_t:now() });
+        if(data&&data.error_code){ showChatError(data); return; }
         await showReply(data);
       }
+      if(data&&data.error_code){ showChatError(data); return; }
       const reply=(data&&data.reply)||'（……）';
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);

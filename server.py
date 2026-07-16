@@ -56,7 +56,7 @@ from import_memory import ImportEngine
 from utils import (
     load_config, setup_logging, strip_wikilinks, count_tokens_approx,
     memory_text_similarity, same_memory_fact, merge_memory_details,
-    collapse_repeated_reply, structure_user_observation,
+    collapse_repeated_reply, structure_user_observation, classify_chat_error,
 )
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -2187,8 +2187,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.4"
-OMBRE_WEB_VERSION_NOTE = "括号内容按可见动作理解，不再误当成说出口的对话"
+OMBRE_WEB_VERSION = "v3.5"
+OMBRE_WEB_VERSION_NOTE = "额度不足、密钥失效、模型超时和网络故障会明确提醒，不再无限假装思考"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3033,7 +3033,7 @@ async def api_chat(request):
     try:
         from openai import AsyncOpenAI
         if _web_llm is None:
-            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url)
+            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url, timeout=60.0, max_retries=0)
         # 模型：网页可传 model 切换（白名单内才认），否则用默认
         _default_model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
         _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
@@ -3372,9 +3372,10 @@ async def api_chat(request):
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
                                   "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()})
                 except Exception as exc:  # noqa: BLE001
-                    await _q.put({"t": "done", "reply": "（我卡了一下，再说一次好吗。）",
-                                  "segments": ["（我卡了一下，再说一次好吗。）"], "emotion": "",
-                                  "error": str(exc)[:200]})
+                    info = classify_chat_error(exc)
+                    logger.warning("Web chat failed [%s]: %s", info["code"], str(exc)[:300])
+                    await _q.put({"t": "done", "reply": "", "segments": [], "emotion": "",
+                                  "error_code": info["code"], "error_message": info["message"]})
                 finally:
                     await _q.put(None)
 
@@ -3403,7 +3404,9 @@ async def api_chat(request):
             这样闪闪中途切屏、请求被挂断时，这里也会跑完并把回复存住（她回来就看到）。"""
             try:
                 rt = await _run_chat(True)
-            except Exception:  # noqa: BLE001
+            except Exception as first_exc:  # noqa: BLE001
+                if classify_chat_error(first_exc)["code"] in ("api_quota", "api_auth", "model_timeout", "model_connection"):
+                    raise
                 # 带记忆工具那轮出错 → 去掉工具重试一次，至少让她能聊上
                 rt = await _run_chat(False)
             rt = rt or "（……）"
@@ -3417,7 +3420,10 @@ async def api_chat(request):
         # 客户端切屏断开了：_finish 已被 shield 跑完并存好回复，这里安静退出即可
         raise
     except Exception as exc:
-        return JSONResponse({"reply": "（我卡了一下，再说一次好吗。）", "emotion": "", "error": str(exc)[:200]})
+        info = classify_chat_error(exc)
+        logger.warning("Web chat failed [%s]: %s", info["code"], str(exc)[:300])
+        return JSONResponse({"reply": "", "emotion": "", "error_code": info["code"],
+                             "error_message": info["message"]})
 
 
 @mcp.custom_route("/api/endocrine", methods=["GET"])
@@ -3554,7 +3560,12 @@ async def api_welcome_back(request):
     try:
         from openai import AsyncOpenAI
         if _web_llm is None:
-            _web_llm = AsyncOpenAI(api_key=api_key, base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip())
+            _web_llm = AsyncOpenAI(
+                api_key=api_key,
+                base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip(),
+                timeout=60.0,
+                max_retries=0,
+            )
         model = os.environ.get("OMBRE_BOT_MODEL", "glm-5.1")
         r = await asyncio.wait_for(_llm_create(
             _web_llm, model=model, max_tokens=300,
@@ -4140,7 +4151,7 @@ async def api_daysummary(request):
     try:
         from openai import AsyncOpenAI
         if _web_llm is None:
-            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url)
+            _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url, timeout=60.0, max_retries=0)
         model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
         resp = await _llm_create(
             _web_llm, model=model, max_tokens=400,

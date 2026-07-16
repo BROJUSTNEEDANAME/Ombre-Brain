@@ -1,4 +1,5 @@
 from utils import (
+    classify_chat_error,
     collapse_repeated_reply,
     memory_text_similarity,
     merge_memory_details,
@@ -58,3 +59,19 @@ def test_unclosed_parenthesis_is_action_through_end_of_turn():
 
 def test_plain_user_dialogue_is_not_rewritten():
     assert structure_user_observation("今天想和你聊聊") == "今天想和你聊聊"
+
+
+class _ProviderError(Exception):
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def test_chat_error_classifies_quota_and_auth_failures():
+    assert classify_chat_error(_ProviderError("insufficient_quota", 429))["code"] == "api_quota"
+    assert classify_chat_error(_ProviderError("Unauthorized", 401))["code"] == "api_auth"
+
+
+def test_chat_error_classifies_timeout_and_connection_failures():
+    assert classify_chat_error(TimeoutError("timed out"))["code"] == "model_timeout"
+    assert classify_chat_error(_ProviderError("Connection reset by peer"))["code"] == "model_connection"

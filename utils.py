@@ -231,6 +231,25 @@ def structure_user_observation(text: str) -> str:
     return "\n".join(f"【{kind}】{value}" for kind, value in parts)
 
 
+def classify_chat_error(exc) -> dict:
+    """Turn provider/network failures into safe, user-facing chat diagnostics."""
+    status = getattr(exc, "status_code", None)
+    detail = str(exc or "").lower()
+    if status in (402, 429) or any(word in detail for word in (
+            "insufficient_quota", "quota", "credit", "balance", "余额", "额度")):
+        return {"code": "api_quota", "message": "模型 API 额度不足或已触发限流，请充值或稍后再试。"}
+    if status in (401, 403) or any(word in detail for word in (
+            "invalid api key", "invalid_api_key", "authentication", "unauthorized")):
+        return {"code": "api_auth", "message": "模型 API 密钥失效或无权限，请检查服务器上的 API 配置。"}
+    if isinstance(exc, TimeoutError) or any(word in detail for word in (
+            "timeout", "timed out", "readtimeout")):
+        return {"code": "model_timeout", "message": "模型超过 60 秒没有响应，本次请求已停止；这不是还在思考。"}
+    if any(word in detail for word in (
+            "connection", "connecterror", "network", "dns", "reset by peer")):
+        return {"code": "model_connection", "message": "服务器暂时连不上模型 API，请稍后再试。"}
+    return {"code": "model_error", "message": "模型 API 返回异常，本次没有生成回复。"}
+
+
 def memory_text_similarity(left: str, right: str) -> float:
     """Conservative, provider-free similarity for short factual memories.
 
