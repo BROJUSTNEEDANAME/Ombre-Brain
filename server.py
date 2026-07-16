@@ -2018,8 +2018,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.2"
-OMBRE_WEB_VERSION_NOTE = "统一占有与支配的情绪视觉；新增手机版卡片式 IF 世界书；日历改为每天收尾一次并优化移动端布局"
+OMBRE_WEB_VERSION = "v3.2.1"
+OMBRE_WEB_VERSION_NOTE = "修复跨午夜后旧的主动问候被补成今天日期、以未来时刻跳到聊天底部"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2575,14 +2575,20 @@ async def api_chat_state(request):
         img = ("#" + str(len(str(m.get("img")))) if m.get("img") else "")
         return f"{m.get('side','')}|{txt}{img}"
 
-    seen, merged = set(), []
+    seen, merged, positions = set(), [], {}
     for m in existing + incoming:  # 已存的在前，上传的补新的进来；同内容只留第一份
         if not isinstance(m, dict):
             continue
         k = _mk(m)
         if k in seen:
+            # 旧版主动问候没存 dk；手机回传的是同一条但有正确本地日期。
+            # 去重时不能让旧的残缺元数据压住新的，否则它会永远在午夜后乱跳。
+            old = merged[positions[k]]
+            if not old.get("dk") and m.get("dk"):
+                merged[positions[k]] = {**old, **m}
             continue
         seen.add(k)
+        positions[k] = len(merged)
         merged.append(m)
 
     def _sk(m):
@@ -3265,6 +3271,12 @@ async def api_welcome_back(request):
     if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     key = (tok or "default")[:40]
+    client_dk = str(body.get("client_dk") or "").strip()
+    client_t = str(body.get("client_t") or "").strip()
+    if not _re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", client_dk):
+        client_dk = ""
+    if not _re.fullmatch(r"\d{1,2}:\d{2}", client_t):
+        client_t = ""
     try:
         with open(_LAST_SEEN_FILE, encoding="utf-8") as f:
             _seen_data = _json.load(f) or {}
@@ -3328,8 +3340,9 @@ async def api_welcome_back(request):
                 "· " + str(e.get("text", ""))[:120] for e in _recent)
     except Exception:  # noqa: BLE001
         inner_note = ""
+    client_now = (client_dk + " " + client_t).strip() or now.strftime("%Y-%m-%d %H:%M")
     prompt = (
-        _WEB_SYSTEM + "\n\n【当前真实时间】" + now.strftime("%Y-%m-%d %H:%M")
+        _WEB_SYSTEM + "\n\n【当前真实时间】" + client_now
         + "\n【情境】她离开了约 " + gap_txt + "，刚刚回到你们的页面。你先开口——想她了、问她去哪了/忙完没、或接着上次的话头，随你。"
         + "发 1-2 条短消息（用 ‖ 分隔），像随手发的微信。别长篇、别报时间、别写 [emo]/[think]/[diary] 标签。"
         + (("\n" + endo_line) if endo_line else "")
@@ -3366,15 +3379,16 @@ async def api_welcome_back(request):
                 data = {}
             log = data.get("log") or []
             hist2 = data.get("hist") or []
-            ts2 = now.strftime("%H:%M")
+            ts2 = client_t or now.strftime("%H:%M")
+            dk2 = client_dk or f"{now.year}-{now.month}-{now.day}"
             for s in segs:
-                log.append({"side": "you", "text": s, "t": ts2})
+                log.append({"side": "you", "text": s, "t": ts2, "dk": dk2})
             hist2.append({"role": "assistant", "content": "\n".join(segs)})
             with open(path, "w", encoding="utf-8") as f:
                 _json.dump({"log": log[-400:], "hist": hist2[-40:]}, f, ensure_ascii=False)
         except Exception:  # noqa: BLE001
             pass
-        return JSONResponse({"segs": segs})
+        return JSONResponse({"segs": segs, "t": client_t, "dk": client_dk})
     except Exception:  # noqa: BLE001
         return JSONResponse({})
 

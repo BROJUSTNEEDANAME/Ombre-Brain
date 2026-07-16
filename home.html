@@ -1493,13 +1493,24 @@
     const im=(m&&m.img)?('#'+(''+m.img).length):'';   // 图片按数据长度粗略区分，防不同图误合
     return (m&&m.side||'')+'|'+t+im;
   }
+  // 旧版“回来先开口”消息只有 HH:MM、没有日期。跨过午夜后若一律补成今天，
+  // 昨天下午的 15:54 就会被排到今天 00:13 后面。按手机当前时间把明显在未来的旧时刻归到昨天。
+  function _repairLegacyDate(m){
+    if(!m||m.dk) return m;
+    const d=new Date(), parts=(''+(m.t||'')).split(':').map(Number);
+    if(parts.length===2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])){
+      const msgMin=parts[0]*60+parts[1], nowMin=d.getHours()*60+d.getMinutes();
+      if(msgMin>nowMin+120) d.setDate(d.getDate()-1);
+    }
+    return Object.assign({},m,{dk:d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()});
+  }
   // 合并本地+服务器：按内容去重（一条只留一份），保留先出现的那份（本地在前＝本地的 dk/t 权威）；
   // 没 dk 的补成今天（否则被当 1970 排到最顶）。再按时间稳定排序。绝不因为时区差把消息拆成两条。
   function _mergeLogs(a,b){
     const seen=new Set(), out=[];
-    (a||[]).concat(b||[]).forEach(m=>{ if(!m||typeof m!=='object')return;
+    (a||[]).concat(b||[]).forEach(raw=>{ if(!raw||typeof raw!=='object')return; const m=_repairLegacyDate(raw);
       const k=_msgSig(m); if(seen.has(k))return; seen.add(k);
-      out.push(m.dk?m:Object.assign({},m,{dk:(typeof tKey==='function'?tKey():'')}));
+      out.push(m);
     });
     out.forEach((m,i)=>m.__i=i);
     out.sort((x,y)=>(_msgTime(x)-_msgTime(y))||(x.__i-y.__i));  // 时间排序，同分钟保持原序（稳定）
@@ -1516,7 +1527,7 @@
       const merged=_mergeLogs(chatLog, srv);
       // 重画条件：条数变了(新消息进来 或 去重后变少)，或顺序/内容和当前不一致——
       // 光看"变长"会漏掉"去重后变短"这种清理，导致重复消息一直挂着不消
-      const _sig=arr=>arr.map(_msgSig).join('§');
+      const _sig=arr=>arr.map(m=>_msgSig(m)+'@'+(m.dk||'')+'@'+(m.t||'')).join('§');
       const changed = merged.length!==chatLog.length || _sig(merged)!==_sig(chatLog);
       if(changed){
         chatLog=merged;
@@ -1781,7 +1792,7 @@
       if(busy) return; busy=true;
       try{
         refreshInner(false);   // 刷新「他不在时」面板数据+点亮红点(不塞进聊天,免被重画吞掉)
-        const r=await fetch('api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const r=await fetch('api/welcome_back',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),client_dk:(typeof tKey==='function'?tKey():''),client_t:now()})});
         const j=await r.json();
         if(j&&Array.isArray(j.segs)){ for(const s of j.segs){ addMsg('you', s); await sleep(420); } }
       }catch(e){}
