@@ -180,57 +180,6 @@ def strip_wikilinks(text: str) -> str:
     return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text) if text else text
 
 
-def structure_user_observation(text: str) -> str:
-    """Separate spoken text from parenthesized, directly visible actions.
-
-    A missing closing parenthesis is treated as an action through end-of-turn,
-    matching the chat convention used by the web client.
-    """
-    if not text or not re.search(r"[（(]", text):
-        return text
-
-    parts = []
-    spoken = []
-    action = []
-    depth = 0
-
-    def flush_spoken():
-        value = "".join(spoken).strip()
-        if value:
-            parts.append(("她公开说出口的话", value))
-        spoken.clear()
-
-    def flush_action():
-        value = "".join(action).strip()
-        if value:
-            parts.append(("她做出的可见动作，不是说出口的话", value))
-        action.clear()
-
-    for char in text:
-        if char in "（(":
-            if depth == 0:
-                flush_spoken()
-            else:
-                action.append(char)
-            depth += 1
-        elif char in "）)" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                flush_action()
-            else:
-                action.append(char)
-        elif depth:
-            action.append(char)
-        else:
-            spoken.append(char)
-
-    if depth:
-        flush_action()
-    else:
-        flush_spoken()
-    return "\n".join(f"【{kind}】{value}" for kind, value in parts)
-
-
 def memory_text_similarity(left: str, right: str) -> float:
     """Conservative, provider-free similarity for short factual memories.
 

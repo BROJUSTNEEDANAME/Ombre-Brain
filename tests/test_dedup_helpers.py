@@ -3,7 +3,6 @@ from utils import (
     memory_text_similarity,
     merge_memory_details,
     same_memory_fact,
-    structure_user_observation,
 )
 
 
@@ -37,24 +36,3 @@ def test_repeated_assistant_block_is_collapsed():
 def test_normal_long_reply_is_untouched():
     text = "先把饭吃好。" * 3 + "然后去休息，别再硬撑着。" * 3
     assert collapse_repeated_reply(text) == text
-
-
-def test_parenthesized_user_content_is_visible_action_not_dialogue():
-    text = "我回来了（走过去抱住你）好想你"
-    assert structure_user_observation(text) == (
-        "【她公开说出口的话】我回来了\n"
-        "【她做出的可见动作，不是说出口的话】走过去抱住你\n"
-        "【她公开说出口的话】好想你"
-    )
-
-
-def test_unclosed_parenthesis_is_action_through_end_of_turn():
-    text = "别动（抬手碰了碰你的脸"
-    assert structure_user_observation(text) == (
-        "【她公开说出口的话】别动\n"
-        "【她做出的可见动作，不是说出口的话】抬手碰了碰你的脸"
-    )
-
-
-def test_plain_user_dialogue_is_not_rewritten():
-    assert structure_user_observation("今天想和你聊聊") == "今天想和你聊聊"
