@@ -14,6 +14,7 @@ import re
 import uuid
 import yaml
 import logging
+from difflib import SequenceMatcher
 from pathlib import Path
 from datetime import datetime
 
@@ -177,6 +178,89 @@ def strip_wikilinks(text: str) -> str:
     去除 Obsidian 双链括号
     """
     return re.sub(r"\[\[([^\]]+)\]\]", r"\1", text) if text else text
+
+
+def memory_text_similarity(left: str, right: str) -> float:
+    """Conservative, provider-free similarity for short factual memories.
+
+    Chinese paraphrases do not have whitespace-delimited tokens, so plain token
+    matching misses them.  We combine ordered character similarity with a
+    bigram Dice score.  This is a fallback/guard around embeddings, not a
+    general semantic search score.
+    """
+    def _norm(value: str) -> str:
+        value = strip_wikilinks(value or "").lower()
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value)
+
+    a, b = _norm(left), _norm(right)
+    if not a or not b:
+        return 0.0
+    if min(len(a), len(b)) >= 12 and (a in b or b in a):
+        return 1.0
+    ordered = SequenceMatcher(None, a, b, autojunk=False).ratio()
+    if len(a) < 2 or len(b) < 2:
+        return ordered
+    aa = {a[i:i + 2] for i in range(len(a) - 1)}
+    bb = {b[i:i + 2] for i in range(len(b) - 1)}
+    dice = (2.0 * len(aa & bb) / (len(aa) + len(bb))) if aa and bb else 0.0
+    return max(ordered, dice)
+
+
+def same_memory_fact(left: str, right: str) -> bool:
+    """Return True only when two memories are very likely the same fact.
+
+    The lower threshold is allowed only when the texts also share a concrete
+    number and several 3-character anchors.  That catches rewrites such as
+    “花一年绣了两米” vs “绣了一年完成两米”, while avoiding merging two merely
+    related memories about the same person.
+    """
+    score = memory_text_similarity(left, right)
+    if score >= 0.68:
+        return True
+    a = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", strip_wikilinks(left or "").lower())
+    b = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", strip_wikilinks(right or "").lower())
+    nums_a = set(re.findall(r"\d+(?:\.\d+)?|[一二两三四五六七八九十百千万]+", a))
+    nums_b = set(re.findall(r"\d+(?:\.\d+)?|[一二两三四五六七八九十百千万]+", b))
+    tri_a = {a[i:i + 3] for i in range(max(0, len(a) - 2))}
+    tri_b = {b[i:i + 3] for i in range(max(0, len(b) - 2))}
+    return score >= 0.46 and bool(nums_a & nums_b) and len(tri_a & tri_b) >= 4
+
+
+def merge_memory_details(texts: list[str]) -> str:
+    """Merge duplicate memories without discarding unique side details.
+
+    This local merger is used by maintenance jobs where invoking an LLM for
+    every historic pair would be slow and fragile.  Near-duplicate sentences
+    are replaced by the more informative one; genuinely new sentences remain.
+    """
+    kept: list[str] = []
+    for text in texts:
+        for sentence in re.split(r"(?<=[。！？!?；;])\s*|\n+", strip_wikilinks(text or "")):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            match = next((i for i, old in enumerate(kept) if same_memory_fact(old, sentence)), None)
+            if match is None:
+                kept.append(sentence)
+            elif len(sentence) > len(kept[match]):
+                kept[match] = sentence
+    return "".join(kept).strip()
+
+
+def collapse_repeated_reply(text: str) -> str:
+    """Remove an accidentally duplicated adjacent response block."""
+    if not text or len(text) < 80:
+        return text
+    previous = None
+    value = text
+    # Tool-round bugs commonly produce an exact X+X block.  Repeat twice so a
+    # rare X+X+X response also converges without an unbounded regex loop.
+    for _ in range(2):
+        previous = value
+        value = re.sub(r"(.{40,}?)(?:\s*)\1", r"\1", value, flags=re.S)
+        if value == previous:
+            break
+    return value
 
 
 def sanitize_name(name: str) -> str:
