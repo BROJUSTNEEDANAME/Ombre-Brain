@@ -996,7 +996,6 @@
       try{ loadGot(); }catch(e){}
       try{ logArr=JSON.parse(localStorage.getItem('gameLog'))||[]; }catch(e){}
       try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
-      try{ if(typeof compactBrainLog==='function') compactBrainLog(); }catch(e){}
       try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
       try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
       try{ if(typeof renderMemory==='function') renderMemory(); }catch(e){}
@@ -1382,39 +1381,11 @@
 
   // 我记下的（脑子/仓库）
   let brainLog={}; try{ brainLog=JSON.parse(localStorage.getItem('brainLog'))||{}; }catch(e){}
-  function _brainNorm(s){ return (s||'').toLowerCase().replace(/\[\[|\]\]/g,'').replace(/[^0-9a-z\u4e00-\u9fff]+/g,''); }
-  function _brainSimilarity(a,b){
-    a=_brainNorm(a); b=_brainNorm(b); if(!a||!b)return 0;
-    if(Math.min(a.length,b.length)>=12&&(a.includes(b)||b.includes(a)))return 1;
-    const grams=s=>{ const x=new Set(); for(let i=0;i<s.length-1;i++)x.add(s.slice(i,i+2)); return x; };
-    const A=grams(a),B=grams(b); let hit=0; A.forEach(x=>{if(B.has(x))hit++;});
-    return (A.size+B.size)?2*hit/(A.size+B.size):0;
-  }
-  function _brainSame(a,b){
-    const score=_brainSimilarity(a,b); if(score>=.68)return true;
-    const aa=_brainNorm(a),bb=_brainNorm(b);
-    const nums=s=>new Set(s.match(/\d+(?:\.\d+)?|[一二两三四五六七八九十百千万]+/g)||[]);
-    const A=nums(aa),B=nums(bb); let sharedNum=false; A.forEach(x=>{if(B.has(x))sharedNum=true;});
-    let anchors=0; const T=new Set(); for(let i=0;i<aa.length-2;i++)T.add(aa.slice(i,i+3)); for(let i=0;i<bb.length-2;i++)if(T.has(bb.slice(i,i+3)))anchors++;
-    return score>=.46&&sharedNum&&anchors>=4;
-  }
-  function _brainMerge(a,b){
-    const out=[]; [a,b].forEach(t=>(t||'').split(/(?<=[。！？!?；;])\s*|\n+/).forEach(s=>{ s=s.trim(); if(!s)return; const i=out.findIndex(x=>_brainSame(x,s)); if(i<0)out.push(s); else if(s.length>out[i].length)out[i]=s; }));
-    return out.join('');
-  }
-  function compactBrainLog(){
-    const flat=[]; Object.keys(brainLog).sort().forEach(k=>(brainLog[k]||[]).forEach(r=>flat.push({k,text:(r.text||'').trim(),t:r.t}))); const kept=[];
-    flat.forEach(r=>{ if(!r.text)return; const i=kept.findIndex(x=>_brainSame(x.text,r.text)); if(i<0)kept.push(r); else { kept[i].text=_brainMerge(kept[i].text,r.text); kept[i].k=r.k; kept[i].t=r.t||kept[i].t; } });
-    const next={}; kept.forEach(r=>(next[r.k]=next[r.k]||[]).push({text:r.text,t:r.t})); brainLog=next;
-    try{ localStorage.setItem('brainLog',JSON.stringify(brainLog)); }catch(e){}
-  }
-  compactBrainLog();
   function recordBrain(text){
     addMsg('sys','📌 已记进大脑（永久记忆）');            // 真的存进大脑了；详情去「我记下的」看
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     const list=(brainLog[k]=brainLog[k]||[]);
-    let found=null; Object.keys(brainLog).some(d=>{ const i=(brainLog[d]||[]).findIndex(r=>_brainSame(r.text||'',text)); if(i>=0){found={d,i};return true;} return false; });
-    if(found){ brainLog[found.d][found.i].text=_brainMerge(brainLog[found.d][found.i].text,text); localStorage.setItem('brainLog',JSON.stringify(brainLog)); renderBrain(); if(typeof pushPrefs==='function')pushPrefs(); return; }
+    if(list.some(r=>(r.text||'').trim()===text.trim())) return;  // 同一天同样的别重复进列表
     list.push({text, t:now()});
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(typeof renderBrain==='function') renderBrain();
@@ -1461,14 +1432,6 @@
     el.innerHTML='';
     items.forEach(r=>{ const d=document.createElement('div'); d.className='brain-item'; d.innerHTML='<span class="bt"></span><span class="bk">'+r.k.split('-').slice(1).join('/')+'</span><button class="bdel" title="删掉这条记忆">×</button>'; d.querySelector('.bt').textContent=r.text; d.querySelector('.bdel').onclick=()=>{ if(confirm('删掉这条？会进回收站，后悔了能恢复。')) forgetBrain(r.text); }; el.appendChild(d); });
   }
-  async function maintainBrainMemory(){
-    const key='memoryDedupV33'; try{ if(localStorage.getItem(key)==='1')return; }catch(e){}
-    try{
-      const r=await fetch('api/memory/deduplicate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),apply:true})});
-      const data=await r.json(); if(data&&data.ok){ localStorage.setItem(key,'1'); compactBrainLog(); renderBrain(); if(typeof pushPrefs==='function')pushPrefs(); }
-    }catch(e){}
-  }
-  setTimeout(maintainBrainMemory,1800);
   ['brainUp','brainDown'].forEach((id,i)=>{ const b=document.getElementById(id); if(b)b.onclick=()=>{ const el=document.getElementById('brainList'); if(el)el.scrollBy({top:(i?1:-1)*Math.max(180,el.clientHeight*.78),behavior:'smooth'}); }; });
 
   function now(){ const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); }
