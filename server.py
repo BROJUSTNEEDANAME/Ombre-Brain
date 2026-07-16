@@ -104,6 +104,8 @@ async def health_check(request):
 @mcp.custom_route("/breath-hook", methods=["GET"])
 async def breath_hook(request):
     from starlette.responses import PlainTextResponse
+    if not _sensitive_gate(request):
+        return PlainTextResponse("unauthorized", status_code=403)
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
         # pinned
@@ -158,6 +160,8 @@ async def breath_hook(request):
 @mcp.custom_route("/dream-hook", methods=["GET"])
 async def dream_hook(request):
     from starlette.responses import PlainTextResponse
+    if not _sensitive_gate(request):
+        return PlainTextResponse("unauthorized", status_code=403)
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
         candidates = [
@@ -1344,7 +1348,8 @@ async def make_page(html: str = "", title: str = "") -> str:
     return f"{base}/p/{page_id}"
 
 
-async def set_state(energy: float = -1, libido: float = -1, affection: float = -1, dominance: float = -1) -> str:
+async def set_state(energy: float = -1, libido: float = -1, affection: float = -1,
+                    dominance: float = -1, thread: str = "main") -> str:
     """他调整自己此刻的身体状态值（1-10；传 -1 表示该项不动）。"""
     import endocrine
     kw = {}
@@ -1355,7 +1360,7 @@ async def set_state(energy: float = -1, libido: float = -1, affection: float = -
             continue
         if v >= 0:
             kw[k] = v
-    st = endocrine.set_levels(**kw)
+    st = endocrine.set_levels(thread=thread, **kw)
     return ("已调整。当前：精力{energy} 欲望{libido} 黏她{affection} 支配{dominance}".format(**st)
             + ("｜页面已入夜(暗红)" if st.get("dim") else "")
             + ("｜你的话里特殊词正在发光" if st.get("glow") else ""))
@@ -1398,20 +1403,37 @@ async def api_tools_schema(request):
     return JSONResponse({"tools": _TOOLS_SCHEMA})
 
 
-def _sensitive_gate(request) -> bool:
-    """敏感接口守门：本机直连(telegram/本地脚本,不经 Caddy = 无 X-Forwarded-For)放行；
-    公网(经 Caddy 一定带 X-Forwarded-For)必须带 有效登录cookie 或 web token。
-    系统完全没上锁(既没设 OMBRE_HOME_PASSWORD 也没设 OMBRE_WEB_TOKEN)时保持开放,不突然锁死。"""
-    import os
-    if not request.headers.get("x-forwarded-for"):
+def _home_session_value(password: str) -> str:
+    """Derive an opaque cookie value without ever storing the password in the browser."""
+    import hashlib, hmac
+    return hmac.new(password.encode("utf-8"), b"ombre-home-session-v1", hashlib.sha256).hexdigest()
+
+
+def _sensitive_gate(request, supplied_token: str = "") -> bool:
+    """Sensitive routes fail closed on public traffic; only true loopback bypasses auth."""
+    import hmac, ipaddress, os
+    if request is None:  # in-process hooks do not cross an HTTP trust boundary
+        return True
+    forwarded = bool(request.headers.get("x-forwarded-for"))
+    client_host = getattr(getattr(request, "client", None), "host", "") or ""
+    try:
+        loopback = ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        loopback = client_host in {"localhost"}
+    if loopback and not forwarded:
         return True
     home_pw = os.environ.get("OMBRE_HOME_PASSWORD", "").strip()
     tok_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if not home_pw and not tok_env:
+        return False
+    cookie = request.cookies.get("home_auth", "")
+    if home_pw and hmac.compare_digest(cookie, _home_session_value(home_pw)):
         return True
-    if home_pw and request.cookies.get("home_auth", "") == home_pw:
-        return True
-    if tok_env and request.query_params.get("token", "") == tok_env:
+    supplied = supplied_token or request.query_params.get("token", "")
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        supplied = auth[7:].strip()
+    if tok_env and hmac.compare_digest(supplied, tok_env):
         return True
     return False
 
@@ -1458,7 +1480,17 @@ async def api_page_view(request):
         return PlainTextResponse("这张网页不存在或已过期。", status_code=404)
     try:
         with open(path, encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            # Scripts may power a mini-page, but CSP sandbox gives it an opaque origin and
+            # blocks network/form access so generated HTML cannot act as the main app.
+            return HTMLResponse(f.read(), headers={
+                "Content-Security-Policy": (
+                    "sandbox allow-scripts; default-src 'none'; "
+                    "style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+                    "img-src data: blob:; media-src data: blob:"
+                ),
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            })
     except Exception as e:  # noqa: BLE001
         return PlainTextResponse(f"读取失败: {e}", status_code=500)
 
@@ -1603,6 +1635,8 @@ async def api_network(request):
 async def api_breath_debug(request):
     """Debug endpoint: simulate breath scoring and return per-bucket breakdown."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     query = request.query_params.get("q", "")
     q_valence = request.query_params.get("valence")
     q_arousal = request.query_params.get("arousal")
@@ -1682,6 +1716,8 @@ async def dashboard(request):
     """Serve the dashboard HTML page."""
     from starlette.responses import HTMLResponse
     import os
+    if not _sensitive_gate(request):
+        return HTMLResponse("unauthorized", status_code=403)
     dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
     try:
         with open(dashboard_path, "r", encoding="utf-8") as f:
@@ -1724,7 +1760,7 @@ _HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
   button:active{transform:scale(.97)}
   .err{color:#d98a6a;font-size:12.5px;margin-top:14px;min-height:16px}
 </style></head><body>
-<form class="card" method="GET" action="home">
+<form class="card" method="POST" action="home">
   <div class="title">家</div>
   <div class="sub">输入暗号进来</div>
   <input type="password" name="key" inputmode="numeric" autofocus placeholder="········" autocomplete="off">
@@ -1733,7 +1769,7 @@ _HOME_LOGIN_PAGE = """<!DOCTYPE html><html lang="zh-CN"><head>
 </form></body></html>"""
 
 
-@mcp.custom_route("/home", methods=["GET"])
+@mcp.custom_route("/home", methods=["GET", "POST"])
 async def home_app(request):
     """Serve the mobile 家 app。设了 OMBRE_HOME_PASSWORD 时先过登陆闸。"""
     from starlette.responses import HTMLResponse, RedirectResponse
@@ -1749,18 +1785,24 @@ async def home_app(request):
     # --- 登陆闸：只有设了 OMBRE_HOME_PASSWORD 才启用 ---
     home_pw = os.environ.get("OMBRE_HOME_PASSWORD", "").strip()
     if home_pw:
-        key = request.query_params.get("key", "")
-        if key:
+        key = ""
+        if request.method == "POST":
+            try:
+                key = str((await request.form()).get("key", ""))
+            except Exception:  # noqa: BLE001
+                key = ""
+        if request.method == "POST":
             if key == home_pw:
                 # 暗号对 → 发 cookie（记一年）+ 跳回干净 home（相对路径，保住 Caddy 密钥前缀）
                 resp = RedirectResponse(url="home", status_code=303)
-                resp.set_cookie("home_auth", home_pw, max_age=31536000,
+                resp.set_cookie("home_auth", _home_session_value(home_pw), max_age=31536000,
                                 httponly=True, samesite="lax", secure=True, path="/")
                 return resp
             # 暗号错 → 回登陆页带提示
             return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", "暗号不对，再试一次。"),
                                 headers=no_cache, status_code=401)
-        if request.cookies.get("home_auth", "") != home_pw:
+        import hmac
+        if not hmac.compare_digest(request.cookies.get("home_auth", ""), _home_session_value(home_pw)):
             # 没登陆 → 给登陆页
             return HTMLResponse(_HOME_LOGIN_PAGE.replace("__ERR__", ""), headers=no_cache)
 
@@ -1770,7 +1812,10 @@ async def home_app(request):
         with open(home_path, "r", encoding="utf-8") as f:
             html = f.read()
         # 注入网页聊天令牌（不入库；从环境变量来，没设就留空）
-        html = html.replace("__OMBRE_WEB_TOKEN__", os.environ.get("OMBRE_WEB_TOKEN", ""))
+        import json
+        html = html.replace("__OMBRE_WEB_TOKEN_JSON__", json.dumps(
+            os.environ.get("OMBRE_WEB_TOKEN", ""), ensure_ascii=False
+        ))
         return HTMLResponse(html, headers=no_cache)
     except FileNotFoundError:
         return HTMLResponse("<h1>home.html not found</h1>", status_code=404)
@@ -1959,8 +2004,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.0"
-OMBRE_WEB_VERSION_NOTE = "他不在时会按日班、夜班、外勤和休息作息生活，并像人一样分时段连续获取不同来源的信息"
+OMBRE_WEB_VERSION = "v3.1"
+OMBRE_WEB_VERSION_NOTE = "主线与每条 IF 线拥有各自独立的情绪状态；外观面板可完整滚动并修复顶部遮挡，同时加固记忆接口安全"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2013,7 +2058,7 @@ def _web_chat_path(token: str, thread: str = "main") -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1((token or "default").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     thread = (thread or "main").strip()
     if thread and thread != "main":
         safe = re.sub(r"[^A-Za-z0-9_-]", "", thread)[:40] or "x"
@@ -2030,7 +2075,7 @@ def _web_threads_path(token: str) -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1((token or "default").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(d, key + ".json")
 
 
@@ -2135,13 +2180,13 @@ def _persist_web_reply(token: str, user_text: str, segments: list, reply: str, t
         pass
 
 
-def _endo_view() -> dict:
+def _endo_view(thread: str = "main") -> dict:
     """给网页的完整状态：内分泌四值 + 人类情绪象限（15维情绪算出的 valence 效价 × arousal 唤醒度）+ 主导情绪词。"""
     import endocrine
-    st = endocrine.state()
+    st = endocrine.state(thread)
     try:
         import drives
-        v = drives._state["v"]
+        v = drives.state(thread)["v"]
         pos = (v["contentment"] + v["elation"] + v["intimacy"] + v["play"]) / 4
         neg = (v["anxiety"] + v["jealousy"] + v["dejection"] + v["irritability"]) / 4
         st["valence"] = round(max(0.0, min(10.0, 5 + (pos - neg) * 7)), 1)   # 0难受 ←→ 10舒心
@@ -2173,7 +2218,7 @@ def _web_notes_path(token: str) -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1((token or "default").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(d, key + ".json")
 
 
@@ -2185,7 +2230,7 @@ def _web_prefs_path(token: str) -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1((token or "default").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(d, key + ".json")
 
 
@@ -2196,10 +2241,9 @@ async def api_prefs(request):
     from starlette.responses import JSONResponse
     import os, json
 
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if request.method == "GET":
         tok = request.query_params.get("token", "")
-        if token_env and tok != token_env:
+        if not _sensitive_gate(request, tok):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
         try:
             with open(_web_prefs_path(tok), "r", encoding="utf-8") as f:
@@ -2211,7 +2255,7 @@ async def api_prefs(request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
     tok = body.get("token", "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     prefs = body.get("prefs") or {}
     if not isinstance(prefs, dict):
@@ -2259,10 +2303,9 @@ async def api_notes(request):
     from starlette.responses import JSONResponse
     import os, json
 
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if request.method == "GET":
         tok = request.query_params.get("token", "")
-        if token_env and tok != token_env:
+        if not _sensitive_gate(request, tok):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
         try:
             with open(_web_notes_path(tok), "r", encoding="utf-8") as f:
@@ -2274,7 +2317,7 @@ async def api_notes(request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
     tok = body.get("token", "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         with open(_web_notes_path(tok), "w", encoding="utf-8") as f:
@@ -2291,10 +2334,9 @@ async def api_threads(request):
     POST {token, action:create/update/delete, ...}"""
     from starlette.responses import JSONResponse
     import os, json, re, hashlib
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if request.method == "GET":
         tok = request.query_params.get("token", "")
-        if token_env and tok != token_env:
+        if not _sensitive_gate(request, tok):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
         return JSONResponse({"threads": _load_threads(tok)})
     try:
@@ -2302,7 +2344,7 @@ async def api_threads(request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
     tok = body.get("token", "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     action = body.get("action", "")
     threads = _load_threads(tok)
@@ -2315,7 +2357,7 @@ async def api_threads(request):
         # 生成一个短 id
         import time as _t
         raw = (name + str(len(threads)) + str(int(_t.time() * 1000))).encode()
-        tid = "if_" + hashlib.sha1(raw).hexdigest()[:8]
+        tid = "if_" + hashlib.sha1(raw, usedforsecurity=False).hexdigest()[:8]
         threads.append({"id": tid, "name": name, "worldbook": wb, "mem": mem,
                         "char_self": cs, "char_her": ch,
                         "created": __import__("time").strftime("%Y-%m-%d")})
@@ -2349,6 +2391,12 @@ async def api_threads(request):
                 os.remove(p)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            import endocrine, drives
+            endocrine.delete_thread(tid)
+            drives.delete_thread(tid)
+        except Exception:  # noqa: BLE001
+            pass
         return JSONResponse({"ok": True})
     return JSONResponse({"error": "unknown action"}, status_code=400)
 
@@ -2358,9 +2406,8 @@ async def api_thread_preview(request):
     """预览一条 IF 线「他实际收到的设定」原文（= 拼进 system 的那段），供她核对世界书/人设有没有被读取。"""
     from starlette.responses import JSONResponse
     import os
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     tok = request.query_params.get("token", "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     tid = request.query_params.get("thread", "")
     meta = _get_thread(tok, tid)
@@ -2395,11 +2442,10 @@ async def api_chat_state(request):
     from starlette.responses import JSONResponse
     import os, json
 
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     if request.method == "GET":
         tok = request.query_params.get("token", "")
         thread = request.query_params.get("thread", "main")
-        if token_env and tok != token_env:
+        if not _sensitive_gate(request, tok):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
         try:
             with open(_web_chat_path(tok, thread), "r", encoding="utf-8") as f:
@@ -2413,7 +2459,7 @@ async def api_chat_state(request):
         return JSONResponse({"error": "bad json"}, status_code=400)
     tok = body.get("token", "")
     thread = body.get("thread", "main")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     incoming = body.get("log") or []
     inc_hist = body.get("hist") or []
@@ -2527,8 +2573,7 @@ async def api_chat(request):
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
 
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and (body.get("token") or "") != token_env:
+    if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     thread = body.get("thread", "main") or "main"  # 当前所在的线（IF 线/主线）
     # ghost_user：这条 user 消息是系统指令（TG 早安问候等"他主动开口"），不是她说的——
@@ -2618,8 +2663,8 @@ async def api_chat(request):
         _last = history[-1]["content"]
         if not isinstance(_last, str):
             _last = " ".join(b.get("text", "") for b in _last if isinstance(b, dict) and b.get("type") == "text")
-        drives.update(_last)
-        drives_block = drives.block()
+        drives.update(_last, thread=thread)
+        drives_block = drives.block(thread)
     except Exception:
         drives_block = ""
 
@@ -2666,9 +2711,9 @@ async def api_chat(request):
     endo_state = None
     try:
         import endocrine
-        endocrine.on_user_message(user_text if user_text != "[图片]" else "")
-        endo_block = endocrine.block()
-        endo_state = _endo_view()
+        endocrine.on_user_message(user_text if user_text != "[图片]" else "", thread=thread)
+        endo_block = endocrine.block(thread)
+        endo_state = _endo_view(thread)
     except Exception:  # noqa: BLE001
         endo_block = ""
         endo_state = None
@@ -2676,7 +2721,7 @@ async def api_chat(request):
     def _endo_now():
         """回复落定时取「最新」身体状态——他这轮可能用 set_state 调过自己，别把开头的旧快照发回去。"""
         try:
-            return _endo_view()
+            return _endo_view(thread)
         except Exception:  # noqa: BLE001
             return endo_state
 
@@ -2743,7 +2788,10 @@ async def api_chat(request):
                     if isinstance(b, dict) and b.get("type") == "image":
                         src = b.get("source") or {}
                         b64 = str(src.get("data") or "")
-                        k = hashlib.md5((b64[:1024] + b64[-1024:] + str(len(b64))).encode()).hexdigest()
+                        k = hashlib.md5(
+                            (b64[:1024] + b64[-1024:] + str(len(b64))).encode(),
+                            usedforsecurity=False,
+                        ).hexdigest()
                         desc = _IMG_DESC_CACHE.get(k, "")
                         if not desc and _mi == _li:  # 只现场转述最新一条里的图，旧图用缓存（重启后旧图退化为占位）
                             desc = await _transcribe(str(src.get("media_type", "image/jpeg")), b64, k)
@@ -2864,6 +2912,8 @@ async def api_chat(request):
                         res = "已记下（后台保存中）：" + _head + ("…" if len(c) > 60 else "")
                 else:
                     try:
+                        if name == "set_state":
+                            args["thread"] = thread
                         res = await asyncio.wait_for(fn(**args), timeout=15) if fn else f"unknown tool: {name}"
                     except asyncio.TimeoutError:
                         res = "（这步太慢，先跳过了）"
@@ -3069,12 +3119,12 @@ async def api_endocrine(request):
     """网页开页时读他当前的内分泌/精力值状态（顶栏情绪面板 + 恢复拉窗帘/发光用）。"""
     from starlette.responses import JSONResponse
     import os
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and request.query_params.get("token", "") != token_env:
+    if not _sensitive_gate(request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         import endocrine
-        return JSONResponse(_endo_view())
+        thread = request.query_params.get("thread", "main") or "main"
+        return JSONResponse(_endo_view(thread))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
 
@@ -3088,13 +3138,13 @@ async def api_endocrine_calm(request):
         body = await request.json()
     except Exception:
         body = {}
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and (body.get("token") or "") != token_env:
+    if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         import endocrine
-        endocrine.calm()
-        return JSONResponse(_endo_view())
+        thread = body.get("thread", "main") or "main"
+        endocrine.calm(thread)
+        return JSONResponse(_endo_view(thread))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
 
@@ -3112,9 +3162,8 @@ async def api_welcome_back(request):
         body = await request.json()
     except Exception:
         body = {}
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     tok = (body.get("token") or "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     key = (tok or "default")[:40]
     try:
@@ -3246,7 +3295,7 @@ def _inner_path(token: str) -> str:
         os.makedirs(d, exist_ok=True)
     except Exception:  # noqa: BLE001
         pass
-    key = hashlib.sha1((token or "default").encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1((token or "default").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return os.path.join(d, key + ".json")
 
 
@@ -3275,8 +3324,7 @@ async def _inner_generate(client, gap_seconds: float, tz, duty: dict | None = No
     mem = ""
     try:
         import httpx as _httpx
-        _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-        _url = "http://127.0.0.1:8000/api/tools/breath" + (f"?token={_wt}" if _wt else "")
+        _url = "http://127.0.0.1:8000/api/tools/breath"
         async with _httpx.AsyncClient(timeout=10) as _c:
             _r = await _c.post(_url, json={"max_tokens": 600, "max_results": 3})
             mem = str((_r.json() or {}).get("result") or "")[:800]
@@ -3339,7 +3387,7 @@ async def _wiki_fetch(topic: str):
 async def _news_fetch(topic: str):
     """从 Google News RSS 取一条近期报道；无需 key，失败时由其它来源接替。"""
     import html as _html, re as _re, random as _random
-    import xml.etree.ElementTree as _ET
+    from defusedxml import ElementTree as _ET
     try:
         async with httpx.AsyncClient(timeout=12, follow_redirects=True,
                                      headers={"User-Agent": "OmbreBrain/1.0"}) as c:
@@ -3683,9 +3731,8 @@ async def api_inner(request):
     """她回来看「他不在时」的心事时间线。"""
     from starlette.responses import JSONResponse
     import os, json as _json
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
     tok = request.query_params.get("token", "")
-    if token_env and tok != token_env:
+    if not _sensitive_gate(request, tok):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         with open(_inner_path(tok), encoding="utf-8") as f:
@@ -3756,8 +3803,7 @@ async def api_daysummary(request):
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and (body.get("token") or "") != token_env:
+    if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     api_key = (os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")).strip()
     llm_base_url = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").strip()
@@ -3813,8 +3859,7 @@ async def api_memory_forget(request):
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and (body.get("token") or "") != token_env:
+    if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     text = str(body.get("text", "")).strip()
     if not text:
@@ -3839,8 +3884,7 @@ async def api_memory_restore(request):
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "bad json"}, status_code=400)
-    token_env = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
-    if token_env and (body.get("token") or "") != token_env:
+    if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     text = str(body.get("text", "")).strip()
     if not text:
@@ -3980,6 +4024,15 @@ async def api_import_upload(request):
     """Upload a conversation file and start import."""
     from starlette.responses import JSONResponse
 
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    max_upload = int(os.environ.get("OMBRE_IMPORT_MAX_BYTES", str(16 * 1024 * 1024)))
+    try:
+        if int(request.headers.get("content-length", "0") or 0) > max_upload:
+            return JSONResponse({"error": "upload too large"}, status_code=413)
+    except ValueError:
+        return JSONResponse({"error": "invalid content-length"}, status_code=400)
+
     if import_engine.is_running:
         return JSONResponse({"error": "Import already running"}, status_code=409)
 
@@ -3993,10 +4046,14 @@ async def api_import_upload(request):
             if not file_field:
                 return JSONResponse({"error": "No file field"}, status_code=400)
             raw_bytes = await file_field.read()
+            if len(raw_bytes) > max_upload:
+                return JSONResponse({"error": "upload too large"}, status_code=413)
             filename = getattr(file_field, "filename", "upload")
             raw_content = raw_bytes.decode("utf-8", errors="replace")
         else:
             body = await request.body()
+            if len(body) > max_upload:
+                return JSONResponse({"error": "upload too large"}, status_code=413)
             raw_content = body.decode("utf-8", errors="replace")
             # Try to get filename from query params
             filename = request.query_params.get("filename", "upload")
@@ -4030,6 +4087,8 @@ async def api_import_upload(request):
 async def api_import_status(request):
     """Get current import progress."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     return JSONResponse(import_engine.get_status())
 
 
@@ -4037,6 +4096,8 @@ async def api_import_status(request):
 async def api_import_pause(request):
     """Pause the running import."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     if not import_engine.is_running:
         return JSONResponse({"error": "No import running"}, status_code=400)
     import_engine.pause()
@@ -4047,6 +4108,8 @@ async def api_import_pause(request):
 async def api_import_patterns(request):
     """Detect high-frequency patterns after import."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         patterns = await import_engine.detect_patterns()
         return JSONResponse({"patterns": patterns})
@@ -4058,6 +4121,8 @@ async def api_import_patterns(request):
 async def api_import_results(request):
     """List recently imported/created buckets for review."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         limit = int(request.query_params.get("limit", "50"))
         all_buckets = await bucket_mgr.list_all(include_archive=False)
@@ -4084,6 +4149,8 @@ async def api_import_results(request):
 async def api_import_review(request):
     """Apply review decisions: mark buckets as important/noise/pinned."""
     from starlette.responses import JSONResponse
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         body = await request.json()
     except Exception:

@@ -24,6 +24,9 @@ jieba>=0.42.1
 # 异步 HTTP 客户端（应用层保活 ping）
 httpx>=0.27.0
 
+# 安全解析外部 RSS/XML（禁用实体扩展）
+defusedxml>=0.7.1
+
 # 向量相似度计算 (导入模式/聚类)
 numpy>=1.24.0
 scikit-learn>=1.2.0

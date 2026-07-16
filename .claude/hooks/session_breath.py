@@ -98,9 +98,13 @@ def _run_http(base_url):
 
     for path in ("/breath-hook", "/dream-hook"):
         try:
+            headers = {"Accept": "text/plain"}
+            token = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             req = urllib.request.Request(
                 f"{base_url}{path}",
-                headers={"Accept": "text/plain"},
+                headers=headers,
                 method="GET",
             )
             with urllib.request.urlopen(req, timeout=timeout) as response:

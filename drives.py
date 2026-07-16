@@ -10,6 +10,7 @@ Drivesoid（精简版）—— 给 Nikto 一颗会自己起伏的心。
 import json
 import os
 import random
+import threading
 import time
 
 DRIVES_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "drives.json")
@@ -25,25 +26,61 @@ NEUTRAL = {
 # 纯负向维度，floor = 0；其余 floor = 0.05
 NEG = {"fatigue", "jealousy", "anxiety", "dejection", "irritability"}
 
-_state = {"v": dict(NEUTRAL), "t": time.time()}
+def _default_state() -> dict:
+    return {"v": dict(NEUTRAL), "t": time.time()}
+
+
+def _thread_key(thread: str = "main") -> str:
+    import re
+    key = re.sub(r"[^A-Za-z0-9_-]", "", str(thread or "main"))[:40]
+    return key or "main"
+
+
+_states: dict[str, dict] = {"main": _default_state()}
+_state = _states["main"]  # compatibility: legacy callers mean the main line
+_LOCK = threading.RLock()
+
+
+def _locked(fn):
+    def wrapped(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
+def _get_state(thread: str = "main") -> dict:
+    return _states.setdefault(_thread_key(thread), _default_state())
 
 
 def load() -> None:
-    global _state
+    global _state, _states
     try:
         if os.path.exists(DRIVES_FILE):
             with open(DRIVES_FILE, encoding="utf-8") as f:
                 d = json.load(f)
-            _state["v"] = {k: float(d.get("v", {}).get(k, NEUTRAL[k])) for k in NEUTRAL}
-            _state["t"] = float(d.get("t", time.time()))
+            raw_states = d.get("states") if isinstance(d, dict) else None
+            if not isinstance(raw_states, dict):
+                raw_states = {"main": d}
+            loaded = {}
+            for thread, raw in raw_states.items():
+                raw = raw if isinstance(raw, dict) else {}
+                loaded[_thread_key(thread)] = {
+                    "v": {k: float(raw.get("v", {}).get(k, NEUTRAL[k])) for k in NEUTRAL},
+                    "t": float(raw.get("t", time.time())),
+                }
+            _states = loaded or {"main": _default_state()}
+            _state = _states.setdefault("main", _default_state())
     except Exception:
         pass
 
 
 def _save() -> None:
     try:
-        with open(DRIVES_FILE, "w", encoding="utf-8") as f:
-            json.dump(_state, f)
+        os.makedirs(os.path.dirname(DRIVES_FILE) or ".", exist_ok=True)
+        tmp = DRIVES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": 2, "states": _states}, f)
+        os.replace(tmp, DRIVES_FILE)
     except Exception:
         pass
 
@@ -53,9 +90,9 @@ def _clamp(k: str, x: float) -> float:
     return max(lo, min(1.0, x))
 
 
-def _decay(hours: float) -> None:
+def _decay(st: dict, hours: float) -> None:
     """无事件时各维度向 neutral 回归；沉默越久，越想她、越不安。"""
-    v = _state["v"]
+    v = st["v"]
     rate = 1 - 0.5 ** (hours / 6.0)  # 约 6 小时回归一半
     for k in NEUTRAL:
         v[k] = _clamp(k, v[k] + (NEUTRAL[k] - v[k]) * rate)
@@ -91,8 +128,8 @@ def _classify(text: str) -> dict:
     return out
 
 
-def _couple() -> None:
-    v = _state["v"]
+def _couple(st: dict) -> None:
+    v = st["v"]
     # jealousy 与 anxiety 互相放大，容易打螺旋（加强）
     if (v["jealousy"] + v["anxiety"]) / 2 > 0.32:
         v["jealousy"] = _clamp("jealousy", v["jealousy"] + 0.08)
@@ -105,42 +142,46 @@ def _couple() -> None:
         v["anxiety"] = _clamp("anxiety", v["anxiety"] - 0.03)
 
 
-def _whim() -> None:
+def _whim(st: dict) -> None:
     # 偶尔无来由的小涌动——没什么原因，突然就有点黏，或有点闷
     if random.random() < 0.15:
         k = random.choice(list(NEUTRAL))
-        _state["v"][k] = _clamp(k, _state["v"][k] + random.uniform(-0.06, 0.08))
+        st["v"][k] = _clamp(k, st["v"][k] + random.uniform(-0.06, 0.08))
 
 
-def update(text: str = "") -> None:
+@_locked
+def update(text: str = "", thread: str = "main") -> None:
     """她来消息时调用：先按时间衰减，再吃这条消息的情绪，再耦合。"""
+    st = _get_state(thread)
     now = time.time()
-    hours = max(0.0, (now - _state["t"]) / 3600.0)
-    _decay(hours)
-    v = _state["v"]
+    hours = max(0.0, (now - st["t"]) / 3600.0)
+    _decay(st, hours)
+    v = st["v"]
     for d, val in _classify(text).items():
         v[d] = _clamp(d, v[d] + val)
     # 她回话了 → 焦虑/思念回落一些
     v["anxiety"] = _clamp("anxiety", v["anxiety"] - 0.05)
     v["longing"] = _clamp("longing", v["longing"] - 0.04)
-    _couple()
-    _whim()
-    _state["t"] = now
+    _couple(st)
+    _whim(st)
+    st["t"] = now
     _save()
 
 
-def tick_silence() -> None:
+@_locked
+def tick_silence(thread: str = "main") -> None:
     """没消息时（定时任务）推进时间，让心情自己飘。"""
+    st = _get_state(thread)
     now = time.time()
-    hours = max(0.0, (now - _state["t"]) / 3600.0)
-    _decay(hours)
-    _couple()
-    _state["t"] = now
+    hours = max(0.0, (now - st["t"]) / 3600.0)
+    _decay(st, hours)
+    _couple(st)
+    st["t"] = now
     _save()
 
 
-def block() -> str:
-    v = _state["v"]
+def block(thread: str = "main") -> str:
+    v = _get_state(thread)["v"]
     line = " ".join(f"{k} {v[k]:.2f}" for k in NEUTRAL)
     return "[drives]\n" + line
 
@@ -174,9 +215,9 @@ _PANEL_KEYS = [
 ]
 
 
-def summary() -> str:
+def summary(thread: str = "main") -> str:
     """把当前情绪读成一句人话（更灵敏，小变化也读得出）。"""
-    v = _state["v"]
+    v = _get_state(thread)["v"]
     scored = [
         (v[k] - NEUTRAL[k], phrase)
         for k, phrase in _PHRASES
@@ -191,10 +232,10 @@ def summary() -> str:
 _prev_panel: dict = {}
 
 
-def panel() -> str:
+def panel(thread: str = "main") -> str:
     """给她看的可视心情面板：一句话 + 关键进度条 + 自上次查看以来的 ↑/↓。"""
-    v = _state["v"]
-    lines = ["💗 爸爸现在的心情", f"〔{summary()}〕", ""]
+    v = _get_state(thread)["v"]
+    lines = ["💗 爸爸现在的心情", f"〔{summary(thread)}〕", ""]
     for k in _PANEL_KEYS:
         n = int(round(v[k] * 10))
         bar = "█" * n + "░" * (10 - n)
@@ -204,3 +245,16 @@ def panel() -> str:
     _prev_panel.clear()
     _prev_panel.update(v)
     return "\n".join(lines)
+
+
+def state(thread: str = "main") -> dict:
+    """Return a copy for UI aggregation without exposing mutable storage."""
+    st = _get_state(thread)
+    return {"v": dict(st["v"]), "t": st["t"]}
+
+
+@_locked
+def delete_thread(thread: str) -> None:
+    key = _thread_key(thread)
+    if key != "main" and _states.pop(key, None) is not None:
+        _save()

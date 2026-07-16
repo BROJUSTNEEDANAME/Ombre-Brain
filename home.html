@@ -433,9 +433,9 @@
 
   .skin-ver { font-size: 12.5px; opacity: .72; padding: 2px 2px 0; }
   /* 外观 / 皮肤面板 */
-  .skin-modal { position: fixed; inset: 0; z-index: 75; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: flex-end; justify-content: center; }
+  .skin-modal { position: fixed; inset: 0; z-index: 75; background: rgba(0,0,0,.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: none; align-items: flex-end; justify-content: center; padding-top: calc(env(safe-area-inset-top) + 12px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .skin-modal.show { display: flex; animation: fade .25s ease; }
-  .skin-panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 24px 24px 0 0; box-shadow: var(--sh-float); padding: 22px 20px calc(env(safe-area-inset-bottom) + 22px); width: 100%; max-width: 460px; animation: slideup .3s cubic-bezier(.2,.8,.2,1); }
+  .skin-panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 24px 24px 0 0; box-shadow: var(--sh-float); padding: 22px 20px calc(env(safe-area-inset-bottom) + 22px); width: 100%; max-width: 460px; max-height: calc(100vh - env(safe-area-inset-top) - 12px); max-height: calc(100dvh - env(safe-area-inset-top) - 12px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; animation: slideup .3s cubic-bezier(.2,.8,.2,1); }
   @keyframes slideup { from { transform: translateY(50px); opacity: .5; } to { transform: none; opacity: 1; } }
   .skin-h { font-family: 'Noto Serif SC', serif; font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 6px; }
   .skin-label { font-size: 11.5px; color: var(--text-dim); letter-spacing: .5px; margin: 16px 2px 10px; }
@@ -588,7 +588,20 @@
 </style>
 </head>
 <body>
-  <script>window.OMBRE_TOKEN="__OMBRE_WEB_TOKEN__";</script>
+  <script>
+    window.OMBRE_TOKEN=__OMBRE_WEB_TOKEN_JSON__;
+    // Keep credentials out of URLs/history/proxy logs; same-origin API calls use Bearer auth.
+    (()=>{ const nativeFetch=window.fetch.bind(window); window.fetch=(input,init={})=>{
+      try{ const raw=typeof input==='string'?input:input.url, u=new URL(raw,location.href);
+        if(u.origin===location.origin && window.OMBRE_TOKEN){
+          const h=new Headers(init.headers||(typeof Request!=='undefined'&&input instanceof Request?input.headers:undefined));
+          if(!h.has('Authorization')) h.set('Authorization','Bearer '+window.OMBRE_TOKEN);
+          init={...init,headers:h};
+        }
+      }catch(e){}
+      return nativeFetch(input,init);
+    }; })();
+  </script>
   <input type="file" id="avatarFile" accept="image/*" style="display:none">
   <input type="file" id="bgFile" accept="image/*" style="display:none">
   <div class="header">
@@ -899,8 +912,6 @@
         <button id="skinBgPick">选一张图</button>
         <button id="skinBgClear">清除</button>
       </div>
-      <div class="skin-label">打字框毛玻璃</div>
-      <div class="skin-rowg"><input type="range" id="skinBlur" min="0" max="40" step="1"><span id="skinBlurVal">22</span></div>
       <div class="skin-label">版本</div>
       <div class="skin-ver" id="skinVer">（查询中…）</div>
       <div class="skin-acts">
@@ -949,7 +960,7 @@
   async function pullPrefs(){
     let serverHadData=false;
     try{
-      const res=await fetch('api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const res=await fetch('api/prefs');
       if(!res.ok) throw 0;
       const data=await res.json(); const p=data&&data.prefs;
       if(!p||typeof p!=='object') throw 0;
@@ -1047,6 +1058,18 @@
   document.getElementById('icFile').innerHTML = svg('file');
 
   // ---------- PWA ----------
+  async function refreshEndocrineForThread(){
+    const wanted=curThread;
+    try{
+      const r=await fetch('api/endocrine?thread='+encodeURIComponent(wanted));
+      const st=await r.json();
+      if(wanted!==curThread) return;
+      if(st&&!st.error&&typeof st.libido!=='undefined'){
+        applyEndocrine(st);
+        if(st.dominant&&typeof setEmotion==='function') setEmotion(st.dominant);
+      }
+    }catch(e){}
+  }
   (function(){
     const m = { name:"家 · Ombre", short_name:"家", display:"standalone", background_color:"#14110D", theme_color:"#C5743A", start_url:".",
       icons:[{ src:"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='192' height='192'><rect width='192' height='192' rx='42' fill='%23C5743A'/><text x='96' y='132' font-size='112' text-anchor='middle' fill='white'>◐</text></svg>", sizes:"192x192", type:"image/svg+xml" }] };
@@ -1178,13 +1201,8 @@
   document.getElementById('skinReset').onclick=()=>{ curSkin={}; localStorage.removeItem('skin'); ['--accent','--accent-warm','--accent-soft','--bubble-me'].forEach(v=>document.documentElement.style.removeProperty(v)); markSw(); syncSkinInputs(); };
   document.getElementById('skinBgPick').onclick=()=>bgFile.click();
   document.getElementById('skinBgClear').onclick=()=>{ localStorage.removeItem('chatBg'); applyBg(''); };
-  // 打字框毛玻璃模糊度可调
-  const skinBlur=document.getElementById('skinBlur'), skinBlurVal=document.getElementById('skinBlurVal');
-  function applyBlur(px){ document.documentElement.style.setProperty('--composer-blur', px+'px'); if(skinBlurVal) skinBlurVal.textContent=px; }
-  (function(){ const saved=parseInt(localStorage.getItem('composerBlur'),10); const v=isNaN(saved)?22:saved; if(skinBlur) skinBlur.value=v; applyBlur(v); })();
-  if(skinBlur) skinBlur.oninput=e=>{ const v=parseInt(e.target.value,10)||0; applyBlur(v); localStorage.setItem('composerBlur',String(v)); };
   const skinModal=document.getElementById('skinModal');
-  document.getElementById('skinBtn').onclick=()=>{ markSw(); syncSkinInputs(); skinModal.classList.add('show'); };
+  document.getElementById('skinBtn').onclick=()=>{ markSw(); syncSkinInputs(); skinModal.classList.add('show'); const panel=skinModal.querySelector('.skin-panel'); if(panel) panel.scrollTop=0; };
   document.getElementById('skinDone').onclick=()=>skinModal.classList.remove('show');
   skinModal.onclick=e=>{ if(e.target===skinModal) skinModal.classList.remove('show'); };
 
@@ -1467,7 +1485,7 @@
   async function loadServerChat(){
     if(typeof inFlight!=='undefined' && inFlight) return;  // 正在流式打字：绝不整屏重画（会把直播气泡抹掉）；等这轮说完再同步
     try{
-      const res=await fetch('api/chat/state?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(curThread));
+      const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread));
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
       // 合并本地+服务器，按内容去重（防时区错位把消息拆两条 / 防多设备丢消息）
@@ -1715,7 +1733,7 @@
   }
   async function refreshInner(openAfter){
     try{
-      const r=await fetch('api/inner?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      const r=await fetch('api/inner');
       const d=await r.json();
       _innerCache={entries:(d&&Array.isArray(d.entries))?d.entries:[], hobbies:(d&&d.hobbies)||[]};
     }catch(e){ _innerCache={entries:[],hobbies:[]}; }
@@ -1908,11 +1926,12 @@
   // ---------- 线（IF 平行宇宙）交互 ----------
   function _threadName(){ if(curThread==='main')return '主线'; const t=threadsList.find(x=>x.id===curThread); return t?t.name:'主线'; }
   function paintThreadChip(){ const c=document.getElementById('threadChip'); if(c) c.textContent='🌌 '+_threadName(); }
-  async function loadThreads(){ try{ const r=await fetch('api/threads?token='+encodeURIComponent(window.OMBRE_TOKEN||'')); const d=await r.json(); threadsList=Array.isArray(d.threads)?d.threads:[]; }catch(e){ threadsList=[]; } paintThreadChip(); }
+  async function loadThreads(){ try{ const r=await fetch('api/threads'); const d=await r.json(); threadsList=Array.isArray(d.threads)?d.threads:[]; }catch(e){ threadsList=[]; } paintThreadChip(); }
   async function switchThread(tid){
     if(tid===curThread){ document.getElementById('threadModal').classList.remove('show'); return; }
     saveChat();
     curThread=tid; localStorage.setItem('curThread',tid);
+    refreshEndocrineForThread();
     try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){ chatLog=[]; }
     try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){ chatHistory=[]; }
     scroll.querySelectorAll('.row').forEach(r=>r.remove());
@@ -1952,7 +1971,7 @@
   }
   async function previewThread(tid){
     let d=null;
-    try{ const r=await fetch('api/threads/preview?token='+encodeURIComponent(window.OMBRE_TOKEN||'')+'&thread='+encodeURIComponent(tid)); d=await r.json(); }catch(e){}
+    try{ const r=await fetch('api/threads/preview?thread='+encodeURIComponent(tid)); d=await r.json(); }catch(e){}
     const m=document.getElementById('previewModal'); const b=document.getElementById('previewBody');
     if(!m||!b) return;
     b.textContent=(d&&d.text)?d.text:'（读不到设定）';
@@ -2474,15 +2493,14 @@
     if(calm) calm.onclick=async ()=>{
       calm.disabled=true; const old=calm.textContent; calm.textContent='……(深呼吸) 在冷静了';
       try{
-        const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||'')})});
+        const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
         const st=await r.json();
         if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
       }catch(e){}
       setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
     };
     // 开页先把他当前的身体状态捞回来（恢复入夜/发光 + 顶栏情绪同步——以前刷新后顶栏会掉回默认"安定"）
-    fetch('api/endocrine?token='+encodeURIComponent(window.OMBRE_TOKEN||'')).then(r=>r.json())
-      .then(st=>{ if(st&&!st.error&&typeof st.libido!=='undefined'){ applyEndocrine(st); if(st.dominant&&typeof setEmotion==='function') setEmotion(st.dominant); } }).catch(()=>{});
+    refreshEndocrineForThread();
     // 手动氛围开关接线 + 开页恢复上次的手动选择
     const vb=document.getElementById('skinVibe');
     if(vb) vb.querySelectorAll('button').forEach(b=>b.onclick=()=>{

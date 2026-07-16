@@ -174,10 +174,9 @@ async def _call_brain_tool(name: str, args: dict) -> str:
     """通过 REST API 调用本地大脑工具。"""
     url = OMBRE_MCP_URL.replace("/mcp", "") + f"/api/tools/{name}"
     _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()  # 走公网时带上,本机直连可留空
-    if _wt:
-        url += f"?token={_wt}"
+    headers = {"Authorization": f"Bearer {_wt}"} if _wt else {}
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, json=args)
+        resp = await client.post(url, json=args, headers=headers)
         data = resp.json()
         return data.get("result", data.get("error", str(data)))
 
@@ -195,8 +194,9 @@ async def _main_ctx(limit: int = 24) -> list[dict]:
     """从服务器主线聊天记录(log)现算上下文——记录是跨设备唯一权威，网页/TG 聊的都在里面。"""
     try:
         async with httpx.AsyncClient(timeout=15) as cli:
+            headers = {"Authorization": f"Bearer {_WEB_TOKEN}"} if _WEB_TOKEN else {}
             r = await cli.get(BRAIN_BASE + "/api/chat/state",
-                              params={"token": _WEB_TOKEN, "thread": "main"})
+                              params={"thread": "main"}, headers=headers)
             log = (r.json() or {}).get("log") or []
     except Exception:  # noqa: BLE001
         return []
@@ -668,7 +668,8 @@ async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # 情绪面板从大脑取（和网页同一份状态）；大脑没接通才退回本地
     try:
         async with httpx.AsyncClient(timeout=10) as cli:
-            r = await cli.get(BRAIN_BASE + "/api/endocrine", params={"token": _WEB_TOKEN})
+            headers = {"Authorization": f"Bearer {_WEB_TOKEN}"} if _WEB_TOKEN else {}
+            r = await cli.get(BRAIN_BASE + "/api/endocrine", headers=headers)
             st = r.json() or {}
         await update.message.reply_text(
             f"此刻的他：{st.get('dominant','')}\n"

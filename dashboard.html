@@ -846,7 +846,7 @@ function buildFilters() {
   filters.innerHTML = types.map(function(t) {
     return '<button class="filter-btn ' + (t.key === 'all' ? 'active' : '') + '" data-filter="' + t.key + '">' + t.label + '</button>';
   }).join('') + Array.from(domains).slice(0, 10).map(function(d) {
-    return '<button class="filter-btn" data-filter="domain:' + d + '">' + d + '</button>';
+    return '<button class="filter-btn" data-filter="domain:' + escAttr(d) + '">' + esc(d) + '</button>';
   }).join('');
 
   filters.addEventListener('click', function(e) {
@@ -884,10 +884,10 @@ function renderBuckets(buckets) {
     var vPos = Math.round(b.valence * 100);
     var modelV = b.model_valence != null ? ' → V' + b.model_valence.toFixed(1) : '';
     var timeAgo = formatTimeAgo(b.last_active || b.created);
-    return '<div class="bucket-row" onclick="showDetail(\'' + b.id + '\')">' +
+    return '<div class="bucket-row" onclick="showDetail(decodeURIComponent(\'' + jsArg(b.id) + '\'))">' +
       '<span class="icon">' + icon + '</span>' +
-      '<span class="name" title="' + esc(b.name) + '">' + esc(b.name) + '</span>' +
-      '<span class="domain">' + (b.domain || []).join(', ') + '</span>' +
+      '<span class="name" title="' + escAttr(b.name) + '">' + esc(b.name) + '</span>' +
+      '<span class="domain">' + (b.domain || []).map(esc).join(', ') + '</span>' +
       '<span class="emotion"><span class="v-bar"><span class="v-dot" style="left:' + vPos + '%"></span></span>' + modelV + '</span>' +
       '<span class="score">' + b.score.toFixed(2) + '</span>' +
       '<span class="time">' + timeAgo + '</span>' +
@@ -913,16 +913,16 @@ async function showDetail(id) {
   panel.classList.add('open');
 
   try {
-    var res = await fetch(BASE + '/api/bucket/' + id);
+    var res = await fetch(BASE + '/api/bucket/' + encodeURIComponent(id));
     var b = await res.json();
     var meta = b.metadata || {};
     content.innerHTML =
       '<h2>' + esc(meta.name || id) + '</h2>' +
       '<div class="detail-meta">' +
-        '<div class="field"><label>ID</label>' + id + '</div>' +
-        '<div class="field"><label>类型</label>' + (meta.type || 'dynamic') + '</div>' +
-        '<div class="field"><label>域</label>' + (meta.domain || []).join(', ') + '</div>' +
-        '<div class="field"><label>标签</label>' + (meta.tags || []).join(', ') + '</div>' +
+        '<div class="field"><label>ID</label>' + esc(id) + '</div>' +
+        '<div class="field"><label>类型</label>' + esc(meta.type || 'dynamic') + '</div>' +
+        '<div class="field"><label>域</label>' + (meta.domain || []).map(esc).join(', ') + '</div>' +
+        '<div class="field"><label>标签</label>' + (meta.tags || []).map(esc).join(', ') + '</div>' +
         '<div class="field"><label>事件效价</label>V' + (meta.valence || 0.5).toFixed(2) + '</div>' +
         '<div class="field"><label>唤醒度</label>A' + (meta.arousal || 0.3).toFixed(2) + '</div>' +
         '<div class="field"><label>模型视角</label>' + (meta.model_valence != null ? 'V' + meta.model_valence.toFixed(2) : '—') + '</div>' +
@@ -932,8 +932,8 @@ async function showDetail(id) {
         '<div class="field"><label>已解决</label>' + (meta.resolved ? '✓' : '—') + '</div>' +
         '<div class="field"><label>已消化</label>' + (meta.digested ? '✓' : '—') + '</div>' +
         '<div class="field"><label>钉选</label>' + (meta.pinned ? '✓' : '—') + '</div>' +
-        '<div class="field"><label>创建</label>' + (meta.created || '—') + '</div>' +
-        '<div class="field"><label>最后活跃</label>' + (meta.last_active || '—') + '</div>' +
+        '<div class="field"><label>创建</label>' + esc(meta.created || '—') + '</div>' +
+        '<div class="field"><label>最后活跃</label>' + esc(meta.last_active || '—') + '</div>' +
       '</div>' +
       '<div class="detail-content">' + esc(b.content) + '</div>';
   } catch (e) {
@@ -1073,10 +1073,18 @@ function drawNetwork(ctx, W, H, data) {
 }
 
 function esc(s) {
-  if (!s) return '';
+  if (s === null || typeof s === 'undefined') return '';
   var d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = String(s);
   return d.innerHTML;
+}
+
+function escAttr(s) {
+  return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function jsArg(s) {
+  return encodeURIComponent(String(s == null ? '' : s)).replace(/'/g, '%27');
 }
 
 function formatTimeAgo(iso) {
@@ -1193,7 +1201,7 @@ async function loadConfig() {
     document.getElementById('cfg-emb-model').value = cfg.embedding.model || '';
     document.getElementById('cfg-merge').value = cfg.merge_threshold || 75;
     document.getElementById('config-readonly').innerHTML =
-      'Transport: <strong>' + cfg.transport + '</strong><br>Buckets dir: <strong>' + cfg.buckets_dir + '</strong>';
+      'Transport: <strong>' + esc(cfg.transport) + '</strong><br>Buckets dir: <strong>' + esc(cfg.buckets_dir) + '</strong>';
   } catch (e) {
     document.getElementById('config-status').innerHTML =
       '<span style="color:var(--negative)">加载失败: ' + e.message + '</span>';
@@ -1227,10 +1235,10 @@ async function saveConfig(persist) {
     });
     var result = await res.json();
     if (result.ok) {
-      status.innerHTML = '<span style="color:var(--positive)">✓ 已更新: ' + result.updated.join(', ') + '</span>';
+      status.innerHTML = '<span style="color:var(--positive)">✓ 已更新: ' + (result.updated || []).map(esc).join(', ') + '</span>';
       loadConfig();
     } else {
-      status.innerHTML = '<span style="color:var(--negative)">✗ ' + (result.error || '未知错误') + '</span>';
+      status.innerHTML = '<span style="color:var(--negative)">✗ ' + esc(result.error || '未知错误') + '</span>';
     }
   } catch (e) {
     status.innerHTML = '<span style="color:var(--negative)">✗ 请求失败: ' + e.message + '</span>';
@@ -1322,18 +1330,18 @@ async function loadImportResults() {
       return;
     }
     container.innerHTML = data.buckets.map(b => `
-      <div id="ir-${b.id}" style="background:var(--surface);border-radius:12px;padding:14px;margin:8px 0;">
+      <div id="ir-${escAttr(b.id)}" style="background:var(--surface);border-radius:12px;padding:14px;margin:8px 0;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <b>${b.name || b.id}</b>
-          <span style="font-size:11px;color:var(--text-dim);">${b.type} | ${(b.domain||[]).join(',')} | imp:${b.importance}</span>
+          <b>${esc(b.name || b.id)}</b>
+          <span style="font-size:11px;color:var(--text-dim);">${esc(b.type)} | ${(b.domain||[]).map(esc).join(',')} | imp:${Number(b.importance)||0}</span>
         </div>
-        <p style="font-size:13px;margin:6px 0;white-space:pre-wrap;">${b.content}</p>
-        <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">${(b.tags||[]).map(t=>'#'+t).join(' ')}</div>
+        <p style="font-size:13px;margin:6px 0;white-space:pre-wrap;">${esc(b.content)}</p>
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">${(b.tags||[]).map(t=>'#'+esc(t)).join(' ')}</div>
         <div style="display:flex;gap:8px;">
-          <button onclick="reviewAction('${b.id}','pin')" title="固定为永久记忆">📌 固定</button>
-          <button onclick="reviewAction('${b.id}','important')" title="标为重要">⭐ 重要</button>
-          <button onclick="reviewAction('${b.id}','noise')" title="标为噪声并resolve">🗑 噪声</button>
-          <button onclick="if(confirm('确定删除？'))reviewAction('${b.id}','delete')" title="彻底删除" style="color:var(--negative);">✕ 删除</button>
+          <button onclick="reviewAction(decodeURIComponent('${jsArg(b.id)}'),'pin')" title="固定为永久记忆">📌 固定</button>
+          <button onclick="reviewAction(decodeURIComponent('${jsArg(b.id)}'),'important')" title="标为重要">⭐ 重要</button>
+          <button onclick="reviewAction(decodeURIComponent('${jsArg(b.id)}'),'noise')" title="标为噪声并resolve">🗑 噪声</button>
+          <button onclick="if(confirm('确定删除？'))reviewAction(decodeURIComponent('${jsArg(b.id)}'),'delete')" title="彻底删除" style="color:var(--negative);">✕ 删除</button>
         </div>
       </div>
     `).join('');
@@ -1350,14 +1358,14 @@ async function detectPatterns() {
     container.innerHTML = data.patterns.map(p => `
       <div style="background:var(--surface);border-radius:12px;padding:14px;margin:8px 0;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <b>${p.pattern_name}</b>
-          <span style="font-size:12px;color:var(--text-dim);">出现 ${p.count} 次</span>
+          <b>${esc(p.pattern_name)}</b>
+          <span style="font-size:12px;color:var(--text-dim);">出现 ${Number(p.count)||0} 次</span>
         </div>
-        <p style="font-size:13px;margin:6px 0;">${p.pattern_content}</p>
+        <p style="font-size:13px;margin:6px 0;">${esc(p.pattern_content)}</p>
         <div style="display:flex;gap:8px;">
-          <button onclick="reviewAction('${p.bucket_ids[0]}','pin')">📌 固定</button>
-          <button onclick="reviewAction('${p.bucket_ids[0]}','important')">⭐ 重要</button>
-          <button onclick="batchReview('${JSON.stringify(p.bucket_ids).replace(/'/g, "\\'").replace(/"/g, '&quot;')}','noise')">🗑 噪声</button>
+          <button onclick="reviewAction(decodeURIComponent('${jsArg((p.bucket_ids||[])[0])}'),'pin')">📌 固定</button>
+          <button onclick="reviewAction(decodeURIComponent('${jsArg((p.bucket_ids||[])[0])}'),'important')">⭐ 重要</button>
+          <button onclick="batchReview(decodeURIComponent('${jsArg(JSON.stringify(p.bucket_ids||[]))}'),'noise')">🗑 噪声</button>
         </div>
       </div>
     `).join('');

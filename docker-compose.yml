@@ -18,6 +18,8 @@ services:
       - "18001:8000"                        # Local debug port (optional) / 本地调试端口
     environment:
       - OMBRE_API_KEY=${OMBRE_API_KEY}      # From .env file / 从 .env 文件读取
+      - OMBRE_WEB_TOKEN=${OMBRE_WEB_TOKEN}  # Required for public web/API access / 公网访问令牌
+      - OMBRE_HOME_PASSWORD=${OMBRE_HOME_PASSWORD} # Web login password / 网页登录暗号
       - OMBRE_TRANSPORT=streamable-http     # Claude.ai requires streamable-http
       - OMBRE_BUCKETS_DIR=/data             # Container-internal bucket path / 容器内路径
     volumes:
