@@ -283,6 +283,34 @@ def classify_chat_error(exc) -> dict:
     return {"code": "model_error", "message": "模型 API 返回异常，本次没有生成回复。"}
 
 
+def classify_vision_failure(text: str = "", exc=None) -> dict | None:
+    """Explain whether vision failed technically or appears content-filtered."""
+    detail = (str(exc or "") + " " + str(text or "")).lower()
+    moderation_terms = (
+        "content_filter", "content filter", "moderation", "safety", "unsafe",
+        "sensitive content", "sexual content", "policy violation", "涉黄", "色情",
+        "内容审核", "敏感内容", "无法处理该图片", "不能处理该图片",
+    )
+    refusal_terms = ("抱歉", "无法描述", "无法识别", "不能描述", "不能识别", "不便描述")
+    if any(term in detail for term in moderation_terms) or (
+            any(term in str(text or "") for term in refusal_terms)
+            and any(term in str(text or "") for term in ("图片", "图像", "内容"))):
+        return {"code": "vision_moderation", "message": "视觉接口拒绝处理这张图，疑似触发内容审核；不是角色看见后装作没看见。"}
+    if exc is not None:
+        info = classify_chat_error(exc)
+        messages = {
+            "api_quota": "视觉模型额度不足或被限流，图片没有送达角色。",
+            "api_auth": "视觉模型无权限或密钥失效，图片没有送达角色。",
+            "model_timeout": "视觉模型识图超时，图片没有送达角色。",
+            "model_connection": "服务器暂时连不上视觉模型，图片没有送达角色。",
+        }
+        return {"code": "vision_" + info["code"],
+                "message": messages.get(info["code"], "视觉接口返回异常，图片没有送达角色。")}
+    if not (text or "").strip():
+        return {"code": "vision_empty", "message": "视觉接口返回了空结果，图片没有送达角色。"}
+    return None
+
+
 def repetitive_inner_thought(candidate: str, recent: list[str]) -> bool:
     """Reject offline thoughts that only paraphrase a recent conclusion."""
     candidate = (candidate or "").strip()

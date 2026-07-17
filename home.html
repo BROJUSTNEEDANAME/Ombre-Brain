@@ -1660,6 +1660,9 @@
     const msg=(data&&data.error_message)||'聊天请求失败，请稍后再试。';
     renderBubble('sys','⚠ '+msg);
   }
+  function showVisionNotice(data){
+    if(data&&data.vision_notice) renderBubble('sys','识图状态：'+data.vision_notice);
+  }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){} // 上下文，持久化（按当前线）
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
@@ -1978,6 +1981,7 @@
         await showReply(data);
       }
       if(data&&data.error_code){ showChatError(data); return; }
+      showVisionNotice(data);
       const reply=(data&&data.reply)||'（……）';
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);

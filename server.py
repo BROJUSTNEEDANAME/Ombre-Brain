@@ -57,7 +57,7 @@ from utils import (
     load_config, setup_logging, strip_wikilinks, count_tokens_approx,
     memory_text_similarity, same_memory_fact, merge_memory_details,
     collapse_repeated_reply, structure_user_observation, classify_chat_error,
-    repetitive_inner_thought, compact_inner_thoughts,
+    classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -2189,8 +2189,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.9"
-OMBRE_WEB_VERSION_NOTE = "修复识图被聊天的 60 秒超时提前中止，并记录视觉接口真实错误"
+OMBRE_WEB_VERSION = "v4.0"
+OMBRE_WEB_VERSION_NOTE = "识图审核、超时、额度和空结果会直接显示系统状态，不再让角色含糊"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3050,6 +3050,7 @@ async def api_chat(request):
             )
             for m in history
         )
+        vision_notice = ""
         if _has_img:
             import hashlib
 
@@ -3063,15 +3064,20 @@ async def api_chat(request):
                         ]}], timeout=105.0)
                     t = (r.choices[0].message.content or "").strip()[:6000]
                 except Exception as exc:  # noqa: BLE001
-                    info = classify_chat_error(exc)
+                    failure = classify_vision_failure(exc=exc)
                     logger.warning("Vision transcription failed [%s] model=%s: %s",
-                                   info["code"], _vision_model, str(exc)[:300])
-                    t = ""
+                                   failure["code"], _vision_model, str(exc)[:300])
+                    return "", failure
+                failure = classify_vision_failure(text=t)
+                if failure:
+                    logger.warning("Vision transcription rejected [%s] model=%s: %s",
+                                   failure["code"], _vision_model, t[:300])
+                    return "", failure
                 if t:
                     if len(_IMG_DESC_CACHE) > 300:
                         _IMG_DESC_CACHE.clear()
                     _IMG_DESC_CACHE[k] = t
-                return t
+                return t, None
 
             _li = len(history) - 1
             for _mi, m in enumerate(history):
@@ -3089,7 +3095,9 @@ async def api_chat(request):
                         ).hexdigest()
                         desc = _IMG_DESC_CACHE.get(k, "")
                         if not desc and _mi == _li:  # 只现场转述最新一条里的图，旧图用缓存（重启后旧图退化为占位）
-                            desc = await _transcribe(str(src.get("media_type", "image/jpeg")), b64, k)
+                            desc, failure = await _transcribe(str(src.get("media_type", "image/jpeg")), b64, k)
+                            if failure:
+                                vision_notice = failure["message"]
                         if desc:
                             nc.append({"type": "text", "text": "【她发来一张图，识图转述如下】\n" + desc})
                         else:
@@ -3375,7 +3383,8 @@ async def api_chat(request):
                     joined, segments, emotion, diary, think = _parse_reply(rt)
                     _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
-                                  "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()})
+                                  "diary": diary, "think": think, "recorded": recorded,
+                                  "endocrine": _endo_now(), "vision_notice": vision_notice})
                 except Exception as exc:  # noqa: BLE001
                     info = classify_chat_error(exc)
                     logger.warning("Web chat failed [%s]: %s", info["code"], str(exc)[:300])
@@ -3417,7 +3426,9 @@ async def api_chat(request):
             rt = rt or "（……）"
             joined, segments, emotion, diary, think = _parse_reply(rt)
             _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢（按线分文件）
-            return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary, "think": think, "recorded": recorded, "endocrine": _endo_now()}
+            return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary,
+                    "think": think, "recorded": recorded, "endocrine": _endo_now(),
+                    "vision_notice": vision_notice}
 
         result = await asyncio.shield(_finish())
         return JSONResponse(result)

@@ -1,5 +1,6 @@
 from utils import (
     classify_chat_error,
+    classify_vision_failure,
     compact_inner_thoughts,
     collapse_repeated_reply,
     memory_text_similarity,
@@ -104,6 +105,17 @@ def test_chat_error_classifies_quota_and_auth_failures():
 def test_chat_error_classifies_timeout_and_connection_failures():
     assert classify_chat_error(TimeoutError("timed out"))["code"] == "model_timeout"
     assert classify_chat_error(_ProviderError("Connection reset by peer"))["code"] == "model_connection"
+
+
+def test_vision_failure_distinguishes_moderation_from_timeout():
+    blocked = classify_vision_failure(text="抱歉，我无法描述这张图片的敏感内容。")
+    timed_out = classify_vision_failure(exc=TimeoutError("timed out"))
+    assert blocked["code"] == "vision_moderation"
+    assert timed_out["code"] == "vision_model_timeout"
+
+
+def test_successful_vision_result_has_no_failure_notice():
+    assert classify_vision_failure(text="画面里有两个人坐在沙发上。") is None
 
 
 def test_repetitive_offline_thought_rejects_same_conclusion_rephrased():
