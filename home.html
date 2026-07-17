@@ -1693,10 +1693,10 @@
   async function showReply(data){
     const reply=(data&&data.reply)||'（……）';
     let segs=(data&&Array.isArray(data.segments)&&data.segments.length)?data.segments.slice(0,6):[reply];
-    // 去重：本轮内重复的段、以及和最近已显示气泡重复的，都丢掉（防模型/重发造成的重复说）
-    const recent=new Set(chatLog.filter(m=>m.side==='you').slice(-6).map(m=>(m.text||'').trim()));
+    // 只清理本轮内部的重复段。不能拿历史气泡去重：他再次说“嗯”“睡吧”也是真实的新回复，
+    // 历史去重会把整条正常消息吞掉，尤其容易出现在存记忆后的非流式降级路径。
     const seen=new Set();
-    segs=segs.map(s=>cleanAssistantText(s).trim()).filter(s=>{ if(!s||seen.has(s)||recent.has(s)) return false; seen.add(s); return true; });
+    segs=segs.map(s=>cleanAssistantText(s).trim()).filter(s=>{ if(!s||seen.has(s)) return false; seen.add(s); return true; });
     if(!segs.length) return;                       // 全是重复 → 一句都不发，避免复读
     stopThinking();
     const _think=(data&&data.think)||'';           // 他这轮的内心/记忆，挂到最后一条气泡上，默认缩着

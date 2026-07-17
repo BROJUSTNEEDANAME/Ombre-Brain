@@ -2190,8 +2190,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.1"
-OMBRE_WEB_VERSION_NOTE = "视觉模型恢复独立长超时和两次重试，不再继承聊天的快速失败设置"
+OMBRE_WEB_VERSION = "v4.2"
+OMBRE_WEB_VERSION_NOTE = "修复存记忆反复占满回复轮次，以及正常短回复被前端误删的问题"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3203,10 +3203,11 @@ async def api_chat(request):
             _drop = {"hold", "grow"} | ({"breath", "read", "pulse", "dream", "trace"} if _if_blank else set())
             _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
 
-        async def _exec_tool_calls(msgs, tcs):
+        async def _exec_tool_calls(msgs, tcs, memory_write_used: bool = False) -> bool:
             """执行一批工具调用并把结果回填 msgs。tcs: [{id,name,args(json串)}...]
             写记忆（hold/grow）要算 embedding，走外部 API 可能等几十秒——绝不能拖住回复：
-            丢到后台跑，立刻回「已记下」；读类工具他需要结果才能接着答，照样等但带超时防卡死。"""
+            丢到后台跑，立刻回「已记下」；读类工具他需要结果才能接着答，照样等但带超时防卡死。
+            每轮最多接受一次写记忆，防止模型连续 hold/grow 把所有回复轮次占完。"""
             for tc in tcs:
                 name = tc["name"]
                 try:
@@ -3216,19 +3217,24 @@ async def api_chat(request):
                 fn = _TOOL_DISPATCH.get(name)
                 if name in ("hold", "grow"):
                     c = str(args.get("content") or "")
-                    if c and _mem_dup_check(c):
-                        # 15分钟内记过几乎一样的 → 不再写第二遍，并明确告诉他已存好、别再补刀
-                        res = "刚才已经记过几乎一样的内容了，没有重复保存。已存好，不用再记。"
+                    if memory_write_used:
+                        res = "本轮已经安排过记忆保存，不再重复写入。现在直接回复她。"
                     else:
-                        if c:
-                            recorded.append(c[:300])   # 给前端「我记下的」展示用；大脑里存的是全文
-                        if fn:
-                            _t = asyncio.create_task(_bg_run_tool(fn, args))
-                            _BG_TASKS.add(_t)
-                            _t.add_done_callback(_BG_TASKS.discard)
-                        # 回执带上存了什么的摘要——他看得到自己记了什么，就不会不放心再换个说法记一遍
-                        _head = c[:60].replace("\n", " ")
-                        res = "已记下（后台保存中）：" + _head + ("…" if len(c) > 60 else "")
+                        # 无论实际新写还是命中查重，本轮都关闭写记忆工具，避免模型换个说法继续调用。
+                        memory_write_used = True
+                        if c and _mem_dup_check(c):
+                            # 15分钟内记过几乎一样的 → 不再写第二遍，并明确告诉他已存好、别再补刀
+                            res = "刚才已经记过几乎一样的内容了，没有重复保存。已存好，不用再记。"
+                        else:
+                            if c:
+                                recorded.append(c[:300])   # 给前端「我记下的」展示用；大脑里存的是全文
+                            if fn:
+                                _t = asyncio.create_task(_bg_run_tool(fn, args))
+                                _BG_TASKS.add(_t)
+                                _t.add_done_callback(_BG_TASKS.discard)
+                            # 回执带上存了什么的摘要——他看得到自己记了什么，就不会不放心再换个说法记一遍
+                            _head = c[:60].replace("\n", " ")
+                            res = "已记下（后台保存中）：" + _head + ("…" if len(c) > 60 else "")
                 else:
                     try:
                         if name == "set_state":
@@ -3239,6 +3245,7 @@ async def api_chat(request):
                     except Exception as e:  # noqa: BLE001
                         res = f"工具失败: {e}"
                 msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": str(res)[:8000]})
+            return memory_write_used
 
         async def _run_chat(use_tools: bool) -> str:
             """跑一轮对话（非流式，老路径/降级用）。use_tools=True 带记忆工具（进程内直调大脑）；
@@ -3248,10 +3255,14 @@ async def api_chat(request):
             msgs = _build_msgs()
             out = ""
             fallback = ""  # 工具轮正文仅兜底；最终轮才是完整、有效的回复
+            memory_write_used = False
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
                 if use_tools and _active_tools:
-                    kwargs["tools"] = _active_tools
+                    kwargs["tools"] = [
+                        tool for tool in _active_tools
+                        if not memory_write_used or tool.get("function", {}).get("name") not in ("hold", "grow")
+                    ]
                 resp = await _llm_create(_web_llm, **kwargs)
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
@@ -3271,9 +3282,9 @@ async def api_chat(request):
                         for tc in tcs
                     ],
                 })
-                await _exec_tool_calls(msgs, [
+                memory_write_used = await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
-                ])
+                ], memory_write_used)
             out = collapse_repeated_reply((out or fallback).strip())
             if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
                 try:
@@ -3323,12 +3334,16 @@ async def api_chat(request):
                 recorded = []
                 rt = ""
                 fallback = ""  # 工具轮正文不与最终轮拼接；只在最终轮为空时兜底
+                memory_write_used = False
                 try:
                     msgs = _build_msgs()
                     for _ in range(4):  # 限轮次省钱，同非流式
                         kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs, stream=True)
                         if _active_tools:
-                            kwargs["tools"] = _active_tools
+                            kwargs["tools"] = [
+                                tool for tool in _active_tools
+                                if not memory_write_used or tool.get("function", {}).get("name") not in ("hold", "grow")
+                            ]
                         st = await _llm_create(_web_llm, **kwargs)
                         buf, flushed, tc_acc, saw_tc = "", 0, {}, False
                         async for ch in st:
@@ -3367,7 +3382,7 @@ async def api_chat(request):
                             {"id": s2["id"] or f"call_{i}", "type": "function",
                              "function": {"name": s2["name"], "arguments": s2["args"]}}
                             for i, s2 in sorted(tc_acc.items())]})
-                        await _exec_tool_calls(msgs, [
+                        memory_write_used = await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
                     rt = collapse_repeated_reply((rt or fallback or "").strip())
