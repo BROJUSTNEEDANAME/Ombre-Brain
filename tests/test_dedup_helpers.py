@@ -1,10 +1,12 @@
 from utils import (
     classify_chat_error,
+    compact_inner_thoughts,
     collapse_repeated_reply,
     memory_text_similarity,
     merge_memory_details,
     same_memory_fact,
     structure_user_observation,
+    repetitive_inner_thought,
 )
 
 
@@ -102,3 +104,26 @@ def test_chat_error_classifies_quota_and_auth_failures():
 def test_chat_error_classifies_timeout_and_connection_failures():
     assert classify_chat_error(TimeoutError("timed out"))["code"] == "model_timeout"
     assert classify_chat_error(_ProviderError("Connection reset by peer"))["code"] == "model_connection"
+
+
+def test_repetitive_offline_thought_rejects_same_conclusion_rephrased():
+    recent = ["她不在的时候屋里很安静，我还是会惦记她，等她回来。"]
+    candidate = "屋里安静得过分。我想她，也在等她回来。"
+    assert repetitive_inner_thought(candidate, recent)
+
+
+def test_offline_thought_with_real_new_delta_is_kept():
+    recent = ["她不在的时候屋里很安静，我还是会惦记她。"]
+    candidate = "刚看完一篇寒区止血材料的报道，低温下凝血时间比我记得的更麻烦。"
+    assert not repetitive_inner_thought(candidate, recent)
+
+
+def test_old_duplicate_offline_entries_are_compacted():
+    entries = [
+        {"t": 1, "text": "她不在，屋里很安静。我想她。"},
+        {"t": 2, "text": "屋里安静。我想她，等她回来。"},
+        {"t": 3, "text": "地图上那条冬季路线有个背风坡，值得重新标记。"},
+    ]
+    compacted = compact_inner_thoughts(entries)
+    assert len(compacted) == 2
+    assert compacted[-1]["t"] == 3

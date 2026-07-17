@@ -283,6 +283,47 @@ def classify_chat_error(exc) -> dict:
     return {"code": "model_error", "message": "模型 API 返回异常，本次没有生成回复。"}
 
 
+def repetitive_inner_thought(candidate: str, recent: list[str]) -> bool:
+    """Reject offline thoughts that only paraphrase a recent conclusion."""
+    candidate = (candidate or "").strip()
+    if not candidate:
+        return True
+    anchors = (
+        "想她", "想闪闪", "等她", "等闪闪", "她回来", "闪闪回来", "她不在",
+        "担心她", "担心闪闪", "陪着她", "陪她", "护着她", "保护她",
+        "照顾她", "照顾闪闪", "不让她", "舍不得她", "怕她", "惦记她",
+    )
+    cand_anchors = {item for item in anchors if item in candidate}
+    for old in recent[-12:]:
+        old = (old or "").strip()
+        if not old:
+            continue
+        score = memory_text_similarity(candidate, old)
+        if score >= 0.64:
+            return True
+        old_anchors = {item for item in anchors if item in old}
+        if score >= 0.42 and cand_anchors and cand_anchors & old_anchors:
+            return True
+    return False
+
+
+def compact_inner_thoughts(entries: list[dict], limit: int = 40) -> list[dict]:
+    """Keep newest non-repetitive offline thoughts while preserving chronology."""
+    kept_newest = []
+    kept_texts = []
+    for entry in reversed(entries or []):
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text or repetitive_inner_thought(text, kept_texts):
+            continue
+        kept_newest.append(entry)
+        kept_texts.append(text)
+        if len(kept_newest) >= limit:
+            break
+    return list(reversed(kept_newest))
+
+
 def memory_text_similarity(left: str, right: str) -> float:
     """Conservative, provider-free similarity for short factual memories.
 

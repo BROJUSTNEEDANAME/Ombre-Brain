@@ -1822,6 +1822,7 @@
   function renderInnerFeed(){
     const feed=document.getElementById('innerFeed'), hb=document.getElementById('innerHobbies'); if(!feed)return;
     const es=(_innerCache.entries||[]).slice().sort((a,b)=>(b.t||0)-(a.t||0));  // 新的在上
+    const kindName={observe:'观察',question:'问题',revise:'修正',plan:'决定',self:'自我',explore:'探索',reflect:'思考'};
     hb.innerHTML=''; (_innerCache.hobbies||[]).slice(0,6).forEach(h=>{ const s=document.createElement('span'); s.className='inner-hb'; s.textContent='🎯 '+h; hb.appendChild(s); });
     feed.innerHTML='';
     if(!es.length){ feed.innerHTML='<div class="inner-empty">你不在的时候，他还没来得及想些什么。<br>离开一会儿再回来看看吧。</div>'; return; }
@@ -1829,7 +1830,7 @@
     es.forEach(e=>{ const dl=_dayLabel(e.t); if(dl!==curDay){ curDay=dl; const d=document.createElement('div'); d.className='inner-day'; d.textContent=dl; feed.appendChild(d); }
       const c=document.createElement('div'); c.className='inner-e';
       const m=document.createElement('div'); m.className='m';
-      let mh='<span>'+_hhmm(e.t)+'</span>'; if(e.mood) mh+='<span class="mood">'+e.mood+'</span>'; if(e.topic) mh+='<span class="topic">🔎 '+(''+e.topic).replace(/</g,'&lt;')+'</span>';
+      let mh='<span>'+_hhmm(e.t)+'</span>'; if(e.mood) mh+='<span class="mood">'+e.mood+'</span>'; if(e.kind&&kindName[e.kind]) mh+='<span class="topic">'+kindName[e.kind]+'</span>'; if(e.topic) mh+='<span class="topic">🔎 '+(''+e.topic).replace(/</g,'&lt;')+'</span>';
       m.innerHTML=mh;
       const x=document.createElement('div'); x.className='x'; x.textContent=(''+(e.text||''));
       c.appendChild(m); c.appendChild(x); feed.appendChild(c); });
