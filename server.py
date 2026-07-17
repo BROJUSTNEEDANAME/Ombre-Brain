@@ -2138,6 +2138,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
+_web_vision = None  # 视觉请求独立客户端：允许更长超时和供应商默认式重试
 _IMG_DESC_CACHE: dict = {}  # 图片→识图转述 缓存（按图片指纹），同一张图只识一次
 _BG_TASKS: set = set()      # 后台任务引用（防止被 GC）——写记忆等慢活丢这里跑，不拖住回复
 _RECENT_MEMS: list = []     # 最近记过的内容 [(时刻,内容)]——15分钟内几乎一样的不再重复写
@@ -2189,8 +2190,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.0"
-OMBRE_WEB_VERSION_NOTE = "识图审核、超时、额度和空结果会直接显示系统状态，不再让角色含糊"
+OMBRE_WEB_VERSION = "v4.1"
+OMBRE_WEB_VERSION_NOTE = "视觉模型恢复独立长超时和两次重试，不再继承聊天的快速失败设置"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3031,11 +3032,13 @@ async def api_chat(request):
                 return ""
         _mem_task = asyncio.create_task(_safe_breath(user_text))
 
-    global _web_llm
+    global _web_llm, _web_vision
     try:
         from openai import AsyncOpenAI
         if _web_llm is None:
             _web_llm = AsyncOpenAI(api_key=api_key, base_url=llm_base_url, timeout=60.0, max_retries=0)
+        if _web_vision is None:
+            _web_vision = AsyncOpenAI(api_key=api_key, base_url=llm_base_url, timeout=105.0, max_retries=2)
         # 模型：网页可传 model 切换（白名单内才认），否则用默认
         _default_model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
         _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
@@ -3057,7 +3060,7 @@ async def api_chat(request):
             async def _transcribe(mt, b64, k):
                 try:
                     r = await _llm_create(
-                        _web_llm, model=_vision_model, max_tokens=1500,
+                        _web_vision, model=_vision_model, max_tokens=1500,
                         messages=[{"role": "user", "content": [
                             {"type": "text", "text": "把这张图完整转述成文字：截图里的文字逐字抄下来（保留标题/列表/结构）；照片就客观细致地描述画面。只输出转述内容，不要任何评论。"},
                             {"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}},
