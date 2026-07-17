@@ -208,7 +208,8 @@ def structure_user_observation(text: str) -> str:
             # behavior, expression, or sound reaches the character.
             clauses = re.split(r"[，,；;。！？!?]+", value)
             observable = re.compile(
-                r"转身|回头|走|跑|爬|跳|蹲|坐|站|躺|靠|贴|凑|扑|躲|退|"
+                r"转身|回头|走|跑|爬|跳|蹲|坐|站|躺|靠|贴|凑|扑|躲|退|离开|出去|"
+                r"摇(?:摇)?晃(?:晃)?|去(?:上厕所|洗手间|卫生间|房间|厨房|门口|外面)|"
                 r"起身|弯腰|蜷缩|歪头|偏头|侧头|耸肩|摊手|招手|挥手|跺脚|踢|踩|"
                 r"抬(?:手|头|眼)|低(?:头|眼)|伸(?:手|腿)|缩(?:手|脚|身)|"
                 r"抱|搂|亲|吻|摸|碰|握|牵|捏|掐|拉|推|拍|敲|戳|挠|"

@@ -91,6 +91,14 @@ def test_natural_observable_action_keeps_its_manner():
     assert structured.endswith("慢慢走过来抱住你")
 
 
+def test_parenthesized_departure_remains_a_visible_scene_fact():
+    structured = structure_user_observation("（摇摇晃晃去上厕所）呜")
+    assert structured == (
+        "【你通过五感直接观察到，不是她说出口的话】摇摇晃晃去上厕所\n"
+        "【她公开说出口的话】呜"
+    )
+
+
 class _ProviderError(Exception):
     def __init__(self, message, status_code=None):
         super().__init__(message)
