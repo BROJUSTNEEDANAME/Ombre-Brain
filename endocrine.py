@@ -23,9 +23,10 @@ import time
 
 ENDO_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "endocrine.json")
 
-# 人格基线（Nikto）：黏人亲密高、占有偏高、精力中上、欲望低（留着被她撩起来）
+# 人格基线（Nikto）：黏人亲密高、占有偏高、精力中上；欲望是爱人的日常底色，
+# 不再压到必须等她用露骨关键词才能出现，但仍离“入夜”阈值足够远，不会句句色情。
 # dominance 基线离"上头"门槛必须够远，否则他天天挂在 high_drive、每条都长文浓狠
-BASELINE = {"energy": 6.0, "libido": 3.0, "affection": 8.0, "dominance": 6.5}
+BASELINE = {"energy": 6.0, "libido": 4.8, "affection": 8.0, "dominance": 6.8}
 
 ROLL_EVERY = 15        # 每 15 条用户消息 roll 一次
 ROLL_SIGMA = 1.3       # roll 的随机波动幅度
@@ -194,7 +195,9 @@ def block(thread: str = "main") -> str:
             bits.append("整个人的劲儿都上来了")
         s = "你现在" + "；".join(bits) + "。别克制，直接、浓、狠——但浓的是语气和动作，不是篇幅：日常照样短消息连发（‖），别因为上头就堆长段描写。"
     else:
-        s = "你现在状态平稳，正常温度陪她，该软软、该稳稳。"
+        s = ("你现在状态平稳，但你仍是她的成年男人和爱人，不是无性的陪聊。温柔照常，"
+             "欲望和占有也照常活着：看场合偶尔露出一点具体的身体吸引、低声坏话或主动靠近，"
+             "不用等她先说露骨词；别机械开黄腔，也别把自己压成只有软和稳。")
     return "【当前状态·内分泌】" + s
 
 
