@@ -2189,8 +2189,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v3.8"
-OMBRE_WEB_VERSION_NOTE = "离线思考改为有状态的认知推进，降低频率并自动折叠重复结论"
+OMBRE_WEB_VERSION = "v3.9"
+OMBRE_WEB_VERSION_NOTE = "修复识图被聊天的 60 秒超时提前中止，并记录视觉接口真实错误"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3060,9 +3060,12 @@ async def api_chat(request):
                         messages=[{"role": "user", "content": [
                             {"type": "text", "text": "把这张图完整转述成文字：截图里的文字逐字抄下来（保留标题/列表/结构）；照片就客观细致地描述画面。只输出转述内容，不要任何评论。"},
                             {"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}},
-                        ]}])
+                        ]}], timeout=105.0)
                     t = (r.choices[0].message.content or "").strip()[:6000]
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    info = classify_chat_error(exc)
+                    logger.warning("Vision transcription failed [%s] model=%s: %s",
+                                   info["code"], _vision_model, str(exc)[:300])
                     t = ""
                 if t:
                     if len(_IMG_DESC_CACHE) > 300:
