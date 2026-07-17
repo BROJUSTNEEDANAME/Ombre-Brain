@@ -203,7 +203,19 @@ def structure_user_observation(text: str) -> str:
     def flush_action():
         value = "".join(action).strip()
         if value:
-            parts.append(("她做出的可见动作，不是说出口的话", value))
+            # Parentheses may mix visible behavior with private narration, e.g.
+            # “（感觉前功尽弃了，哼唧）”. Never send the private clause to the
+            # model; it cannot unknow text that merely carries a warning label.
+            clauses = re.split(r"[，,；;。！？!?]+", value)
+            hidden = re.compile(
+                r"^(?:(?:我|她|自己)\s*)?(?:"
+                r"感觉|觉得|心想|想着|想到|想起|认为|意识到|明白|知道|不知道|"
+                r"记得|希望|担心|害怕|怀疑|后悔|期待|决定|暗自|内心|心里|脑中|脑子里|"
+                r"仿佛|似乎)"
+            )
+            visible = [clause.strip() for clause in clauses if clause.strip() and not hidden.match(clause.strip())]
+            if visible:
+                parts.append(("她做出的可见动作或声音，不是说出口的话", "，".join(visible)))
         action.clear()
 
     for char in text:
@@ -228,6 +240,8 @@ def structure_user_observation(text: str) -> str:
         flush_action()
     else:
         flush_spoken()
+    if not parts:
+        return "【这条消息只有不可观察的内心描写；你不知道其内容，不得猜测或回应】"
     return "\n".join(f"【{kind}】{value}" for kind, value in parts)
 
 
