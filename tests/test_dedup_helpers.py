@@ -5,10 +5,23 @@ from utils import (
     collapse_repeated_reply,
     memory_text_similarity,
     merge_memory_details,
+    parse_memory_note,
     same_memory_fact,
     structure_user_observation,
     repetitive_inner_thought,
 )
+
+
+def test_memory_summary_channel_parses_fact_and_feeling_separately():
+    note = "事实：闪闪开始学习刺绣 || 感受：我为她愿意尝试新东西感到骄傲"
+    assert parse_memory_note(note) == [
+        ("闪闪开始学习刺绣", False),
+        ("我为她愿意尝试新东西感到骄傲", True),
+    ]
+
+
+def test_memory_summary_channel_can_explicitly_skip_storage():
+    assert parse_memory_note("不记录") == []
 
 
 def test_chinese_paraphrase_memories_are_same_fact():

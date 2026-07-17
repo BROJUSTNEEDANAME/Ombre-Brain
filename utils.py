@@ -284,6 +284,25 @@ def classify_chat_error(exc) -> dict:
     return {"code": "model_error", "message": "模型 API 返回异常，本次没有生成回复。"}
 
 
+def parse_memory_note(note: str) -> list[tuple[str, bool]]:
+    """Parse the hidden post-reply memory channel into (content, feel) items."""
+    value = (note or "").strip()
+    if not value or value.lower() in {"不记录", "无需记录", "无", "none", "skip"}:
+        return []
+    items = []
+    for raw in re.split(r"\s*\|\|\s*|\n+", value):
+        text = raw.strip(" -·\t")
+        if not text:
+            continue
+        feel = bool(re.match(r"^(?:感受|内心|feel)\s*[:：]", text, re.I))
+        text = re.sub(r"^(?:事实|记忆|感受|内心|fact|feel)\s*[:：]\s*", "", text, flags=re.I).strip()
+        if text and text.lower() not in {"不记录", "无需记录", "无", "none", "skip"}:
+            items.append((text[:600], feel))
+        if len(items) >= 2:
+            break
+    return items
+
+
 def classify_vision_failure(text: str = "", exc=None) -> dict | None:
     """Explain whether vision failed technically or appears content-filtered."""
     detail = (str(exc or "") + " " + str(text or "")).lower()

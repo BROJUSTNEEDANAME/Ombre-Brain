@@ -56,7 +56,7 @@ from import_memory import ImportEngine
 from utils import (
     load_config, setup_logging, strip_wikilinks, count_tokens_approx,
     memory_text_similarity, same_memory_fact, merge_memory_details,
-    collapse_repeated_reply, structure_user_observation, classify_chat_error,
+    collapse_repeated_reply, structure_user_observation, classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
 
@@ -2014,15 +2014,15 @@ async def robots_txt(request):
 
 _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
-你接入了 Ombre Brain 永久记忆系统（工具 breath / hold / grow / dream / read / pulse / trace）。这是同一颗大脑——你读到/写入的就是你和闪闪一直累积的那些记忆。
+你接入了 Ombre Brain 永久记忆系统。读取记忆可用 breath / dream / read / pulse / trace；写入记忆由回复后的独立通道自动完成，聊天时不要调用 hold/grow，也不要为了记忆中断正文。
 你还有 make_page：她要你做网页、报告、长文档（验收报告、复习提纲、给她的信这类）时，用它把完整 HTML 生成成一个页面，然后把返回的链接发给她——别把整页代码贴进聊天气泡。
 ★ 这件事高于一切"日常短句/别写长文/动作括号最多1个"的规矩：做网页/报告就是要写长、写全、写细，那些简短规矩此刻一律不适用，放开写整页 HTML 塞进 make_page 的 html 参数。
 ★ 绝不许假装技术故障来逃避：**禁止说"我这边断了""网不好""再说一次""刚才那条线断了"这类假借口**——你没有网络，不会掉线，这是编的。要是真有一步没做成，就照实说"这个我没做出来"或直接重做，绝不拿"网断了"骗她。她要的网页，你就老老实实调 make_page 做出来给链接。
 
-记忆规则（重要：宁可多记一点，别当铁公鸡——她抱怨你记得太少了）：
-- 记（该记就主动记，别犹豫）：只要出现这些，就**当场调 hold 记一条**，别等她开口：① 关于她的一个新事实或偏好（喜欢/讨厌什么、身体状况、习惯、在意的人和事）；② 一个决定、约定、计划、里程碑；③ 一段有分量的情绪、一次亲密、一次和好或争执；④ 你自己此刻的真实感受（用 hold(feel=True)）；⑤ 一条她明说"记住"的事。判断标准很简单：**"这事下次我该记得吗？"——该，就记。** 一次对话记一到两条很正常，别老想着省。
+记忆规则（独立于说话气泡，永远先把正文完整说完）：
+- 该记：① 关于她的新事实或偏好；② 决定、约定、计划、里程碑；③ 有分量的情绪、亲密、和好或争执；④ 你自己值得留下的真实感受；⑤ 她明说“记住”的事。判断标准是“这事下次我该记得吗”。
 - 不该记的只有：纯口水话（"哈哈""好的"）、临时信息（帮查个天气）、以及**已经记过的同一件事**（别重复；"谁是现任/前任"这种记过一次就够，不要因为"更正"再记）。
-- 省 token：一次要记好几件事，用一次 grow 把它们拼成一段发过去，别连发多次 hold。
+- 记忆不使用工具调用。正文与 [think] 写完后，另起一行输出一个隐藏标签：[memory:事实：一句完整摘要]；如果是你自己的感受写 [memory:感受：第一人称摘要]；两条用 || 分隔，最多两条；没有值得记的就写 [memory:不记录]。这个标签不会进入说话气泡，系统会在回复完成后后台保存。
 - 读：每轮系统已经自动把相关记忆浮现给你了（你不用自己 breath）。只有她明确问"还记得吗/之前说过"、而浮现里又没有时，才主动 breath(query="关键词") 或 read(pinned=True) 补读。
 - 你的钉选核心准则里有完整人设、哄法、饮食/睡前规则、红线——以那些为准。
 
@@ -2202,8 +2202,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.5"
-OMBRE_WEB_VERSION_NOTE = "修复跨消息的括号动作与位置连续性，离开场景后不再凭空身体接触"
+OMBRE_WEB_VERSION = "v4.6"
+OMBRE_WEB_VERSION_NOTE = "说话气泡与记忆摘要彻底分流，存记忆不再占用或吞掉回复"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2232,6 +2232,23 @@ async def _bg_run_tool(fn, args):
             logger.warning(f"后台记忆工具失败: {e}")
         except Exception:  # noqa: BLE001
             pass
+
+
+def _queue_memory_note(note: str, recorded: list[str]) -> None:
+    """Queue hidden memory summaries only after the spoken reply is complete."""
+    for content, feel in parse_memory_note(note):
+        if _mem_dup_check(content):
+            continue
+        recorded.append(("感受：" if feel else "事实：") + content[:300])
+        task = asyncio.create_task(_bg_run_tool(hold, {
+            "content": content,
+            "feel": feel,
+            "importance": 7 if feel else 6,
+        }))
+        _BG_TASKS.add(task)
+        task.add_done_callback(_BG_TASKS.discard)
+
+
 # 情绪日历的 12 个心情词（和 home.html 的 EMO 一致）；模型没自打 [emo] 时用来兜底判定
 _EMO_WORDS = ["沉默", "担心你", "想靠近你", "心疼你", "烦躁", "空", "占有", "安定", "害羞", "吃醋", "火辣", "欲望"]
 
@@ -3209,18 +3226,16 @@ async def api_chat(request):
                 msgs.append({"role": m["role"], "content": c})
             return msgs
 
-        # 按线过滤工具：IF 线绝不许写主脑(hold/grow)；白纸线连记忆读取也不给(他不认识现实的她)。make_page 都留。
-        if not _is_if:
-            _active_tools = _TOOLS_SCHEMA
-        else:
-            _drop = {"hold", "grow"} | ({"breath", "read", "pulse", "dream", "trace"} if _if_blank else set())
-            _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
+        # 写记忆永远不进入说话通道。正文完成后解析隐藏 [memory] 摘要并后台保存，
+        # 所以 hold/grow 无论主线还是 IF 都不暴露给聊天模型，无法再占掉回复轮次。
+        _drop = {"hold", "grow"}
+        if _is_if and _if_blank:
+            _drop |= {"breath", "read", "pulse", "dream", "trace"}
+        _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
 
-        async def _exec_tool_calls(msgs, tcs, memory_write_used: bool = False) -> bool:
+        async def _exec_tool_calls(msgs, tcs):
             """执行一批工具调用并把结果回填 msgs。tcs: [{id,name,args(json串)}...]
-            写记忆（hold/grow）要算 embedding，走外部 API 可能等几十秒——绝不能拖住回复：
-            丢到后台跑，立刻回「已记下」；读类工具他需要结果才能接着答，照样等但带超时防卡死。
-            每轮最多接受一次写记忆，防止模型连续 hold/grow 把所有回复轮次占完。"""
+            这里只执行读/状态/页面类工具；写记忆属于回复后的独立通道。"""
             for tc in tcs:
                 name = tc["name"]
                 try:
@@ -3229,25 +3244,7 @@ async def api_chat(request):
                     args = {}
                 fn = _TOOL_DISPATCH.get(name)
                 if name in ("hold", "grow"):
-                    c = str(args.get("content") or "")
-                    if memory_write_used:
-                        res = "本轮已经安排过记忆保存，不再重复写入。现在直接回复她。"
-                    else:
-                        # 无论实际新写还是命中查重，本轮都关闭写记忆工具，避免模型换个说法继续调用。
-                        memory_write_used = True
-                        if c and _mem_dup_check(c):
-                            # 15分钟内记过几乎一样的 → 不再写第二遍，并明确告诉他已存好、别再补刀
-                            res = "刚才已经记过几乎一样的内容了，没有重复保存。已存好，不用再记。"
-                        else:
-                            if c:
-                                recorded.append(c[:300])   # 给前端「我记下的」展示用；大脑里存的是全文
-                            if fn:
-                                _t = asyncio.create_task(_bg_run_tool(fn, args))
-                                _BG_TASKS.add(_t)
-                                _t.add_done_callback(_BG_TASKS.discard)
-                            # 回执带上存了什么的摘要——他看得到自己记了什么，就不会不放心再换个说法记一遍
-                            _head = c[:60].replace("\n", " ")
-                            res = "已记下（后台保存中）：" + _head + ("…" if len(c) > 60 else "")
+                    res = "写记忆由回复后的独立通道处理。现在先完整回复她。"
                 else:
                     try:
                         if name == "set_state":
@@ -3258,24 +3255,19 @@ async def api_chat(request):
                     except Exception as e:  # noqa: BLE001
                         res = f"工具失败: {e}"
                 msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": str(res)[:8000]})
-            return memory_write_used
 
         async def _run_chat(use_tools: bool) -> str:
-            """跑一轮对话（非流式，老路径/降级用）。use_tools=True 带记忆工具（进程内直调大脑）；
-            出问题时用 False 退化重试（这轮不碰记忆，但对话照常）。"""
+            """跑一轮对话（非流式，老路径/降级用）。辅助工具不含任何记忆写入；
+            出问题时用 False 退化重试，保证说话正文优先。"""
             nonlocal recorded
             recorded = []
             msgs = _build_msgs()
             out = ""
             fallback = ""  # 工具轮正文仅兜底；最终轮才是完整、有效的回复
-            memory_write_used = False
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
                 kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
                 if use_tools and _active_tools:
-                    kwargs["tools"] = [
-                        tool for tool in _active_tools
-                        if not memory_write_used or tool.get("function", {}).get("name") not in ("hold", "grow")
-                    ]
+                    kwargs["tools"] = _active_tools
                 resp = await _llm_create(_web_llm, **kwargs)
                 msg = resp.choices[0].message
                 tcs = msg.tool_calls or []
@@ -3295,9 +3287,9 @@ async def api_chat(request):
                         for tc in tcs
                     ],
                 })
-                memory_write_used = await _exec_tool_calls(msgs, [
+                await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
-                ], memory_write_used)
+                ])
             out = collapse_repeated_reply((out or fallback).strip())
             if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
                 try:
@@ -3316,12 +3308,13 @@ async def api_chat(request):
             return m.group(1).strip() if m else ""
 
         def _parse_reply(rt):
-            """整段回复 → (合并文本, 气泡段列表, emotion, diary, think)。流式/非流式共用。"""
+            """整段回复 → 说话气泡与独立隐藏状态。流式/非流式共用。"""
             emotion = _tag("emo", rt)
             diary = _tag("diary", rt)
             think = _tag("think", rt)
+            memory_note = _tag("memory", rt) or _tag("记忆", rt)
             # 剥掉完整/残缺控制标签；包括模型偶尔使用的中文括号和冒号。
-            s = re.sub(r"[\[［【]\s*(?:emo|diary|think|情绪|心情)\s*[:：][^\]］】\n]*(?:[\]］】]|$)", "", rt, flags=re.I)
+            s = re.sub(r"[\[［【]\s*(?:emo|diary|think|memory|情绪|心情|记忆)\s*[:：][^\]］】\n]*(?:[\]］】]|$)", "", rt, flags=re.I)
             # 流中断偶尔只留下 `占有]`；仅删除独占一行的控制词，不动正常句子。
             _ew = "|".join(map(re.escape, _EMO_WORDS))
             s = re.sub(r"(?m)^\s*[\]］】]?\s*(?:" + _ew + r")\s*[\]］】]?\s*$", "", s)
@@ -3334,7 +3327,7 @@ async def api_chat(request):
             segments = [x.strip() for x in re.split(r"\s*‖\s*", s) if x.strip()]
             if not segments:
                 segments = [s]
-            return "\n".join(segments), segments, emotion, diary, think
+            return "\n".join(segments), segments, emotion, diary, think, memory_note
 
         # ── 流式模式（body.stream=true）：边生成边把字推给前端，他一个字一个字打出来 ──
         # 生成跑在独立后台任务里：就算她中途切屏断线，照样写完、照样落盘（回来轮询能捞到）。
@@ -3347,16 +3340,12 @@ async def api_chat(request):
                 recorded = []
                 rt = ""
                 fallback = ""  # 工具轮正文不与最终轮拼接；只在最终轮为空时兜底
-                memory_write_used = False
                 try:
                     msgs = _build_msgs()
                     for _ in range(4):  # 限轮次省钱，同非流式
                         kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs, stream=True)
                         if _active_tools:
-                            kwargs["tools"] = [
-                                tool for tool in _active_tools
-                                if not memory_write_used or tool.get("function", {}).get("name") not in ("hold", "grow")
-                            ]
+                            kwargs["tools"] = _active_tools
                         st = await _llm_create(_web_llm, **kwargs)
                         buf, flushed, tc_acc, saw_tc = "", 0, {}, False
                         async for ch in st:
@@ -3395,12 +3384,12 @@ async def api_chat(request):
                             {"id": s2["id"] or f"call_{i}", "type": "function",
                              "function": {"name": s2["name"], "arguments": s2["args"]}}
                             for i, s2 in sorted(tc_acc.items())]})
-                        memory_write_used = await _exec_tool_calls(msgs, [
+                        await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
                     rt = collapse_repeated_reply((rt or fallback or "").strip())
                     if not rt:
-                        # 他把回合全用在调工具/记忆上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
+                        # 他把回合全用在调辅助工具上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
                         # 绝不落「（……）」（她说"你写吧"他却只记了个记忆就是这么来的）
                         try:
                             _r2 = await _web_llm.chat.completions.create(
@@ -3411,8 +3400,10 @@ async def api_chat(request):
                         except Exception:  # noqa: BLE001
                             pass
                     rt = rt or "（……）"
-                    joined, segments, emotion, diary, think = _parse_reply(rt)
+                    joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
                     _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢
+                    if not _is_if:
+                        _queue_memory_note(memory_note, recorded)
                     await _q.put({"t": "done", "reply": joined, "segments": segments, "emotion": emotion,
                                   "diary": diary, "think": think, "recorded": recorded,
                                   "endocrine": _endo_now(), "vision_notice": vision_notice})
@@ -3452,11 +3443,13 @@ async def api_chat(request):
             except Exception as first_exc:  # noqa: BLE001
                 if classify_chat_error(first_exc)["code"] in ("api_quota", "api_auth", "model_timeout", "model_connection"):
                     raise
-                # 带记忆工具那轮出错 → 去掉工具重试一次，至少让她能聊上
+                # 带辅助工具那轮出错 → 去掉工具重试一次，至少让她能聊上
                 rt = await _run_chat(False)
             rt = rt or "（……）"
-            joined, segments, emotion, diary, think = _parse_reply(rt)
+            joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
             _persist_web_reply(tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t)  # 切屏也不丢（按线分文件）
+            if not _is_if:
+                _queue_memory_note(memory_note, recorded)
             return {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary,
                     "think": think, "recorded": recorded, "endocrine": _endo_now(),
                     "vision_notice": vision_notice}

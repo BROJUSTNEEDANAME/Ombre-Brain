@@ -1410,7 +1410,7 @@
   }
   compactBrainLog();
   function recordBrain(text){
-    addMsg('sys','📌 已记进大脑（永久记忆）');            // 真的存进大脑了；详情去「我记下的」看
+    addMsg('sys','记忆记录：'+text);                    // 独立状态：永远排在他说完的气泡之后
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     const list=(brainLog[k]=brainLog[k]||[]);
     let found=null; Object.keys(brainLog).some(d=>{ const i=(brainLog[d]||[]).findIndex(r=>_brainSame(r.text||'',text)); if(i>=0){found={d,i};return true;} return false; });
@@ -1597,7 +1597,7 @@
   function cleanAssistantText(value){
     let s=''+(value||'');
     // 同时兼容模型偶尔写出的英文/中文括号和冒号；这些都是控制元数据，不是台词。
-    s=s.replace(/[\[［【]\s*(?:emo|diary|think|情绪|心情)\s*[:：][^\]］】\n]*(?:[\]］】]|$)/gi,'');
+    s=s.replace(/[\[［【]\s*(?:emo|diary|think|memory|情绪|心情|记忆)\s*[:：][^\]］】\n]*(?:[\]］】]|$)/gi,'');
     // 流中断时可能只剩 `占有]` 这一截；仅删除独占一行的情绪词，不碰正常句子里的“占有”。
     s=s.replace(_orphanEmotion,(all,lead)=>lead);
     return s;
@@ -1719,9 +1719,9 @@
   function makeStreamSink(){
     const rows=[]; let cur=null, hold='', shown=false;
     const ensure=()=>{ if(!cur){ cur=liveBubbleNew(); rows.push(cur); } return cur.querySelector('.btxt'); };
-    const TAGRE=/^\[(?:emo|diary|think):[^\]\n]*\]/;                  // 完整标签
-    const OPENRE=/^\[(?:emo|diary|think):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
-    const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?)?$/; // 半截标签名
+    const TAGRE=/^\[(?:emo|diary|think|memory):[^\]\n]*\]/;                  // 完整标签
+    const OPENRE=/^\[(?:emo|diary|think|memory):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
+    const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?|m(?:e(?:m(?:o(?:r(?:y:?)?)?)?)?)?)?$/; // 半截标签名
     function put(x){ if(!x) return; const sp=ensure(); sp.textContent=cleanAssistantText(sp.textContent+x); shown=!!sp.textContent; toBottom(); }
     function feed(chunk){
       let s=hold+chunk; hold='';
