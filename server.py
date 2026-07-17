@@ -2202,8 +2202,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.6"
-OMBRE_WEB_VERSION_NOTE = "说话气泡与记忆摘要彻底分流，存记忆不再占用或吞掉回复"
+OMBRE_WEB_VERSION = "v4.7"
+OMBRE_WEB_VERSION_NOTE = "修复手机端左下角图片按钮被透明遮罩挡住、无法点开的情况"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])

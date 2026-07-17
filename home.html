@@ -298,13 +298,13 @@
   .topnav button:active { background: var(--accent-soft); }
 
   /* ---------- 底部容器：只剩输入框（聊天页），键盘弹出整体上移 ---------- */
-  .footer { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 36; display: flex; flex-direction: column; }
+  .footer { position: fixed; left: 0; right: 0; bottom: var(--kb); z-index: 42; display: flex; flex-direction: column; }
 
   /* ---------- 附件菜单（仿 Telegram/Claude：贴着 + 号弹出的小卡片，不撑高底栏） ---------- */
-  .attach-backdrop { position: fixed; inset: 0; z-index: 39; background: transparent; display: none; }
+  .attach-backdrop { position: fixed; inset: 0; z-index: 38; background: transparent; display: none; }
   .attach-backdrop.open { display: block; }
   .attach-menu {
-    position: fixed; left: 12px; bottom: calc(var(--footer-h) + var(--kb) + 8px); z-index: 40;
+    position: fixed; left: 12px; bottom: calc(var(--footer-h) + var(--kb) + 8px); z-index: 43;
     display: flex; flex-direction: column; gap: 2px; min-width: 168px;
     background: var(--surface); border: 1px solid var(--hair); border-radius: 16px; padding: 6px;
     box-shadow: var(--sh-bubble);
@@ -320,7 +320,7 @@
   /* 输入栏：苹果毛玻璃（半透明底 + 背景模糊 + 顶部高光），模糊度可调 */
   .composer { display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px calc(env(safe-area-inset-bottom) + 10px); background: var(--composer-glass); backdrop-filter: blur(var(--composer-blur)) saturate(1.8); -webkit-backdrop-filter: blur(var(--composer-blur)) saturate(1.8); border-top: 1px solid var(--hair); box-shadow: inset 0 1px 0 rgba(255,255,255,.16); }
   body.kb-open .composer { padding-bottom: 10px; }
-  .composer .plus { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--hair); background: var(--field-glass); color: var(--text-dim); display: grid; place-items: center; cursor: pointer; transition: transform .25s, color .2s; box-shadow: var(--sh-soft); }
+  .composer .plus { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; border: 1px solid var(--hair); background: var(--field-glass); color: var(--text-dim); display: grid; place-items: center; cursor: pointer; pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: transform .25s, color .2s; box-shadow: var(--sh-soft); }
   .composer .plus svg { width: 22px; height: 22px; transition: transform .3s cubic-bezier(.2,.8,.2,1); }
   .composer .plus.rot svg { transform: rotate(45deg); color: var(--accent); }
   .composer textarea { flex: 1; resize: none; border: 1px solid var(--hair); background: var(--field-glass); backdrop-filter: blur(calc(var(--composer-blur) * .5)); -webkit-backdrop-filter: blur(calc(var(--composer-blur) * .5)); color: var(--text); border-radius: 21px; padding: 10px 16px; font-size: 15px; font-family: inherit; max-height: 110px; line-height: 1.45; outline: none; transition: border-color .2s; box-shadow: var(--sh-soft); }
@@ -813,8 +813,8 @@
   <!-- 附件菜单（浮层，点空白处关闭） -->
   <div class="attach-backdrop" id="attachBackdrop"></div>
   <div class="attach-menu" id="attachSheet">
-    <button class="att" data-att="photo"><span class="ic" id="icPhoto"></span><span>图片</span></button>
-    <button class="att" data-att="file"><span class="ic" id="icFile"></span><span>文件</span></button>
+    <button type="button" class="att" data-att="photo"><span class="ic" id="icPhoto"></span><span>图片</span></button>
+    <button type="button" class="att" data-att="file"><span class="ic" id="icFile"></span><span>文件</span></button>
   </div>
   <input type="file" id="filePhoto" accept="image/*" hidden>
   <input type="file" id="fileDoc" hidden>
@@ -823,7 +823,7 @@
   <div class="footer" id="footer">
     <div class="img-preview" id="imgPreview"></div>
     <div class="composer" id="composer">
-      <button class="plus" id="plusBtn" title="发图片 / 文件"></button>
+      <button type="button" class="plus" id="plusBtn" title="发图片 / 文件" aria-label="发图片或文件" aria-expanded="false"></button>
       <textarea id="input" rows="1" placeholder="跟我说点什么。"></textarea>
       <button class="send" id="sendBtn"></button>
     </div>
@@ -1259,8 +1259,20 @@
   const attachBackdrop = document.getElementById('attachBackdrop');
   const filePhoto = document.getElementById('filePhoto'), fileDoc = document.getElementById('fileDoc');
   let attachOpen = false;
-  function closeAttach(){ attachOpen=false; attachSheet.classList.remove('open'); attachBackdrop.classList.remove('open'); plusBtn.classList.remove('rot'); }
-  plusBtn.onclick = () => { attachOpen=!attachOpen; attachSheet.classList.toggle('open',attachOpen); attachBackdrop.classList.toggle('open',attachOpen); plusBtn.classList.toggle('rot',attachOpen); };
+  function setAttachOpen(open){
+    attachOpen=!!open;
+    attachSheet.classList.toggle('open',attachOpen);
+    attachBackdrop.classList.toggle('open',attachOpen);
+    plusBtn.classList.toggle('rot',attachOpen);
+    plusBtn.setAttribute('aria-expanded', String(attachOpen));
+  }
+  function closeAttach(){ setAttachOpen(false); }
+  closeAttach();
+  plusBtn.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    setAttachOpen(!attachOpen);
+  });
   attachBackdrop.onclick = closeAttach;
   attachSheet.querySelectorAll('.att').forEach(a => a.onclick = () => {
     const kind=a.dataset.att;
