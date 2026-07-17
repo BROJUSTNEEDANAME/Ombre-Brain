@@ -203,19 +203,38 @@ def structure_user_observation(text: str) -> str:
     def flush_action():
         value = "".join(action).strip()
         if value:
-            # Parentheses may mix visible behavior with private narration, e.g.
-            # “（感觉前功尽弃了，哼唧）”. Never send the private clause to the
-            # model; it cannot unknow text that merely carries a warning label.
+            # Parentheses are narration, not automatically observable. Project
+            # them through a human sensory boundary: only explicit physical
+            # behavior, expression, or sound reaches the character.
             clauses = re.split(r"[，,；;。！？!?]+", value)
-            hidden = re.compile(
-                r"^(?:(?:我|她|自己)\s*)?(?:"
+            observable = re.compile(
+                r"转身|回头|走|跑|爬|跳|蹲|坐|站|躺|靠|贴|凑|扑|躲|退|"
+                r"起身|弯腰|蜷缩|歪头|偏头|侧头|耸肩|摊手|招手|挥手|跺脚|踢|踩|"
+                r"抬(?:手|头|眼)|低(?:头|眼)|伸(?:手|腿)|缩(?:手|脚|身)|"
+                r"抱|搂|亲|吻|摸|碰|握|牵|捏|掐|拉|推|拍|敲|戳|挠|"
+                r"拿|放|递|扔|挥|摇头|点头|眨眼|闭眼|睁眼|"
+                r"看(?:着|向|了|一眼|你|我|他|她)|望(?:着|向|你|我|他|她)|盯着|瞪着|"
+                r"皱眉|挑眉|抿嘴|撇嘴|张嘴|努嘴|鼓腮|脸红|红了脸|流泪|掉眼泪|发抖|颤抖|哆嗦|出汗|"
+                r"笑|哭|喘|呼吸|叹气|咳|喷嚏|说|喊|叫|喵|哼|嘟囔|呢喃|唱|"
+                r"咬|舔|吃|喝|吞|闻|嗅"
+            )
+            private = re.compile(
                 r"感觉|觉得|心想|想着|想到|想起|认为|意识到|明白|知道|不知道|"
                 r"记得|希望|担心|害怕|怀疑|后悔|期待|决定|暗自|内心|心里|脑中|脑子里|"
-                r"仿佛|似乎)"
+                r"仿佛|似乎|因为|为了|故意|假装"
             )
-            visible = [clause.strip() for clause in clauses if clause.strip() and not hidden.match(clause.strip())]
+            visible = []
+            for raw_clause in clauses:
+                clause = raw_clause.strip()
+                cue = observable.search(clause)
+                if not clause or not cue:
+                    continue
+                # If private motive/thought precedes a bodily cue, expose only
+                # the cue onward. A human sees “发抖”, not “因为害怕”.
+                hidden = private.search(clause)
+                visible.append(clause[cue.start():] if hidden and hidden.start() < cue.start() else clause)
             if visible:
-                parts.append(("她做出的可见动作或声音，不是说出口的话", "，".join(visible)))
+                parts.append(("你通过五感直接观察到，不是她说出口的话", "，".join(visible)))
         action.clear()
 
     for char in text:
@@ -241,7 +260,7 @@ def structure_user_observation(text: str) -> str:
     else:
         flush_spoken()
     if not parts:
-        return "【这条消息只有不可观察的内心描写；你不知道其内容，不得猜测或回应】"
+        return "【她这次没有说出任何话，也没有可被五感直接观察到的行为；不要猜测】"
     return "\n".join(f"【{kind}】{value}" for kind, value in parts)
 
 

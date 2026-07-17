@@ -44,7 +44,7 @@ def test_parenthesized_user_content_is_visible_action_not_dialogue():
     text = "我回来了（走过去抱住你）好想你"
     assert structure_user_observation(text) == (
         "【她公开说出口的话】我回来了\n"
-        "【她做出的可见动作或声音，不是说出口的话】走过去抱住你\n"
+        "【你通过五感直接观察到，不是她说出口的话】走过去抱住你\n"
         "【她公开说出口的话】好想你"
     )
 
@@ -53,7 +53,7 @@ def test_unclosed_parenthesis_is_action_through_end_of_turn():
     text = "别动（抬手碰了碰你的脸"
     assert structure_user_observation(text) == (
         "【她公开说出口的话】别动\n"
-        "【她做出的可见动作或声音，不是说出口的话】抬手碰了碰你的脸"
+        "【你通过五感直接观察到，不是她说出口的话】抬手碰了碰你的脸"
     )
 
 
@@ -67,14 +67,25 @@ def test_private_parenthetical_narration_is_removed_before_model_sees_it():
     assert "前功尽弃" not in structured
     assert structured == (
         "【她公开说出口的话】喵啊！\n"
-        "【她做出的可见动作或声音，不是说出口的话】哼唧"
+        "【你通过五感直接观察到，不是她说出口的话】哼唧"
     )
 
 
 def test_private_only_parenthetical_does_not_leak_its_content():
     structured = structure_user_observation("（心想这下完蛋了）")
     assert "完蛋" not in structured
-    assert "不可观察的内心描写" in structured
+    assert "没有可被五感直接观察到" in structured
+
+
+def test_private_cause_is_removed_but_physical_cue_remains():
+    structured = structure_user_observation("（因为害怕得发抖）")
+    assert "害怕" not in structured
+    assert structured.endswith("发抖")
+
+
+def test_natural_observable_action_keeps_its_manner():
+    structured = structure_user_observation("（慢慢走过来抱住你）")
+    assert structured.endswith("慢慢走过来抱住你")
 
 
 class _ProviderError(Exception):
