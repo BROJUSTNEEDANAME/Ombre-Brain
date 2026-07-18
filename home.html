@@ -146,6 +146,7 @@
   .who .status { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 6px; letter-spacing: .3px; }
   .think-chip { font-size: 12px; cursor: pointer; opacity: .8; padding: 1px 4px; border-radius: 8px; transition: .15s; }
   .model-chip { font-size: 10.5px; cursor: pointer; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); padding: 1px 7px; border-radius: 9px; letter-spacing: .3px; transition: .15s; flex: 0 0 auto; }
+  .model-chip.writing-on { color: #fff; background: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .model-chip.nline { vertical-align: middle; margin-left: 10px; font-weight: 400; position: relative; top: -2px; }
   .model-chip:active { transform: scale(.92); }
   .think-chip:active { transform: scale(.88); }
@@ -621,7 +622,7 @@
     <div class="avatar" id="avatarBtn" title="换我的头像">◐<span class="av-edit">✎</span></div>
     <div class="who">
       <div class="name" id="topName">Svyatoslav<span class="model-chip nline" id="threadChip" title="平行宇宙 · IF线">🌌 主线</span></div>
-      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span><span class="model-chip" id="innerBtn" title="他不在你身边时想的">💭<span class="inner-badge" id="innerBadge"></span></span></div>
+      <div class="status"><span class="dot" id="emoDot"></span><span id="topStatus">安定 · 在你这</span><button type="button" class="model-chip" id="writingChip" title="切换写文模式" aria-pressed="false">写文：关</button><span class="model-chip" id="ctChip" title="搜索聊天 / 收藏">🔍</span><span class="model-chip" id="innerBtn" title="他不在你身边时想的">💭<span class="inner-badge" id="innerBadge"></span></span></div>
     </div>
     <button class="icon-btn" id="navBtn" title="去别的板块"></button>
   </div>
@@ -970,7 +971,7 @@
 <script>
   // ================= 个性化数据云同步（必须最先声明：后面 setTickets/saveGot 等在初始化时会调 pushPrefs） =================
   // 情绪日历/扭蛋/皮肤/记忆日志/收藏 → 存大脑持久磁盘，换设备/清缓存都拉得回。
-  const PREFS_KEYS=['moods','diary','tickets','gachaGot','gameLog','skin','brainLog','recycleBin','favs'];
+  const PREFS_KEYS=['moods','diary','tickets','gachaGot','gameLog','skin','brainLog','recycleBin','favs','writingMode'];
   let _prefsTimer=null, _prefsReady=false;   // 初次拉取完成前禁止上传，杜绝用初始默认值覆盖服务器
   function pushPrefs(){
     if(!_prefsReady) return;
@@ -999,6 +1000,7 @@
       try{ if(typeof compactBrainLog==='function') compactBrainLog(); }catch(e){}
       try{ recycleBin=JSON.parse(localStorage.getItem('recycleBin'))||[]; }catch(e){}
       try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
+      try{ writingMode=localStorage.getItem('writingMode')==='1'; paintWritingMode(); }catch(e){}
       try{ if(typeof renderMemory==='function') renderMemory(); }catch(e){}
       try{ if(typeof renderMist==='function') renderMist(); }catch(e){}
       try{ if(typeof renderCal==='function'&&typeof calVisible==='function'&&calVisible()) renderCal(); }catch(e){}
@@ -1385,6 +1387,24 @@
     });
   })();
 
+  // 显式写文开关：状态持久化，每轮请求都传给服务器，不用她反复提醒。
+  let writingMode=localStorage.getItem('writingMode')==='1';
+  const writingChip=document.getElementById('writingChip');
+  function paintWritingMode(){
+    if(!writingChip) return;
+    writingChip.textContent=writingMode?'写文：开':'写文：关';
+    writingChip.classList.toggle('writing-on',writingMode);
+    writingChip.setAttribute('aria-pressed',String(writingMode));
+  }
+  paintWritingMode();
+  if(writingChip) writingChip.onclick=()=>{
+    writingMode=!writingMode;
+    localStorage.setItem('writingMode',writingMode?'1':'0');
+    paintWritingMode();
+    if(typeof pushPrefs==='function') pushPrefs();
+    if(typeof addMsg==='function') addMsg('sys',writingMode?'写文模式已开启：接下来严格按写文指南。':'写文模式已关闭：回到日常聊天。');
+  };
+
   // 思考链：他没说出口的心里话
   let lastThink=localStorage.getItem('lastThink')||'';
   const thinkChip=document.getElementById('thinkChip'), thinkModal=document.getElementById('thinkModal');
@@ -1759,7 +1779,7 @@
     const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
       // client_dk/t：把手机自己的日期/时刻发给服务器落盘用——否则服务器盖洛杉矶时区的戳，
       // 和手机本地戳对不上，半夜发消息时同一条回复被打成两个日期→排到"昨天"滚出屏幕(像消失)
-      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, stream:true,
+      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode, stream:true,
                             client_dk:(typeof tKey==='function'?tKey():''), client_t:now() }),
       signal:ctrl.signal });
     if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
@@ -1987,7 +2007,7 @@
       catch(e){ streamed=false; }
       if(streamed && data===null){ return; }          // 半路断线：已转入轮询捞服务器存好的回复
       if(!streamed){
-        data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel,
+        data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode,
                               client_dk:(typeof tKey==='function'?tKey():''), client_t:now() });
         if(data&&data.error_code){ showChatError(data); return; }
         await showReply(data);

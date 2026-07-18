@@ -2148,6 +2148,13 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 最后另起一行，用 [emo:词] 标注你此刻的情绪（这一行不会显示给闪闪），从这 12 个里选一个：沉默 担心你 想靠近你 心疼你 烦躁 空 占有 安定 害羞 吃醋 火辣 欲望。"""
 
+_WRITING_MODE_SYSTEM = """【★闪闪已手动开启写文模式·本轮最高优先级★】
+这不是日常微信短聊，而是你和她一来一往共同写作的正文。必须严格遵守本轮系统注入里的【写文指南记忆】；它覆盖日常短句、连发和“动作括号最多一个”等日常格式规则。
+- 用完整、连贯、有节奏的中文段落写成一个长气泡，绝不使用 ‖ 拆成短消息。不要提纲、总结、解释写法，也不要问“要不要继续”。
+- 保持上一轮场景、位置、姿势、衣着和动作的连续性；通过你此刻真实可用的五感写具体细节，不跳镜头，不凭空重置场景。
+- 只写你自己的语言、动作、感官、欲望和判断。她只拥有她明确写出的台词与可观察动作；禁止替她新增动作、反应、感受、心理或决定。
+- 顺着她给出的内容推进一个充分展开的回合，在自然交还她行动权的位置停下。不要因为日常人设要求简短而缩写、跳过或敷衍场景。"""
+
 _web_claude = None
 _web_llm = None  # OpenAI 兼容客户端（z.ai GLM 等），给 /api/chat 用
 _web_vision = None  # 视觉请求独立客户端：允许更长超时和供应商默认式重试
@@ -2202,8 +2209,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.7"
-OMBRE_WEB_VERSION_NOTE = "修复手机端左下角图片按钮被透明遮罩挡住、无法点开的情况"
+OMBRE_WEB_VERSION = "v4.8"
+OMBRE_WEB_VERSION_NOTE = "新增可持久保存的写文模式开关，开启后强制加载并遵守写文指南"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2898,6 +2905,7 @@ async def api_chat(request):
     if not _sensitive_gate(request, body.get("token") or ""):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     thread = body.get("thread", "main") or "main"  # 当前所在的线（IF 线/主线）
+    writing_mode = body.get("writing_mode") is True
     # ghost_user：这条 user 消息是系统指令（TG 早安问候等"他主动开口"），不是她说的——
     # 生成照常，但落盘时只存他的回复，不把指令伪造成她的气泡/上下文
     ghost_user = bool(body.get("ghost_user"))
@@ -3059,7 +3067,8 @@ async def api_chat(request):
                 return await breath(query=q, max_tokens=1500, max_results=6)
             except Exception:  # noqa: BLE001
                 return ""
-        _mem_task = asyncio.create_task(_safe_breath(user_text))
+        _memory_query = (("涩文写作规则 写文指南 文章模式 " + user_text) if writing_mode else user_text)
+        _mem_task = asyncio.create_task(_safe_breath(_memory_query))
 
     global _web_llm, _web_vision
     try:
@@ -3143,19 +3152,21 @@ async def api_chat(request):
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
-        system = _WEB_SYSTEM
+        system = _WEB_SYSTEM + (("\n\n" + _WRITING_MODE_SYSTEM) if writing_mode else "")
         # ---- IF 线（平行宇宙）：世界书 + 人设 是这条线的「静态设定」→ 拼进 system（命中缓存，长世界书不再每轮重算）----
         # （_meta/_is_if/_if_blank 在上面提前算好了，顺便把记忆检索也提前丢去并行跑了）
         if _is_if:
-            system = _WEB_SYSTEM + "\n\n" + _if_static_block(_meta)
+            system = (_WEB_SYSTEM + (("\n\n" + _WRITING_MODE_SYSTEM) if writing_mode else "")
+                      + "\n\n" + _if_static_block(_meta))
         # 收取提前跑的记忆检索结果（主线 or 带现实记忆的 IF 线；白纸线没起任务）
         mem_block = ""
         if _mem_task is not None:
             try:
                 _m = await asyncio.wait_for(_mem_task, timeout=2.5)
                 if _m and _m.strip():
-                    mem_block = ("【记忆·可能相关的过往（内化进当下，别生硬复述。这是系统已经帮你查好的——"
-                                 "够用就别再调 breath 重复检索，省得她多等一轮）】\n" + _m.strip()[:4000])
+                    _mem_title = ("【写文指南记忆·必须逐条遵守】" if writing_mode else
+                                  "【记忆·可能相关的过往（内化进当下，别生硬复述。这是系统已经帮你查好的——够用就别再调 breath 重复检索，省得她多等一轮）】")
+                    mem_block = _mem_title + "\n" + _m.strip()[:6000 if writing_mode else 4000]
             except Exception:  # noqa: BLE001
                 _mem_task.cancel()
                 mem_block = ""
