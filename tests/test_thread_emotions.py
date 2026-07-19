@@ -90,6 +90,27 @@ def test_visual_state_uses_both_dominance_and_possessiveness(tmp_path):
     assert "占有" in high_poss["visual_reason"]
 
 
+def test_calm_resets_both_visual_state_layers(tmp_path):
+    import drives
+    import endocrine
+    import server
+
+    _reset_endocrine(endocrine, tmp_path / "endocrine.json")
+    _reset_drives(drives, tmp_path / "drives.json")
+    endocrine.set_levels(thread="main", dominance=10, libido=10)
+    drives._get_state("main")["v"]["possessiveness"] = 1.0
+    drives._get_state("main")["v"]["lust"] = 1.0
+
+    endocrine.calm("main")
+    drives.calm("main")
+    calm = server._endo_view("main")
+
+    assert calm["dim"] is False
+    assert calm["glow"] is False
+    assert calm["possessiveness"] == drives.NEUTRAL["possessiveness"]
+    assert calm["lust_drive"] == drives.NEUTRAL["lust"]
+
+
 def test_structured_if_worldbook_is_injected():
     import server
 

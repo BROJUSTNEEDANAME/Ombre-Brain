@@ -2210,8 +2210,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v4.9"
-OMBRE_WEB_VERSION_NOTE = "写文模式改为轻量提醒，取消每轮强制检索和长指南注入"
+OMBRE_WEB_VERSION = "v5.0"
+OMBRE_WEB_VERSION_NOTE = "合并暗红与发光按钮，恢复正常会同时重置占有欲和内分泌状态"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3493,7 +3493,7 @@ async def api_endocrine(request):
 
 @mcp.custom_route("/api/endocrine/calm", methods=["POST"])
 async def api_endocrine_calm(request):
-    """网页面板「让他冷静下来」：手动退出入夜/发光，欲望/支配数值降回安全区。"""
+    """恢复平稳：同时重置内分泌和情绪驱动，确保暗红、发光与占有条一起退出。"""
     from starlette.responses import JSONResponse
     import os
     try:
@@ -3504,8 +3504,10 @@ async def api_endocrine_calm(request):
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     try:
         import endocrine
+        import drives
         thread = body.get("thread", "main") or "main"
         endocrine.calm(thread)
+        drives.calm(thread)
         return JSONResponse(_endo_view(thread))
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)

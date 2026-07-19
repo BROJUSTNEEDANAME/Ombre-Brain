@@ -254,6 +254,16 @@ def state(thread: str = "main") -> dict:
 
 
 @_locked
+def calm(thread: str = "main") -> dict:
+    """Reset the drive layer so possessiveness and lust visual triggers really clear."""
+    st = _get_state(thread)
+    st["v"] = dict(NEUTRAL)
+    st["t"] = time.time()
+    _save()
+    return {"v": dict(st["v"]), "t": st["t"]}
+
+
+@_locked
 def delete_thread(thread: str) -> None:
     key = _thread_key(thread)
     if key != "main" and _states.pop(key, None) is not None:

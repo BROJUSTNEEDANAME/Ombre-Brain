@@ -919,10 +919,10 @@
         <button data-md="glm-5.1">GLM 5.1</button>
         <button data-md="glm-4.6">GLM 4.6</button>
       </div>
-      <div class="skin-label">氛围（手动开关，不看他的状态）</div>
+      <div class="skin-label">氛围</div>
       <div class="skin-theme" id="skinVibe">
-        <button data-vb="red">暗红入夜</button>
-        <button data-vb="glow">词语发光</button>
+        <button data-vb="both">暗红＋发光</button>
+        <button data-vb="reset">恢复正常</button>
       </div>
       <div class="skin-label">预设套装</div>
       <div class="skin-presets" id="skinPresets"></div>
@@ -1916,7 +1916,12 @@
     if(red && !had){ document.documentElement.setAttribute('data-theme','dark'); document.body.classList.add('desire-red'); }
     else if(!red && had){ document.body.classList.remove('desire-red'); if(typeof applyTheme==='function') applyTheme(); }
     const box=document.getElementById('skinVibe');
-    if(box) box.querySelectorAll('button').forEach(b=>b.classList.toggle('on', !!manualVibe[b.dataset.vb]));
+    if(box){
+      const manualOn=!!(manualVibe.red||manualVibe.glow);
+      const normal=!(red||glow);
+      box.querySelector('[data-vb="both"]')?.classList.toggle('on',manualOn);
+      box.querySelector('[data-vb="reset"]')?.classList.toggle('on',normal);
+    }
   }
   try{ lastEndo=JSON.parse(localStorage.getItem('endoState')||'null'); }catch(e){}
   function applyEndocrine(st){
@@ -2663,22 +2668,41 @@
     const calm=document.getElementById('endoCalm');
     if(calm) calm.onclick=async ()=>{
       calm.disabled=true; const old=calm.textContent; calm.textContent='……(深呼吸) 在冷静了';
+      manualVibe={red:false,glow:false};
+      try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
+      _endoDim=false; _endoGlow=false; _applyFx();
       try{
         const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
         const st=await r.json();
-        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
+        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); if(st.dominant) setEmotion(st.dominant); }
       }catch(e){}
       setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
     };
     // 开页先把他当前的身体状态捞回来（恢复入夜/发光 + 顶栏情绪同步——以前刷新后顶栏会掉回默认"安定"）
     refreshEndocrineForThread();
-    // 手动氛围开关接线 + 开页恢复上次的手动选择
+    // 手动氛围合并开关 + 真正恢复正常：同时清手动效果和两套情绪状态。
     const vb=document.getElementById('skinVibe');
-    if(vb) vb.querySelectorAll('button').forEach(b=>b.onclick=()=>{
-      manualVibe[b.dataset.vb]=!manualVibe[b.dataset.vb];
-      try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
-      _applyFx();
-    });
+    if(vb){
+      const both=vb.querySelector('[data-vb="both"]'), reset=vb.querySelector('[data-vb="reset"]');
+      if(both) both.onclick=()=>{
+        const on=!(manualVibe.red&&manualVibe.glow);
+        manualVibe={red:on,glow:on};
+        try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
+        _applyFx();
+      };
+      if(reset) reset.onclick=async()=>{
+        reset.disabled=true; const old=reset.textContent; reset.textContent='正在恢复…';
+        manualVibe={red:false,glow:false};
+        try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
+        _endoDim=false; _endoGlow=false; _applyFx();
+        try{
+          const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
+          const st=await r.json();
+          if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); if(st.dominant) setEmotion(st.dominant); }
+        }catch(e){}
+        reset.disabled=false; reset.textContent=old; _applyFx();
+      };
+    }
     _applyFx();
   })();
   // 日记/日历 收起+展开（默认收起，先看「我记下的」）
