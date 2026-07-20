@@ -39,7 +39,8 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, time as dtime
+import uuid
+from datetime import datetime, time as dtime, timezone
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
@@ -190,35 +191,21 @@ BRAIN_BASE = OMBRE_MCP_URL.replace("/mcp", "")
 _WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
 
 
-async def _main_ctx(limit: int = 24) -> list[dict]:
-    """从服务器主线聊天记录(log)现算上下文——记录是跨设备唯一权威，网页/TG 聊的都在里面。"""
-    try:
-        async with httpx.AsyncClient(timeout=15) as cli:
-            headers = {"Authorization": f"Bearer {_WEB_TOKEN}"} if _WEB_TOKEN else {}
-            r = await cli.get(BRAIN_BASE + "/api/chat/state",
-                              params={"thread": "main"}, headers=headers)
-            log = (r.json() or {}).get("log") or []
-    except Exception:  # noqa: BLE001
-        return []
-    ctx = []
-    for m in log:
-        if not isinstance(m, dict):
-            continue
-        side, text = m.get("side"), (m.get("text") or "").strip()
-        if side == "me" and text:
-            ctx.append({"role": "user", "content": text})
-        elif side == "you" and text:
-            ctx.append({"role": "assistant", "content": text})
-    return ctx[-limit:]
-
-
-async def _ask_brain(user_content, ghost: bool = False) -> list[str]:
+async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
+                     timestamp: str = "") -> list[str]:
     """把消息交给大脑主线（网页同一入口），拿回一组气泡（segments）。
     ghost=True＝这条是系统指令（早安/纪念日等他主动开口）：生成照常，
     但大脑落盘时只存他的回复，绝不把指令伪造成她说的话。"""
-    ctx = await _main_ctx()
-    body = {"messages": ctx + [{"role": "user", "content": user_content}],
-            "token": _WEB_TOKEN, "thread": "main"}
+    request_id = message_id or f"telegram:system:{uuid.uuid4()}"
+    body = {
+        "messages": [{"role": "user", "content": user_content}],
+        "token": _WEB_TOKEN,
+        "thread": "main",
+        "source": "telegram",
+        "message_id": request_id,
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "server_history": True,
+    }
     if ghost:
         body["ghost_user"] = True
     async with httpx.AsyncClient(timeout=240) as cli:
@@ -239,16 +226,24 @@ async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bo
         return
     for i, s in enumerate(segs):
         if i:
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.2)
         await _send_reply(context, chat_id, s)
 
 
-async def _sync_you_line(text: str) -> None:
+async def _sync_you_line(text: str, message_id: str) -> None:
     """把 TG 里他主动说的一句话（预设找她文案等）同步进主线记录——网页那边也看得到。"""
     try:
-        now = datetime.now(USER_TZ)
-        entry = {"side": "you", "text": text, "t": f"{now:%H:%M}",
-                 "dk": f"{now.year}-{now.month}-{now.day}"}
+        now_utc = datetime.now(timezone.utc)
+        local = now_utc.astimezone(USER_TZ)
+        entry = {
+            "id": message_id,
+            "side": "you",
+            "text": text,
+            "source": "telegram",
+            "ts": now_utc.isoformat(),
+            "t": f"{local:%H:%M}",
+            "dk": f"{local.year}-{local.month}-{local.day}",
+        }
         async with httpx.AsyncClient(timeout=10) as cli:
             await cli.post(BRAIN_BASE + "/api/chat/state",
                            json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []})
@@ -530,7 +525,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     try:
-        segs = await _ask_brain(user_text)   # ★走网页同一个大脑入口：同人设/记忆/现场
+        segs = await _ask_brain(
+            user_text,
+            message_id=f"telegram:{chat_id}:{update.message.message_id}",
+            timestamp=update.message.date.astimezone(timezone.utc).isoformat(),
+        )
     except Exception:  # noqa: BLE001
         logger.exception("大脑调用失败")
         if history and history[-1]["role"] == "user":
@@ -577,7 +576,11 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     try:
-        segs = await _ask_brain(blocks)
+        segs = await _ask_brain(
+            blocks,
+            message_id=f"telegram:{chat_id}:{update.message.message_id}",
+            timestamp=update.message.date.astimezone(timezone.utc).isoformat(),
+        )
     except Exception:  # noqa: BLE001
         logger.exception("图片消息处理失败")
         await update.message.reply_text("（图片我没接住，再发一次。）")
@@ -632,7 +635,11 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
     try:
-        segs = await _ask_brain(text)
+        segs = await _ask_brain(
+            text,
+            message_id=f"telegram:{chat_id}:{update.message.message_id}",
+            timestamp=update.message.date.astimezone(timezone.utc).isoformat(),
+        )
     except Exception:  # noqa: BLE001
         logger.exception("语音消息处理失败")
         await update.message.reply_text("（断了一下，再说一遍。）")
@@ -725,7 +732,11 @@ async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
             ),
         }
         try:
-            segs = await _ask_brain(prompt["content"], ghost=True)  # ghost：指令不伪造成她的话，只落他的问候
+            segs = await _ask_brain(
+                prompt["content"], ghost=True,
+                message_id=f"telegram:{chat_id}:morning:{now.date().isoformat()}",
+                timestamp=now.astimezone(timezone.utc).isoformat(),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("早安失败 chat=%s", chat_id)
             continue
@@ -766,7 +777,10 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("找她失败 chat=%s", chat_id)
             continue
-        await _sync_you_line(NUDGES[count])   # 同步进主线记录：网页那边也看得到他在找她
+        await _sync_you_line(
+            NUDGES[count],
+            f"telegram:{chat_id}:nudge:{int(last_activity_ts.get(chat_id, 0))}:{count}",
+        )
         nudge_count[chat_id] = count + 1
         last_nudge_ts[chat_id] = now
         _save_state()
@@ -812,7 +826,11 @@ async def daily_special_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
             ),
         }
         try:
-            segs = await _ask_brain(prompt["content"], ghost=True)
+            segs = await _ask_brain(
+                prompt["content"], ghost=True,
+                message_id=f"telegram:{chat_id}:special:{now.date().isoformat()}",
+                timestamp=now.astimezone(timezone.utc).isoformat(),
+            )
         except Exception:  # noqa: BLE001
             logger.exception("特殊日子主动找她失败 chat=%s", chat_id)
             continue

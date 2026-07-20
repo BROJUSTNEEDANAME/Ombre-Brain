@@ -1252,9 +1252,11 @@
     if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderRecycle==='function') renderRecycle(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
     if(name==='notes' && typeof renderNotes==='function') renderNotes();
     if(name==='home' && typeof renderNi==='function') renderNi();
+    try{ localStorage.setItem('homeSection',name); }catch(e){}
     syncFixedLayout();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
+  setTimeout(()=>go(localStorage.getItem('homeSection')||'home'),0);
 
   // ---------- 附件菜单（仿 Telegram/Claude：浮层小卡片，只留图片/文件） ----------
   const plusBtn = document.getElementById('plusBtn');
@@ -1325,18 +1327,18 @@
     }
     if(TEXT_EXT.test(f.name) && f.size <= 200*1024){       // 文本类文件：读正文给他看
       const txt=(await readTextFile(f)).slice(0,12000);
-      addMsg('me', '📄 '+f.name);
+      const sent=addMsg('me', '📄 '+f.name);
       sendRich(
         [ {type:'text', text:'（闪闪发来一个文件：'+f.name+'）\n\n'+txt} ],
-        '[文件] '+f.name
+        '[文件] '+f.name, sent&&sent.id, sent&&sent.ts
       );
       return;
     }
     // 其它类型（PDF/二进制等）：暂时只报文件名，让他知道你发了什么
-    addMsg('me', '📎 '+f.name);
+    const sent=addMsg('me', '📎 '+f.name);
     sendRich(
       [ {type:'text', text:'（闪闪发来一个文件：'+f.name+'，'+Math.round(f.size/1024)+'KB。我这边暂时读不了它的内容，但你可以告诉我这是什么。）'} ],
-      '[文件] '+f.name
+      '[文件] '+f.name, sent&&sent.id, sent&&sent.ts
     );
   }
   filePhoto.onchange=()=>pickedFile(filePhoto,'photo');
@@ -1512,6 +1514,11 @@
   function _lsHist(){ return curThread==='main'?'chatHist':'chatHist_'+curThread; }
   // 聊天记录持久化：关掉重开也在（按当前线取）
   let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){}
+  function _uuid(){
+    if(window.crypto&&typeof window.crypto.randomUUID==='function') return window.crypto.randomUUID();
+    return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+'-'+Math.random().toString(36).slice(2);
+  }
+  function _homeMessageId(){ return 'home:'+_uuid(); }
   // 收藏：长按气泡收藏某句话，存服务器(favs 已在同步键里)，可在「收藏」里回味
   let favs=[]; try{ favs=JSON.parse(localStorage.getItem('favs'))||[]; }catch(e){}
   function favKey(m){ return (m.t||'')+'|'+(m.text||''); }
@@ -1551,16 +1558,10 @@
   }
   function saveChat(){
     try{ localStorage.setItem(_lsChat(), JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(), JSON.stringify(chatHistory.slice(-40))); }catch(e){}
-    try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:chatHistory.slice(-40)})}); }catch(e){}
   }
   function _msgTime(m){ try{ const [y,mo,d]=(m.dk||tKey()).split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
-  // 消息「身份」＝侧＋正文＋图片指纹，★不含日期戳/时刻★。
-  // 时区错位会给同一条消息盖不同的 dk/t（服务器洛杉矶 vs 手机本地），只有忽略时间、认内容，
-  // 才能把「同一条被打成两份」合成一条——这是"我的话消失/退出重进出现两条一样"的正解。
   function _msgSig(m){
-    const t=(''+((m&&m.text)||'')).replace(/\s+/g,' ').trim().slice(0,120);
-    const im=(m&&m.img)?('#'+(''+m.img).length):'';   // 图片按数据长度粗略区分，防不同图误合
-    return (m&&m.side||'')+'|'+t+im;
+    return (m&&m.id)||'';
   }
   // 旧版“回来先开口”消息只有 HH:MM、没有日期。跨过午夜后若一律补成今天，
   // 昨天下午的 15:54 就会被排到今天 00:13 后面。按手机当前时间把明显在未来的旧时刻归到昨天。
@@ -1578,46 +1579,41 @@
     if(!m.dk || (m.dk===today && fixed!==today)) return Object.assign({},m,{dk:fixed});
     return m;
   }
-  // 合并本地+服务器：按内容去重（一条只留一份），保留先出现的那份（本地在前＝本地的 dk/t 权威）；
-  // 没 dk 的补成今天（否则被当 1970 排到最顶）。再按时间稳定排序。绝不因为时区差把消息拆成两条。
   function _mergeLogs(a,b){
     const seen=new Set(), out=[];
-    (a||[]).concat(b||[]).forEach(raw=>{ if(!raw||typeof raw!=='object')return; let m=_repairLegacyDate(raw);
+    (b||[]).concat(a||[]).forEach((raw,index)=>{ if(!raw||typeof raw!=='object')return; let m=_repairLegacyDate(raw);
       if(m.side==='you'){
         const cleaned=cleanAssistantText(m.text);
         if(!cleaned && !m.img) return;
         if(cleaned!==(m.text||'')) m=Object.assign({},m,{text:cleaned});
       }
-      const k=_msgSig(m); if(seen.has(k))return; seen.add(k);
+      const k=_msgSig(m); if(k&&seen.has(k))return; if(k)seen.add(k);
       out.push(m);
     });
-    out.forEach((m,i)=>m.__i=i);
-    out.sort((x,y)=>(_msgTime(x)-_msgTime(y))||(x.__i-y.__i));  // 时间排序，同分钟保持原序（稳定）
-    out.forEach(m=>{ delete m.__i; });
     return out;
   }
   async function loadServerChat(){
     if(typeof inFlight!=='undefined' && inFlight) return;  // 正在流式打字：绝不整屏重画（会把直播气泡抹掉）；等这轮说完再同步
     try{
+      const importKey='chatServerImportedV2_'+curThread;
+      if(!localStorage.getItem(importKey) && chatLog.length){
+        const imported=await fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40),import_legacy:true})});
+        if(imported.ok) localStorage.setItem(importKey,'1');
+      }
       const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread));
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
-      // 合并本地+服务器，按内容去重（防时区错位把消息拆两条 / 防多设备丢消息）
-      const merged=_mergeLogs(chatLog, srv);
+      const merged=srv.length?srv:_mergeLogs(chatLog,srv);
       // 重画条件：条数变了(新消息进来 或 去重后变少)，或顺序/内容和当前不一致——
       // 光看"变长"会漏掉"去重后变短"这种清理，导致重复消息一直挂着不消
-      const _sig=arr=>arr.map(m=>_msgSig(m)+'@'+(m.dk||'')+'@'+(m.t||'')).join('§');
+      const _sig=arr=>arr.map((m,i)=>(_msgSig(m)||('legacy:'+i))+'@'+(m.dk||'')+'@'+(m.t||'')).join('§');
       const changed = merged.length!==chatLog.length || _sig(merged)!==_sig(chatLog);
       if(changed){
         chatLog=merged;
-        // 服务器 hist 只在本地为空时才采用（新设备/清了缓存的引导）——本地上下文窗口才是对话顺序的权威。
-        // 以前"服务器的更长就整个替换"，会把错误合并出来的旧轮次灌进来 → 他跳回昨晚的话题。
-        if(!(chatHistory||[]).length && Array.isArray(data.hist)) chatHistory=data.hist;
+        if(Array.isArray(data.hist)) chatHistory=data.hist;
         try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
-        // 合并后把并集回推服务器,让两边最终一致（只在有变化时推，减少写竞争）
-        try{ fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40)})}); }catch(e){}
       }
     }catch(e){}
   }
@@ -1676,7 +1672,15 @@
     }
     scroll.appendChild(row); toBottom();
   }
-  function addMsg(side,text,img,think){ if(side==='you')text=cleanAssistantText(text).trim(); if(!(text&&(''+text).trim()) && !img) return; const t=now(); const m={side,text,t,img,think,dk:(typeof tKey==='function'?tKey():'')}; renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); }
+  function addMsg(side,text,img,think,meta){
+    if(side==='you')text=cleanAssistantText(text).trim();
+    if(!(text&&(''+text).trim()) && !img) return null;
+    const utc=(meta&&meta.ts)||new Date().toISOString();
+    const t=(meta&&meta.t)||now();
+    const m={id:(meta&&meta.id)||_homeMessageId(),source:(meta&&meta.source)||'home',side,text,t,img,think,ts:utc,dk:(meta&&meta.dk)||(typeof tKey==='function'?tKey():'')};
+    if(meta&&meta.reply_to)m.reply_to=meta.reply_to;
+    renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); return m;
+  }
   let thinkTimer=null, thinkWarnTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
     thinkText.textContent=THINK_POOL[Math.floor(Math.random()*THINK_POOL.length)];
@@ -1704,18 +1708,18 @@
     if(pendingImg){
       const img=pendingImg; pendingImg=null; showImgPreview();
       closeAttach();
-      addMsg('me', v, img.dataUrl);            // 气泡：图 + 文字说明
+      const sent=addMsg('me', v, img.dataUrl);            // 气泡：图 + 文字说明
       input.value=''; input.style.height='auto';
       const blocks=[];
       if(v) blocks.push({type:'text', text:v});
       blocks.push({type:'image', source:{type:'base64', media_type:'image/jpeg', data:img.b64}});
       petCtl && petCtl.wake();
-      sendRich(blocks, v ? (v+' ［图片］') : '［图片］');
+      sendRich(blocks, v ? (v+' ［图片］') : '［图片］', sent&&sent.id, sent&&sent.ts);
       return;
     }
     if(!v) return;
-    closeAttach(); addMsg('me',v); input.value=''; input.style.height='auto';
-    pending.push(v);
+    closeAttach(); const sent=addMsg('me',v); input.value=''; input.style.height='auto';
+    pending.push({content:v,id:sent&&sent.id,ts:sent&&sent.ts});
     petCtl && petCtl.wake(); // 你一说话，它就醒过来
     // 不再在发消息时随机跳情绪——顶栏只反映他回复后的真实情绪，跟面板同一个来源
     clearTimeout(debTimer); debTimer=setTimeout(flush, SEND_WAIT);
@@ -1724,6 +1728,7 @@
   // 像真人发微信：把回复分成几条气泡，逐条蹦出来，中间冒「正在输入」的小停顿
   async function showReply(data){
     const reply=(data&&data.reply)||'（……）';
+    const replyTo=(data&&data.message_id)||_homeMessageId();
     let segs=(data&&Array.isArray(data.segments)&&data.segments.length)?data.segments.slice(0,6):[reply];
     // 只清理本轮内部的重复段。不能拿历史气泡去重：他再次说“嗯”“睡吧”也是真实的新回复，
     // 历史去重会把整条正常消息吞掉，尤其容易出现在存记忆后的非流式降级路径。
@@ -1734,7 +1739,10 @@
     const _think=(data&&data.think)||'';           // 他这轮的内心/记忆，挂到最后一条气泡上，默认缩着
     for(let i=0;i<segs.length;i++){
       if(i>0) await sleep(300+Math.min(segs[i].length*14, 800));   // 条与条之间小停顿，像他在打下一条
-      addMsg('you', segs[i], null, i===segs.length-1 ? _think : '');
+      addMsg('you', segs[i], null, i===segs.length-1 ? _think : '', {
+        id:replyTo+':assistant:'+i,
+        source:'brain', reply_to:replyTo
+      });
     }
     petCtl && petCtl.fromType(true);
   }
@@ -1772,15 +1780,14 @@
     function texts(){ return rows.map(r=>{ const sp=r.querySelector('.btxt'); return sp?sp.textContent:''; }); }
     return { feed, destroy, texts, gotAny:()=>shown };
   }
-  async function streamReply(outgoing){
+  async function streamReply(outgoing,messageId,messageTs){
     const ctrl=new AbortController(); let idleT=null;
     const arm=()=>{ clearTimeout(idleT); idleT=setTimeout(()=>ctrl.abort(),120000); }; // 120s 没动静才算断
     arm();
     const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
-      // client_dk/t：把手机自己的日期/时刻发给服务器落盘用——否则服务器盖洛杉矶时区的戳，
-      // 和手机本地戳对不上，半夜发消息时同一条回复被打成两个日期→排到"昨天"滚出屏幕(像消失)
+      // UTC 是持久层唯一时间；服务器按 America/Los_Angeles 生成显示日期，自动处理夏令时。
       body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode, stream:true,
-                            client_dk:(typeof tKey==='function'?tKey():''), client_t:now() }),
+                            source:'home', message_id:messageId, timestamp:messageTs, server_history:true }),
       signal:ctrl.signal });
     if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
     const sink=makeStreamSink();
@@ -1813,7 +1820,7 @@
           // 有字但没等到 done：把已经打出来的字先落成正式消息（绝不让说过的话消失），再轮询跟服务器对账
           const seen=sink.texts?sink.texts():[];
           sink.destroy();
-          seen.forEach(s=>{ if(s&&s.trim()) addMsg('you',s.trim()); });
+          seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
           stopThinking(); pollForReply(60000); return null;
         }
         sink.destroy(); throw e;   // 一个字没收到 → 让外层退回非流式重来
@@ -1826,7 +1833,7 @@
       if(got){
         const seen=sink.texts?sink.texts():[];
         sink.destroy();
-        seen.forEach(s=>{ if(s&&s.trim()) addMsg('you',s.trim()); });
+        seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
         stopThinking(); pollForReply(60000); return null;
       }
       sink.destroy(); throw new Error('stream no done');
@@ -1842,7 +1849,9 @@
     const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||'（……）'];
     const fin=segs.map(s=>cleanAssistantText(s).trim()).filter(Boolean);
     stopThinking();
-    fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):''));
+    fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):'',{
+      id:((done&&done.message_id)||messageId)+':assistant:'+i,source:'brain',reply_to:(done&&done.message_id)||messageId
+    }));
     petCtl && petCtl.fromType(true);
     return done;
   }
@@ -1972,7 +1981,7 @@
         // 只在「切屏恢复/开页发现没回复」的场景开这个开关；流式半路断线的恢复不开（那边服务器多半已在写）。
         if(resendOnFail && !inFlight){
           const lm=chatLog[chatLog.length-1];
-          if(lm && lm.side==='me' && lm.text && !lm.img){ requestReply(lm.text, lm.text); }
+          if(lm && lm.side==='me' && lm.text && !lm.img){ requestReply(lm.text, lm.text, lm.id||_homeMessageId(), lm.ts||new Date().toISOString()); }
         }
       }
     };
@@ -1992,28 +2001,23 @@
     }
     else { loadServerChat(); }          // 普通回前台：同步一下——把你在 Telegram 那边聊的拉进来
   });
-  async function requestReply(userApiContent, histText){
+  async function requestReply(userApiContent, histText, messageId, messageTs){
     if(inFlight) return;            // 防重入：同一时刻只允许一条在途，杜绝重复请求/重复说
     inFlight=true;
     clearInterval(_recoverTimer);   // 停掉可能还挂着的恢复轮询——它每3秒整屏重画，会把直播气泡抹掉
     const reqStart=Date.now();
     startThinking();
-    // 上下文直接从聊天记录(chatLog)现算——记录是跨设备合并过的唯一权威，
-    // Telegram 上聊的也在里面 → 网页和 TG 永远是同一个现场、同一个他。
-    // (chatLog 已含刚发的这条'me'占位，去掉尾部重复后再挂上真实内容——图片等富内容记录里只有占位文字)
-    let _ctx = chatLog.filter(m=>m&&(m.side==='me'||m.side==='you')&&(m.text||'').trim())
-                      .slice(-24).map(m=>({role:m.side==='me'?'user':'assistant',content:m.text}));
-    if(_ctx.length && _ctx[_ctx.length-1].role==='user' && _ctx[_ctx.length-1].content===histText) _ctx.pop();
-    const outgoing = _ctx.concat([{role:'user',content:userApiContent}]).slice(-24);
+    messageId=messageId||_homeMessageId(); messageTs=messageTs||new Date().toISOString();
+    const outgoing = [{role:'user',content:userApiContent}];
     try{
       // 先走流式（一个字一个字打出来）；流式起不来（老浏览器/代理不支持）才退回一次性等全文
       let data=null, streamed=false;
-      try{ data=await streamReply(outgoing); streamed=true; }
+      try{ data=await streamReply(outgoing,messageId,messageTs); streamed=true; }
       catch(e){ streamed=false; }
       if(streamed && data===null){ return; }          // 半路断线：已转入轮询捞服务器存好的回复
       if(!streamed){
         data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode,
-                              client_dk:(typeof tKey==='function'?tKey():''), client_t:now() });
+                              source:'home', message_id:messageId, timestamp:messageTs, server_history:true });
         if(data&&data.error_code){ showChatError(data); return; }
         await showReply(data);
       }
@@ -2047,18 +2051,18 @@
   async function flush(){
     if(busy || !pending.length) return;
     busy=true;
-    const combined=pending.join('\n'); pending=[];
-    try{ await requestReply(combined, combined); }
+    const item=pending.shift();
+    try{ await requestReply(item.content, item.content, item.id, item.ts); }
     finally {
       busy=false;
       if(pending.length){ clearTimeout(debTimer); debTimer=setTimeout(flush, 400); } // 我回话时你又发了，回完接着处理
     }
   }
   // 发图片 / 文件：渲染气泡 + 把富内容发给大脑（图片走 vision，文本文件读正文，其它只报文件名）
-  async function sendRich(apiContent, histText){
-    if(busy){ setTimeout(()=>sendRich(apiContent,histText), 500); return; }
+  async function sendRich(apiContent, histText, messageId, messageTs){
+    if(busy){ setTimeout(()=>sendRich(apiContent,histText,messageId,messageTs), 500); return; }
     busy=true; petCtl && petCtl.wake();
-    try{ await requestReply(apiContent, histText); }
+    try{ await requestReply(apiContent, histText, messageId, messageTs); }
     finally { busy=false; if(pending.length){ clearTimeout(debTimer); debTimer=setTimeout(flush, 400); } }
   }
   sendBtn.onclick=send;

@@ -7,7 +7,11 @@ set -e
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$REPO_DIR/.env.apibot"
 SERVICE_FILE="/etc/systemd/system/ombre-apibot.service"
-PYTHON="$(which python3)"
+PYTHON="$REPO_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    echo "!! 找不到主仓库虚拟环境：$PYTHON"
+    exit 1
+fi
 
 echo "=== Ombre API Bot 部署 ==="
 echo "仓库路径: $REPO_DIR"
@@ -19,8 +23,8 @@ if [ ! -f "$ENV_FILE" ]; then
 # API Bot 的 Telegram token（和 cc_bridge 的不同的那个 bot）
 TELEGRAM_API_BOT_TOKEN=在这里填你的API bot token
 
-# Claude API key（console.anthropic.com 生成的）
-ANTHROPIC_API_KEY=在这里填你的key
+# GLM API key
+LLM_API_KEY=在这里填你的key
 
 # 你的 Telegram chat ID
 ALLOWED_CHAT_IDS=在这里填你的chat id
@@ -28,8 +32,8 @@ ALLOWED_CHAT_IDS=在这里填你的chat id
 # 大脑地址：指向本机的 brain server
 OMBRE_MCP_URL=http://127.0.0.1:8000/mcp
 
-# 模型（可选，默认 claude-opus-4-6）
-# OMBRE_BOT_MODEL=claude-opus-4-6
+# 保留现有 GLM 模型
+OMBRE_BOT_MODEL=glm-5.1
 
 # 时区
 OMBRE_BOT_TZ=America/Los_Angeles
@@ -50,22 +54,32 @@ if grep -q "在这里填" "$ENV_FILE"; then
     echo ""
     exit 1
 fi
+if ! grep -Eq '^ALLOWED_CHAT_IDS=[0-9]+(,[0-9]+)*$' "$ENV_FILE"; then
+    echo "!! ALLOWED_CHAT_IDS 必须保留现有 Telegram 用户白名单，拒绝开放启动"
+    exit 1
+fi
+chown ombre:ombre "$ENV_FILE"
+chmod 600 "$ENV_FILE"
 
 # 安装依赖
 echo "安装 Python 依赖..."
-pip3 install -q -r "$REPO_DIR/requirements-telegram.txt" 2>/dev/null || \
-pip3 install -q anthropic python-telegram-bot openai 2>/dev/null || true
+"$PYTHON" -m pip install -q -r "$REPO_DIR/requirements-telegram.txt"
 
 # 写 systemd service
 cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
 Description=Ombre Brain API Telegram Bot
-After=network.target
+After=network-online.target ombre-brain.service
+Wants=network-online.target
+Requires=ombre-brain.service
 
 [Service]
 Type=simple
+User=ombre
+Group=ombre
 WorkingDirectory=$REPO_DIR
 EnvironmentFile=$ENV_FILE
+Environment=OMBRE_BUCKETS_DIR=$REPO_DIR/buckets
 ExecStart=$PYTHON $REPO_DIR/telegram_bot.py
 Restart=always
 RestartSec=5
