@@ -57,6 +57,17 @@ from telegram.ext import (
 
 import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
+from adhd_manager import (
+    ManageStore,
+    detect_control,
+    detect_start,
+    fallback_steps,
+    is_progress_reply,
+    local_time_label,
+    parse_deadline,
+    parse_interval_minutes,
+    utc_now,
+)
 
 # ----------------------------------------------------------------------------
 # 配置 / Config
@@ -250,6 +261,29 @@ async def _sync_you_line(text: str, message_id: str) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+
+async def _sync_manage_line(chat_id: int, side: str, text: str, message_id: str) -> None:
+    """Keep management traffic in shared chat history without invoking memory extraction."""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        local = now_utc.astimezone(USER_TZ)
+        entry = {
+            "id": message_id,
+            "side": side,
+            "text": text,
+            "source": "telegram-manage",
+            "ts": now_utc.isoformat(),
+            "t": f"{local:%H:%M}",
+            "dk": f"{local.year}-{local.month}-{local.day}",
+        }
+        async with httpx.AsyncClient(timeout=10) as cli:
+            await cli.post(
+                BRAIN_BASE + "/api/chat/state",
+                json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []},
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("托管消息同步失败 chat=%s", chat_id)
+
 # ----------------------------------------------------------------------------
 # 人设 / System prompt —— 把 Opus「太 AI」往回掰
 # 细则不全写在这，靠大脑里的钉选核心准则；breath() 时会浮现。
@@ -373,6 +407,8 @@ def _stamp() -> str:
 
 # --- 对话线头落盘：重启后接得回来（存在大脑那块磁盘上）---
 STATE_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "telegram_state.json")
+MANAGE_STATE_FILE = os.path.join(os.environ.get("OMBRE_BUCKETS_DIR", "."), "adhd_manage_state.json")
+manage_store = ManageStore(MANAGE_STATE_FILE)
 
 
 def _save_state() -> None:
@@ -480,6 +516,250 @@ async def _ask_claude(history: list[dict]) -> str:
 # ----------------------------------------------------------------------------
 
 
+async def _plan_management_steps(goal: str) -> list[str]:
+    """Generate hidden micro-steps once; timers and progression never depend on the model."""
+    try:
+        memory = await _call_brain_tool(
+            "breath", {"query": goal, "max_tokens": 900, "max_results": 4}
+        )
+        response = await llm.chat.completions.create(
+            model=MODEL,
+            max_tokens=700,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        SYSTEM_PROMPT
+                        + "\n你现在只为 ADHD 托管拆隐藏步骤。参考关系记忆，但不要调用或写入任何记忆。"
+                        "只输出 JSON 字符串数组，4到8项。每项只能有一个立即可做的物理动作，短、具体，"
+                        "结尾写‘完成后回1’；不要一次对用户展示这些步骤。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"目标：{goal}\n可参考的既有记忆：{str(memory)[:3000]}",
+                },
+            ],
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        start, end = raw.find("["), raw.rfind("]")
+        parsed = json.loads(raw[start : end + 1]) if start >= 0 and end > start else []
+        steps = [str(item).strip()[:180] for item in parsed if isinstance(item, str) and item.strip()]
+        if 2 <= len(steps) <= 10:
+            return steps
+    except Exception:  # noqa: BLE001
+        logger.exception("托管步骤生成失败，使用本地模板 goal=%s", goal)
+    return fallback_steps(goal)
+
+
+async def _send_manage_text(context, chat_id: int, task: dict, text: str, event: str) -> None:
+    await _send_reply(context, chat_id, text)
+    await _sync_manage_line(
+        chat_id,
+        "you",
+        text,
+        f"telegram-manage:{chat_id}:{task.get('id', 'none')}:{event}:{uuid.uuid4()}",
+    )
+
+
+async def _sync_manage_user(update: Update) -> None:
+    await _sync_manage_line(
+        update.effective_chat.id,
+        "me",
+        update.message.text or "",
+        f"telegram:{update.effective_chat.id}:{update.message.message_id}",
+    )
+
+
+def _setup_question(task: dict) -> str:
+    missing = []
+    if not task.get("goal"):
+        missing.append("要托管的目标")
+    if not task.get("deadline_at"):
+        missing.append("最晚几点结束")
+    if not task.get("interval_minutes"):
+        missing.append("几分钟后第一次查你")
+    if len(missing) == 1:
+        return missing[0] + "？"
+    return "告诉我" + "、".join(missing) + "。"
+
+
+async def _activate_management(context, chat_id: int, task: dict) -> None:
+    steps = await _plan_management_steps(task["goal"])
+    task = manage_store.activate(chat_id, steps)
+    confirmation = (
+        f"好，托管你做「{task['goal']}」。最晚 {local_time_label(task['deadline_at'], USER_TZ)} 停，"
+        f"{task['interval_minutes']} 分钟后我来查你。"
+    )
+    await _send_manage_text(context, chat_id, task, confirmation, "confirmed")
+    await _send_manage_text(context, chat_id, task, manage_store.current_step(task), "step:0")
+
+
+async def _finish_management(context, chat_id: int, task: dict, reason: str) -> None:
+    completed = reason == "completed"
+    final_text = "做完了。过来让我抱一下。" if completed else "好，这次托管到这里。我没删你的进度。"
+    await _send_manage_text(context, chat_id, task, final_text, f"ended:{reason}")
+    try:
+        steps_done = min(int(task.get("step_index", 0)), len(task.get("steps") or []))
+        summary = (
+            f"ADHD托管总结：闪闪{'完成了' if completed else '结束了'}「{task.get('goal', '任务')}」，"
+            f"推进了 {steps_done} 个小步骤。"
+        )
+        await _call_brain_tool(
+            "hold",
+            {"content": summary, "tags": "ADHD托管,任务总结", "importance": 4, "feel": False},
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("托管总结写入失败 chat=%s", chat_id)
+
+
+async def manage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not _authorized(chat_id) or not ALLOWED_CHAT_IDS:
+        return
+    await _sync_manage_user(update)
+    raw = " ".join(context.args).strip() if context.args else ""
+    goal = detect_start("托管我" + raw) if raw else ""
+    task = manage_store.begin_setup(chat_id, goal)
+    deadline = parse_deadline(raw, tz=USER_TZ)
+    interval = parse_interval_minutes(raw)
+    task = manage_store.configure(chat_id, deadline_at=deadline, interval_minutes=interval)
+    if task.get("goal") and task.get("deadline_at") and task.get("interval_minutes"):
+        await _activate_management(context, chat_id, task)
+    else:
+        await _send_manage_text(context, chat_id, task, _setup_question(task), "setup")
+
+
+async def stop_manage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not _authorized(chat_id) or not ALLOWED_CHAT_IDS:
+        return
+    task = manage_store.get(chat_id)
+    if not task:
+        await update.message.reply_text("现在没有在托管。")
+        return
+    await _sync_manage_user(update)
+    ended = manage_store.end(chat_id, "stopped")
+    await _finish_management(context, chat_id, ended, "stopped")
+
+
+async def _maybe_handle_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Return True when this text belongs to the deterministic management flow."""
+    chat_id = update.effective_chat.id
+    text = (update.message.text or "").strip()
+    task = manage_store.get(chat_id)
+    goal = detect_start(text)
+
+    if not task and not goal:
+        return False
+    await _sync_manage_user(update)
+
+    if not task:
+        task = manage_store.begin_setup(chat_id, goal)
+        task = manage_store.configure(
+            chat_id,
+            deadline_at=parse_deadline(text, tz=USER_TZ),
+            interval_minutes=parse_interval_minutes(text),
+        )
+        if task.get("deadline_at") and task.get("interval_minutes"):
+            await _activate_management(context, chat_id, task)
+        else:
+            await _send_manage_text(context, chat_id, task, _setup_question(task), "setup")
+        return True
+
+    action = detect_control(text)
+    if action == "stop":
+        ended = manage_store.end(chat_id, "stopped")
+        await _finish_management(context, chat_id, ended, "stopped")
+        return True
+
+    if task["status"] == "setup":
+        existing_goal = task.get("goal") or goal
+        if not existing_goal and not parse_deadline(text, tz=USER_TZ) and not parse_interval_minutes(text):
+            existing_goal = text
+        task = manage_store.configure(
+            chat_id,
+            goal=existing_goal,
+            deadline_at=parse_deadline(text, tz=USER_TZ),
+            interval_minutes=parse_interval_minutes(text),
+        )
+        if task.get("goal") and task.get("deadline_at") and task.get("interval_minutes"):
+            await _activate_management(context, chat_id, task)
+        else:
+            await _send_manage_text(context, chat_id, task, _setup_question(task), "setup:retry")
+        return True
+
+    if action == "pause":
+        task = manage_store.pause(chat_id)
+        await _send_manage_text(context, chat_id, task, "暂停了。想回来时对我说继续。", "paused")
+        return True
+    if action == "resume":
+        extend = 30 if task["status"] == "limit_wait" else 0
+        task = manage_store.resume(chat_id, extend_minutes=extend)
+        prefix = "再给你三十分钟。" if extend else "继续。"
+        await _send_manage_text(
+            context, chat_id, task, prefix + manage_store.current_step(task), f"resumed:{task['step_index']}"
+        )
+        return True
+    if action == "replan":
+        steps = await _plan_management_steps(task["goal"])
+        task = manage_store.replace_steps(chat_id, steps)
+        await _send_manage_text(context, chat_id, task, manage_store.current_step(task), "replan:0")
+        return True
+    if task["status"] == "limit_wait":
+        await _send_manage_text(context, chat_id, task, "到最晚时间了。告诉我：继续、休息还是结束托管。", "limit:choice")
+        return True
+    if task["status"] == "paused":
+        return False
+
+    if task["status"] == "lost":
+        task = manage_store.resume(chat_id)
+        if not is_progress_reply(text) and action != "skip":
+            await _send_manage_text(
+                context, chat_id, task, "回来了就好。" + manage_store.current_step(task), f"returned:{task['step_index']}"
+            )
+            return True
+
+    if action == "skip":
+        task, finished = manage_store.advance(chat_id, skip=True)
+    elif is_progress_reply(text):
+        task, finished = manage_store.advance(chat_id)
+    else:
+        return False
+    if finished:
+        await _finish_management(context, chat_id, task, "completed")
+    else:
+        await _send_manage_text(
+            context, chat_id, task, manage_store.current_step(task), f"step:{task['step_index']}"
+        )
+    return True
+
+
+async def check_management(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Program-owned scheduler; restored state is naturally picked up after restart."""
+    reminders = (
+        "做到哪了，回我一下。",
+        "还在这件事上吗。卡住就告诉我，我给你拆小。",
+        "最后问一次。你回来时说继续，我就在这等。",
+    )
+    for event in manage_store.due_events(utc_now()):
+        task = event["task"]
+        chat_id = int(task["chat_id"])
+        if chat_id not in ALLOWED_CHAT_IDS:
+            continue
+        try:
+            if event["kind"] == "limit":
+                text = "到最晚时间了。继续、休息还是结束？"
+                key = "limit"
+            else:
+                count = event["count"]
+                text = reminders[count - 1]
+                key = f"reminder:{count}"
+            await _send_manage_text(context, chat_id, task, text, key)
+        except Exception:  # noqa: BLE001
+            logger.exception("托管定时消息发送失败 chat=%s", chat_id)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if not _authorized(chat_id):
@@ -517,6 +797,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_text = update.message.text
     last_user_ts[chat_id] = time.time()
     nudge_count[chat_id] = 0
+    if await _maybe_handle_management(update, context):
+        _save_state()
+        return
     history = histories.setdefault(chat_id, [])  # 本地影子：只给值守任务当参考，上下文以大脑主线为准
     history.append({"role": "user", "content": user_text})
     if len(history) > MAX_HISTORY_MESSAGES:
@@ -765,6 +1048,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
     drives.tick_silence()  # 焦虑/思念自己往上爬（本地，免费）
     gap = INACTIVITY_MINUTES * 60
     for chat_id, ts in list(last_user_ts.items()):
+        if manage_store.get(chat_id):
+            continue  # 托管有自己的三次提醒上限，不叠加普通沉默推送
         if now - ts < gap:
             continue  # 她还算在线
         if now - last_nudge_ts.get(chat_id, ts) < gap:
@@ -851,10 +1136,14 @@ def main() -> None:
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
+    app.add_handler(CommandHandler("manage", manage_cmd))
+    app.add_handler(CommandHandler("stopmanage", stop_manage_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
+        # ADHD 托管由程序每 15 秒检查持久化的 UTC 时间，重启无需模型回忆。
+        app.job_queue.run_repeating(check_management, interval=15, first=5)
         # 沉默时每 ~15 分钟主动找她的「找她」推送：默认关掉（闪闪嫌烦）。
         # 想再打开就设环境变量 OMBRE_NUDGE=1。
         if os.environ.get("OMBRE_NUDGE", "").strip() in ("1", "true", "True", "yes"):

@@ -23,6 +23,9 @@ fi
 if [ -f "$REPO/buckets/telegram_state.json" ]; then
     cp -a "$REPO/buckets/telegram_state.json" "$SAFE/main.telegram_state.json"
 fi
+if [ -f "$REPO/buckets/adhd_manage_state.json" ]; then
+    cp -a "$REPO/buckets/adhd_manage_state.json" "$SAFE/adhd_manage_state.json"
+fi
 git rev-parse HEAD > "$SAFE/main.sha"
 git -C "$OLD" rev-parse HEAD > "$SAFE/old.sha"
 chmod -R go-rwx "$SAFE"
@@ -40,8 +43,8 @@ trap rollback_bot ERR
 
 git fetch origin main --quiet
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-.venv/bin/python -m pytest -q tests/test_chat_store.py
-.venv/bin/python -m compileall -q server.py telegram_bot.py chat_store.py
+.venv/bin/python -m pytest -q tests/test_chat_store.py tests/test_adhd_manager.py
+.venv/bin/python -m compileall -q server.py telegram_bot.py chat_store.py adhd_manager.py
 bash -n setup-apibot.sh
 git diff --exit-code
 git diff --cached --exit-code
@@ -144,7 +147,7 @@ for attempt in range(30):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.2":
+        if data.get("version") == "v5.3":
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -168,5 +171,5 @@ grep -Eq '^ALLOWED_CHAT_IDS=[0-9]+(,[0-9]+)*$' "$REPO/.env.apibot"
 trap - ERR
 echo "DEPLOY-PASS"
 echo "Backup: $SAFE"
-echo "Version: v5.2"
+echo "Version: v5.3"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active"

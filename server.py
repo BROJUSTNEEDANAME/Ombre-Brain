@@ -70,6 +70,7 @@ from chat_store import (
     response_for as _chat_response_for,
     save as _chat_save,
 )
+from adhd_manager import ManageStore
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
@@ -2241,8 +2242,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.2"
-OMBRE_WEB_VERSION_NOTE = "Telegram 恢复为主要入口；Home 与 Telegram 共用服务器权威历史、稳定消息 ID 和 UTC 时间"
+OMBRE_WEB_VERSION = "v5.3"
+OMBRE_WEB_VERSION_NOTE = "新增 Telegram ADHD 托管、程序定时追问、沉浸保护与重启恢复；Home 显示当前托管状态"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2250,6 +2251,18 @@ async def api_version(request):
     """网页开页时查当前版本；和 localStorage 里存的对比，变了就弹「已更新至 …」。"""
     from starlette.responses import JSONResponse
     return JSONResponse({"version": OMBRE_WEB_VERSION, "note": OMBRE_WEB_VERSION_NOTE})
+
+
+@mcp.custom_route("/api/manage/status", methods=["GET"])
+async def api_manage_status(request):
+    """Home reads the Telegram-owned supervisor state; it does not control it."""
+    from starlette.responses import JSONResponse
+
+    if not _sensitive_gate(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    base = os.environ.get("OMBRE_BUCKETS_DIR") or config.get("buckets_dir", "./buckets")
+    path = os.path.join(base, "adhd_manage_state.json")
+    return JSONResponse(ManageStore(path).public_status())
 
 
 _MEM_WRITE_LOCK: "asyncio.Lock | None" = None

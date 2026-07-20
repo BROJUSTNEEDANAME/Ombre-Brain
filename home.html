@@ -254,6 +254,11 @@
   .memspace .mem-card .mdel { position: absolute; top: 6px; right: 8px; font-size: 15px; line-height: 1; color: var(--text-faint); cursor: pointer; opacity: .6; }
   .memspace .mem-card .mdel:active { opacity: 1; }
   .memspace .mem-empty { font-size: 12.5px; color: var(--text-faint); padding: 4px 2px; }
+  .manage-card { display: flex; align-items: center; gap: 13px; text-align: left; }
+  .manage-orb { width: 38px; height: 38px; border-radius: 14px; flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--hair); }
+  .manage-copy { min-width: 0; flex: 1; }
+  .manage-title { font-family: 'Noto Serif SC', serif; font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .manage-meta { margin-top: 4px; font-size: 11.5px; color: var(--text-faint); }
   .sysnote { align-self: center; max-width: 82%; text-align: center; font-size: 11.5px; color: var(--accent); background: var(--field-glass); backdrop-filter: blur(12px) saturate(1.6); -webkit-backdrop-filter: blur(12px) saturate(1.6); border: 1px solid var(--hair); border-radius: 12px; padding: 5px 14px; margin: 9px 0 3px; animation: pop .3s ease; box-shadow: var(--sh-soft); }
   @keyframes pop { from { transform: translateY(7px) scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
   /* 「他不在时」独立面板 —— 不塞进聊天流，刷新/重画都不会被吞 */
@@ -801,6 +806,15 @@
           </div>
         </div>
 
+        <div class="card manage-card" id="manageCard" style="margin-top:18px">
+          <div class="manage-orb">◎</div>
+          <div class="manage-copy">
+            <div class="kicker">ADHD 托管</div>
+            <div class="manage-title" id="manageTitle">当前没有托管任务</div>
+            <div class="manage-meta" id="manageMeta">从 Telegram 对 Nikto 说“托管我……”</div>
+          </div>
+        </div>
+
         <div class="card memspace" style="margin-top:18px">
           <div class="kicker">回忆空间</div>
           <p class="mem-hint">长按聊天里的任意气泡就能收藏，收藏的话都收在这，慢慢攒。</p>
@@ -1238,6 +1252,26 @@
   const navBackdrop = document.getElementById('navBackdrop');
   const composer = document.getElementById('composer');
   const attachSheet = document.getElementById('attachSheet');
+  async function loadManageStatus(){
+    const title=document.getElementById('manageTitle'), meta=document.getElementById('manageMeta');
+    if(!title||!meta)return;
+    try{
+      const res=await fetch('api/manage/status'), st=await res.json();
+      if(!res.ok)throw new Error('status '+res.status);
+      if(!st.active){ title.textContent='当前没有托管任务'; meta.textContent='从 Telegram 对 Nikto 说“托管我……”'; return; }
+      const labels={setup:'等待确认',active:'正在托管',paused:'已暂停',lost:'失联等待',limit_wait:'到达最晚时间'};
+      title.textContent=st.task||'未命名任务';
+      let line=labels[st.status]||'正在托管';
+      if(st.next_check_at){
+        const next=new Date(st.next_check_at).toLocaleTimeString('zh-CN',{timeZone:'America/Los_Angeles',hour:'2-digit',minute:'2-digit',hour12:false});
+        line+=' · 下次检查 '+next;
+      }else if(st.deadline_at){
+        const end=new Date(st.deadline_at).toLocaleTimeString('zh-CN',{timeZone:'America/Los_Angeles',hour:'2-digit',minute:'2-digit',hour12:false});
+        line+=' · 最晚 '+end;
+      }
+      meta.textContent=line;
+    }catch(e){ title.textContent='托管状态暂时读不到'; meta.textContent='Telegram 托管不受影响'; }
+  }
   function closeNav(){ nav.classList.remove('open'); navBackdrop.classList.remove('open'); }
   navBtn.onclick = () => { const open=!nav.classList.contains('open'); nav.classList.toggle('open',open); navBackdrop.classList.toggle('open',open); };
   navBackdrop.onclick = closeNav;
@@ -1251,12 +1285,13 @@
     closeNav();
     if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderRecycle==='function') renderRecycle(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
     if(name==='notes' && typeof renderNotes==='function') renderNotes();
-    if(name==='home' && typeof renderNi==='function') renderNi();
+    if(name==='home'){ if(typeof renderNi==='function') renderNi(); loadManageStatus(); }
     try{ localStorage.setItem('homeSection',name); }catch(e){}
     syncFixedLayout();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
   setTimeout(()=>go(localStorage.getItem('homeSection')||'home'),0);
+  setInterval(()=>{ if(document.querySelector('.page[data-page="home"].active')) loadManageStatus(); },30000);
 
   // ---------- 附件菜单（仿 Telegram/Claude：浮层小卡片，只留图片/文件） ----------
   const plusBtn = document.getElementById('plusBtn');
