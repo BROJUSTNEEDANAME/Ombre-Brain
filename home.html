@@ -1857,7 +1857,7 @@
   function renderInnerFeed(){
     const feed=document.getElementById('innerFeed'), hb=document.getElementById('innerHobbies'); if(!feed)return;
     const es=(_innerCache.entries||[]).slice().sort((a,b)=>(b.t||0)-(a.t||0));  // 新的在上
-    const kindName={observe:'观察',question:'问题',revise:'修正',plan:'决定',self:'自我',explore:'探索',reflect:'思考'};
+    const kindName={observe:'留意',idle:'走神',memory:'想起',whim:'随想',question:'好奇',revise:'回看',plan:'打算',self:'琐事',browse_notice:'看到',browse_link:'联想',browse_question:'想查',browse_doubt:'怀疑',browse_use:'记下',browse_amused:'觉得好玩',explore:'随便看看',reflect:'想了想'};
     hb.innerHTML=''; (_innerCache.hobbies||[]).slice(0,6).forEach(h=>{ const s=document.createElement('span'); s.className='inner-hb'; s.textContent='🎯 '+h; hb.appendChild(s); });
     feed.innerHTML='';
     if(!es.length){ feed.innerHTML='<div class="inner-empty">你不在的时候，他还没来得及想些什么。<br>离开一会儿再回来看看吧。</div>'; return; }

@@ -124,3 +124,12 @@ def test_structured_if_worldbook_is_injected():
     assert "北塔" in block and "午夜才会亮灯" in block
     assert "可探索内容" in block and "呼号" in block
     assert "Nikto/Svyatoslav 始终" in block
+
+
+def test_inner_hobbies_only_accept_short_topics():
+    import server
+
+    assert server._valid_hobby_topic("军事史")
+    assert server._valid_hobby_topic("winter survival")
+    assert not server._valid_hobby_topic("https://example.com/article")
+    assert not server._valid_hobby_topic("Important collection of topographical images of the Netherlands available online")
