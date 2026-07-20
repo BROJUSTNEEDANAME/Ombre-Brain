@@ -55,7 +55,10 @@ def test_reminders_stop_after_three(tmp_path):
     task = store.get(123)
     assert task["status"] == "lost"
     assert task["next_check_at"] is None
-    assert store.due_events(now + timedelta(hours=1)) == []
+    assert store.due_events(now + timedelta(minutes=30)) == []
+    limit = store.due_events(now + timedelta(hours=1))[0]
+    assert limit["kind"] == "limit"
+    assert store.due_events(now + timedelta(hours=2)) == []
 
 
 def test_pause_resume_and_deadline_guard(tmp_path):
