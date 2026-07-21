@@ -815,6 +815,15 @@
           </div>
         </div>
 
+        <div class="card manage-card" id="readingCard" style="margin-top:18px;cursor:pointer">
+          <div class="manage-orb">页</div>
+          <div class="manage-copy">
+            <div class="kicker">和 Nikto 共读</div>
+            <div class="manage-title" id="readingTitle">进入共读</div>
+            <div class="manage-meta" id="readingMeta">粘贴章节链接，边读边和他说</div>
+          </div>
+        </div>
+
         <div class="card memspace" style="margin-top:18px">
           <div class="kicker">回忆空间</div>
           <p class="mem-hint">长按聊天里的任意气泡就能收藏，收藏的话都收在这，慢慢攒。</p>
@@ -1272,6 +1281,20 @@
       meta.textContent=line;
     }catch(e){ title.textContent='托管状态暂时读不到'; meta.textContent='Telegram 托管不受影响'; }
   }
+  async function loadReadingStatus(){
+    const title=document.getElementById('readingTitle'), meta=document.getElementById('readingMeta');
+    if(!title||!meta)return;
+    try{
+      const res=await fetch('api/coreading/state'), st=await res.json();
+      if(!res.ok)throw new Error('status '+res.status);
+      if(!st.active){title.textContent='进入共读';meta.textContent='粘贴章节链接，边读边和他说';return;}
+      title.textContent=st.chapter_title||st.work_title||'继续共读';
+      const when=st.last_read_at?new Date(st.last_read_at).toLocaleString('zh-CN',{timeZone:'America/Los_Angeles',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+      meta.textContent=(st.work_title||'')+(st.paragraph_id?' · '+st.paragraph_id:'')+(when?' · '+when:'');
+    }catch(e){title.textContent='进入共读';meta.textContent='共读状态暂时读不到，聊天不受影响';}
+  }
+  const readingCard=document.getElementById('readingCard');
+  if(readingCard) readingCard.onclick=()=>{ location.href='coreading'; };
   function closeNav(){ nav.classList.remove('open'); navBackdrop.classList.remove('open'); }
   navBtn.onclick = () => { const open=!nav.classList.contains('open'); nav.classList.toggle('open',open); navBackdrop.classList.toggle('open',open); };
   navBackdrop.onclick = closeNav;
@@ -1285,13 +1308,13 @@
     closeNav();
     if(name==='cal'){ if(typeof renderBrain==='function') renderBrain(); if(typeof renderRecycle==='function') renderRecycle(); if(typeof renderMist==='function') renderMist(); const tg=document.getElementById('calToggle'); if(tg&&tg.classList.contains('open')&&typeof renderCal==='function') renderCal(); }
     if(name==='notes' && typeof renderNotes==='function') renderNotes();
-    if(name==='home'){ if(typeof renderNi==='function') renderNi(); loadManageStatus(); }
+    if(name==='home'){ if(typeof renderNi==='function') renderNi(); loadManageStatus(); loadReadingStatus(); }
     try{ localStorage.setItem('homeSection',name); }catch(e){}
     syncFixedLayout();
   }
   nav.querySelectorAll('button').forEach(b => b.onclick = () => go(b.dataset.go));
   setTimeout(()=>go(localStorage.getItem('homeSection')||'home'),0);
-  setInterval(()=>{ if(document.querySelector('.page[data-page="home"].active')) loadManageStatus(); },30000);
+  setInterval(()=>{ if(document.querySelector('.page[data-page="home"].active')){ loadManageStatus(); loadReadingStatus(); } },30000);
 
   // ---------- 附件菜单（仿 Telegram/Claude：浮层小卡片，只留图片/文件） ----------
   const plusBtn = document.getElementById('plusBtn');
@@ -1615,15 +1638,21 @@
     return m;
   }
   function _mergeLogs(a,b){
-    const seen=new Set(), out=[];
-    (b||[]).concat(a||[]).forEach((raw,index)=>{ if(!raw||typeof raw!=='object')return; let m=_repairLegacyDate(raw);
+    const positions=new Map(), out=[];
+    const normalized=raw=>{ if(!raw||typeof raw!=='object')return null; let m=_repairLegacyDate(raw);
       if(m.side==='you'){
         const cleaned=cleanAssistantText(m.text);
-        if(!cleaned && !m.img) return;
+        if(!cleaned && !m.img) return null;
         if(cleaned!==(m.text||'')) m=Object.assign({},m,{text:cleaned});
       }
-      const k=_msgSig(m); if(k&&seen.has(k))return; if(k)seen.add(k);
-      out.push(m);
+      return m;
+    };
+    // The server defines canonical order. Local fields fill gaps on matching
+    // IDs, and local-only rows are retained for the first safe upload.
+    (b||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);if(k&&positions.has(k))return;if(k)positions.set(k,out.length);out.push(m);});
+    (a||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);
+      if(k&&positions.has(k)){const at=positions.get(k);out[at]=Object.assign({},m,out[at]);return;}
+      if(k)positions.set(k,out.length);out.push(m);
     });
     return out;
   }
@@ -1638,10 +1667,15 @@
       const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread));
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
-      const merged=srv.length?srv:_mergeLogs(chatLog,srv);
+      // Server is authoritative for ordering, but local rows may contain UI
+      // metadata written just before a refresh. Merge by stable message ID so
+      // think/recorded fields survive while the server catches up.
+      const merged=_mergeLogs(chatLog,srv);
       // 重画条件：条数变了(新消息进来 或 去重后变少)，或顺序/内容和当前不一致——
       // 光看"变长"会漏掉"去重后变短"这种清理，导致重复消息一直挂着不消
-      const _sig=arr=>arr.map((m,i)=>(_msgSig(m)||('legacy:'+i))+'@'+(m.dk||'')+'@'+(m.t||'')).join('§');
+      const _sig=arr=>arr.map((m,i)=>JSON.stringify([
+        _msgSig(m)||('legacy:'+i),m.dk||'',m.t||'',m.text||'',m.think||'',m.recorded||[],m.emotion||'',m.diary||''
+      ])).join('§');
       const changed = merged.length!==chatLog.length || _sig(merged)!==_sig(chatLog);
       if(changed){
         chatLog=merged;
@@ -1649,6 +1683,11 @@
         try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
         scroll.querySelectorAll('.row').forEach(r=>r.remove());
         chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
+        // Rehydrate auxiliary state from canonical message metadata. recordBrain
+        // already merges equivalent entries, so repeated refreshes stay idempotent.
+        const withThink=chatLog.slice().reverse().find(m=>m.side==='you'&&m.think);
+        if(withThink){ lastThink=withThink.think; try{localStorage.setItem('lastThink',lastThink);}catch(e){} }
+        chatLog.forEach(m=>{ if(Array.isArray(m.recorded)&&typeof recordBrain==='function') m.recorded.forEach(recordBrain); });
       }
     }catch(e){}
   }

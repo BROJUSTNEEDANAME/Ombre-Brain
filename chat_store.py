@@ -126,6 +126,7 @@ def make_message(
     source: str,
     timestamp: str | None = None,
     reply_to: str | None = None,
+    extras: dict | None = None,
 ) -> dict:
     ts = normalize_utc(timestamp)
     dk, clock = display_parts(ts)
@@ -140,6 +141,14 @@ def make_message(
     }
     if reply_to:
         message["reply_to"] = reply_to
+    if extras:
+        # Auxiliary UI state belongs to the same stable message. Keeping it here
+        # prevents a server refresh from replacing a rich local bubble with a
+        # text-only copy.
+        for key in ("think", "recorded", "emotion", "diary"):
+            value = extras.get(key)
+            if value not in (None, "", []):
+                message[key] = value
     return message
 
 
@@ -165,7 +174,14 @@ def response_for(log: list, request_id: str) -> dict | None:
     if not replies:
         return None
     segments = [str(m.get("text") or "") for m in replies if str(m.get("text") or "").strip()]
-    return {"reply": "\n".join(segments), "segments": segments, "deduplicated": True}
+    last = replies[-1]
+    return {
+        "reply": "\n".join(segments),
+        "segments": segments,
+        "think": str(last.get("think") or ""),
+        "recorded": list(last.get("recorded") or []),
+        "deduplicated": True,
+    }
 
 
 def _lock_for(path: str) -> threading.RLock:
@@ -205,4 +221,3 @@ def save(path: str, data: dict) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-

@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py .
 COPY dashboard.html .
 COPY home.html .
+COPY coreading.html .
 COPY assets ./assets
 COPY config.example.yaml ./config.yaml
 

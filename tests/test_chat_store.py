@@ -68,3 +68,18 @@ def test_display_timezone_uses_zoneinfo_dst_rules():
     assert (winter_day, winter_time) == ("2026-1-15", "12:00")
     assert (summer_day, summer_time) == ("2026-7-15", "13:00")
     assert datetime.fromisoformat("2026-07-15T20:00:00+00:00").utcoffset().total_seconds() == 0
+
+
+def test_auxiliary_reply_state_survives_save_and_retry(tmp_path):
+    path = tmp_path / "chat.json"
+    reply = make_message(
+        "home:r:assistant:0", "you", "我在。", source="brain", reply_to="home:r",
+        extras={"think": "没说出口的念头", "recorded": ["事实：一条提醒"]},
+    )
+    save(str(path), {"log": [reply]})
+    stored = load(str(path))
+    assert stored["log"][0]["think"] == "没说出口的念头"
+    assert stored["log"][0]["recorded"] == ["事实：一条提醒"]
+    retry = response_for(stored["log"], "home:r")
+    assert retry["think"] == "没说出口的念头"
+    assert retry["recorded"] == ["事实：一条提醒"]
