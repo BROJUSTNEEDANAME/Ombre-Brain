@@ -60,6 +60,7 @@ from utils import (
     classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
+from reply_sanitizer import sanitize_reasoning_markup
 from chat_store import (
     history_from_log as _chat_history_from_log,
     load as _chat_load,
@@ -2343,8 +2344,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.5"
-OMBRE_WEB_VERSION_NOTE = "提高 GLM 上下文缓存命中：稳定前缀与路由，并增加真实 cached_tokens 统计"
+OMBRE_WEB_VERSION = "v5.4.6"
+OMBRE_WEB_VERSION_NOTE = "修复 GLM 推理标签泄漏：清理新回复及历史气泡中的 think 标记"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3783,6 +3784,7 @@ async def api_chat(request):
             # 流中断偶尔只留下 `占有]`；仅删除独占一行的控制词，不动正常句子。
             _ew = "|".join(map(re.escape, _EMO_WORDS))
             s = re.sub(r"(?m)^\s*[\]］】]?\s*(?:" + _ew + r")\s*[\]］】]?\s*$", "", s)
+            s = sanitize_reasoning_markup(s)
             s = sanitize_scripted_transcript(s, writing_mode=writing_mode)
             # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
             # 没打就用内分泌+15维情绪算出的主导词（零成本）。

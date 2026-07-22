@@ -10,6 +10,7 @@ from utils import (
     structure_user_observation,
     repetitive_inner_thought,
 )
+from reply_sanitizer import sanitize_reasoning_markup
 
 
 def test_memory_summary_channel_parses_fact_and_feeling_separately():
@@ -54,6 +55,21 @@ def test_repeated_assistant_block_is_collapsed():
 def test_normal_long_reply_is_untouched():
     text = "先把饭吃好。" * 3 + "然后去休息，别再硬撑着。" * 3
     assert collapse_repeated_reply(text) == text
+
+
+def test_provider_reasoning_block_is_hidden_when_visible_reply_exists():
+    text = "<think>internal draft</think>回床上，我给你盖被子。"
+    assert sanitize_reasoning_markup(text) == "回床上，我给你盖被子。"
+
+
+def test_orphan_provider_reasoning_tag_is_removed():
+    text = "回床上，我给你盖被子。</think>"
+    assert sanitize_reasoning_markup(text) == "回床上，我给你盖被子。"
+
+
+def test_fully_wrapped_reply_keeps_usable_text():
+    text = "<think>回床上，我给你盖被子。</think>"
+    assert sanitize_reasoning_markup(text) == "回床上，我给你盖被子。"
 
 
 def test_parenthesized_user_content_is_visible_action_not_dialogue():

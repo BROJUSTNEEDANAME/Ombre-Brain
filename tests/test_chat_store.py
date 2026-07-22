@@ -108,3 +108,18 @@ def test_save_keeps_latest_messages_by_time_not_import_order(tmp_path):
     save(str(path), {"log": log})
 
     assert [message["id"] for message in load(str(path))["log"]] == ["old", "new"]
+
+
+def test_load_cleans_assistant_reasoning_tag_but_preserves_user_literal(tmp_path):
+    path = tmp_path / "chat.json"
+    user = make_message("home:user", "me", "这个标签 </think>", source="home")
+    reply = make_message(
+        "home:reply", "you", "我在。</think>", source="brain", reply_to="home:user"
+    )
+
+    save(str(path), {"log": [user, reply]})
+    stored = load(str(path))["log"]
+
+    assert stored[0]["text"] == "这个标签 </think>"
+    assert stored[1]["text"] == "我在。"
+    assert stored[1]["id"] == "home:reply"

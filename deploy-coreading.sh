@@ -59,10 +59,10 @@ git merge --ff-only origin/main
 .venv/bin/python -m pytest -q \
     tests/test_chat_store.py tests/test_adhd_manager.py tests/test_coreading.py \
     tests/test_prompt_output.py tests/test_personality.py tests/test_writing_style.py \
-    tests/test_prompt_cache.py
+    tests/test_prompt_cache.py tests/test_dedup_helpers.py
 .venv/bin/python -m compileall -q \
     server.py telegram_bot.py chat_store.py adhd_manager.py coreading.py anno_client.py \
-    personality.py writing_style.py prompt_cache.py
+    personality.py writing_style.py prompt_cache.py reply_sanitizer.py
 bash -n install-anno.sh deploy-coreading.sh
 bash install-anno.sh
 
@@ -77,7 +77,7 @@ for _ in range(40):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.4.5":
+        if data.get("version") == "v5.4.6":
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -102,5 +102,5 @@ trap - ERR
 echo "DEPLOY-COREADING-PASS"
 echo "Backup: $SAFE"
 echo "Backup SHA-256: $(cut -d' ' -f1 "$SAFE/SHA256SUMS")"
-echo "Version: v5.4.5"
+echo "Version: v5.4.6"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active anno-mcp=active"

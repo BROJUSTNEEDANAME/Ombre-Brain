@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from reply_sanitizer import sanitize_reasoning_markup
+
 
 DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 _LOCKS: dict[str, threading.RLock] = {}
@@ -79,6 +81,8 @@ def ensure_message_ids(log: list) -> list[dict]:
             continue
         message = dict(raw)
         key = _legacy_key(message)
+        if message.get("side") == "you" and message.get("text"):
+            message["text"] = sanitize_reasoning_markup(message["text"])
         occurrence = counts.get(key, 0) + 1
         counts[key] = occurrence
         if not message.get("id"):
