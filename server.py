@@ -2323,8 +2323,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.1"
-OMBRE_WEB_VERSION_NOTE = "共读与刷新持久化；修复普通聊天误生成她/你双人剧本并擅自代写闪闪"
+OMBRE_WEB_VERSION = "v5.4.2"
+OMBRE_WEB_VERSION_NOTE = "修复刷新后旧聊天复活、消息时间错序及旧上下文被误当成刚发生"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])

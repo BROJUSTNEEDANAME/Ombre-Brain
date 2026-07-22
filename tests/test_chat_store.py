@@ -83,3 +83,28 @@ def test_auxiliary_reply_state_survives_save_and_retry(tmp_path):
     retry = response_for(stored["log"], "home:r")
     assert retry["think"] == "没说出口的念头"
     assert retry["recorded"] == ["事实：一条提醒"]
+
+
+def test_late_legacy_import_is_restored_to_chronological_position():
+    current = [
+        make_message("home:new", "me", "还想再睡", source="home", timestamp="2026-07-22T02:38:00Z"),
+    ]
+    imported_old = [
+        make_message("legacy:old", "me", "肚子不舒服", source="legacy", timestamp="2026-07-20T00:28:00Z"),
+    ]
+
+    merged = merge_logs(current, imported_old)
+
+    assert [message["id"] for message in merged] == ["legacy:old", "home:new"]
+
+
+def test_save_keeps_latest_messages_by_time_not_import_order(tmp_path):
+    path = tmp_path / "chat.json"
+    log = [
+        make_message("new", "me", "今天", source="home", timestamp="2026-07-22T02:38:00Z"),
+        make_message("old", "me", "前两天", source="legacy", timestamp="2026-07-20T00:28:00Z"),
+    ]
+
+    save(str(path), {"log": log})
+
+    assert [message["id"] for message in load(str(path))["log"]] == ["old", "new"]

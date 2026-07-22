@@ -98,6 +98,28 @@ def ensure_message_ids(log: list) -> list[dict]:
     return out
 
 
+def order_messages(log: list) -> list[dict]:
+    """Return stable chronological order without discarding any message."""
+    messages = ensure_message_ids(log)
+
+    def key(item: tuple[int, dict]) -> tuple[datetime, int, int]:
+        index, message = item
+        try:
+            timestamp = datetime.fromisoformat(str(message.get("ts") or "").replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            timestamp = datetime.max.replace(tzinfo=timezone.utc)
+        try:
+            sequence = int(message.get("seq") or index)
+        except (TypeError, ValueError):
+            sequence = index
+        return timestamp, sequence, index
+
+    return [message for _, message in sorted(enumerate(messages), key=key)]
+
+
 def merge_logs(existing: list, incoming: list) -> list[dict]:
     """Merge by stable ID; identical text with different IDs remains distinct."""
     current = ensure_message_ids(existing)
@@ -115,7 +137,7 @@ def merge_logs(existing: list, incoming: list) -> list[dict]:
         next_seq += 1
         positions[message_id] = len(current)
         current.append(message)
-    return current
+    return order_messages(current)
 
 
 def make_message(
@@ -158,7 +180,7 @@ def new_legacy_request_id() -> str:
 
 def history_from_log(log: list, limit: int = 40) -> list[dict]:
     history = []
-    for message in ensure_message_ids(log):
+    for message in order_messages(log):
         text = str(message.get("text") or "").strip()
         if not text:
             continue
@@ -202,13 +224,13 @@ def load(path: str) -> dict:
             data = json.load(handle) or {}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         data = {}
-    log = ensure_message_ids(data.get("log") or [])
+    log = order_messages(data.get("log") or [])
     return {"schema": 2, "log": log, "hist": history_from_log(log)}
 
 
 def save(path: str, data: dict) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    log = ensure_message_ids(data.get("log") or [])[-400:]
+    log = order_messages(data.get("log") or [])[-400:]
     payload = {"schema": 2, "log": log, "hist": history_from_log(log)}
     fd, temporary = tempfile.mkstemp(prefix=".chat-", suffix=".tmp", dir=os.path.dirname(path))
     try:

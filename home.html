@@ -1617,7 +1617,14 @@
   function saveChat(){
     try{ localStorage.setItem(_lsChat(), JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(), JSON.stringify(chatHistory.slice(-40))); }catch(e){}
   }
-  function _msgTime(m){ try{ const [y,mo,d]=(m.dk||tKey()).split('-').map(Number); const [h,mi]=(m.t||'0:0').split(':').map(Number); return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime(); }catch(e){ return 0; } }
+  function _msgTime(m){
+    try{
+      const utc=Date.parse(m&&m.ts||'');
+      if(Number.isFinite(utc)) return utc;
+      const [y,mo,d]=(m.dk||tKey()).split('-').map(Number), [h,mi]=(m.t||'0:0').split(':').map(Number);
+      return new Date(y,(mo||1)-1,d||1,h||0,mi||0).getTime();
+    }catch(e){ return 0; }
+  }
   function _msgSig(m){
     return (m&&m.id)||'';
   }
@@ -1637,7 +1644,7 @@
     if(!m.dk || (m.dk===today && fixed!==today)) return Object.assign({},m,{dk:fixed});
     return m;
   }
-  function _mergeLogs(a,b){
+  function _mergeLogs(a,b,keepLocalOnly){
     const positions=new Map(), out=[];
     const normalized=raw=>{ if(!raw||typeof raw!=='object')return null; let m=_repairLegacyDate(raw);
       if(m.side==='you'){
@@ -1652,9 +1659,13 @@
     (b||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);if(k&&positions.has(k))return;if(k)positions.set(k,out.length);out.push(m);});
     (a||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);
       if(k&&positions.has(k)){const at=positions.get(k);out[at]=Object.assign({},m,out[at]);return;}
+      if(!keepLocalOnly)return;
       if(k)positions.set(k,out.length);out.push(m);
     });
-    return out;
+    return out.map((m,i)=>({m,i})).sort((x,y)=>{
+      const delta=_msgTime(x.m)-_msgTime(y.m);
+      return delta||x.i-y.i;
+    }).map(x=>x.m);
   }
   async function loadServerChat(){
     if(typeof inFlight!=='undefined' && inFlight) return;  // 正在流式打字：绝不整屏重画（会把直播气泡抹掉）；等这轮说完再同步
@@ -1670,7 +1681,9 @@
       // Server is authoritative for ordering, but local rows may contain UI
       // metadata written just before a refresh. Merge by stable message ID so
       // think/recorded fields survive while the server catches up.
-      const merged=_mergeLogs(chatLog,srv);
+      // 首次上传成功后服务器是历史唯一权威。浏览器只为同 ID
+      // 补 think/recorded 等展示字段，不再复活服务器中不存在的旧副本。
+      const merged=_mergeLogs(chatLog,srv,!localStorage.getItem(importKey));
       // 重画条件：条数变了(新消息进来 或 去重后变少)，或顺序/内容和当前不一致——
       // 光看"变长"会漏掉"去重后变短"这种清理，导致重复消息一直挂着不消
       const _sig=arr=>arr.map((m,i)=>JSON.stringify([
