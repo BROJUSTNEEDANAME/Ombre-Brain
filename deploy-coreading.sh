@@ -12,8 +12,8 @@ if [ "$(id -u)" -ne 0 ] || [ "$PWD" != "$REPO" ]; then
     echo "Run as root from $REPO"
     exit 1
 fi
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Refusing to deploy over uncommitted VPS changes"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "Refusing to deploy over tracked VPS code changes"
     exit 1
 fi
 
