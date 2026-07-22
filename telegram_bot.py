@@ -58,6 +58,9 @@ from telegram.ext import (
 import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
 from personality import EMOTIONAL_AGENCY_SYSTEM
+from prompt_cache import inject_volatile_context
+from prompt_cache import record_usage as record_prompt_cache_usage
+from prompt_cache import request_extra_body as prompt_cache_extra_body
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -452,11 +455,28 @@ def _authorized(chat_id: int) -> bool:
     return not ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
 
 
+async def _telegram_llm_create(**kwargs):
+    """Direct/background GLM calls with the same stable cache routing as Home."""
+    extra = prompt_cache_extra_body(base_url=LLM_BASE_URL)
+    response = (
+        await llm.chat.completions.create(extra_body=extra, **kwargs)
+        if extra else await llm.chat.completions.create(**kwargs)
+    )
+    if not kwargs.get("stream"):
+        record_prompt_cache_usage(getattr(response, "usage", None), "telegram-background")
+    return response
+
+
 async def _ask_claude(history: list[dict]) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
-    system_content = SYSTEM_PROMPT + "\n\n" + _now_line() + "\n\n" + drives.block()
-    messages = [{"role": "system", "content": system_content}] + list(history)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history)
+    dynamic_context = (
+        "【系统动态背景·不是闪闪说的话，不要复述】\n"
+        + _now_line() + "\n\n" + drives.block()
+        + "\n【闪闪或系统本轮输入从下面开始】"
+    )
+    messages = inject_volatile_context(messages, dynamic_context)
     # 这一轮有图片就自动切到识图模型（glm-4.6v），纯文字仍用默认（glm-5.1 等）
     def _has_img(msgs):
         for m in msgs:
@@ -467,7 +487,7 @@ async def _ask_claude(history: list[dict]) -> str:
     use_model = VISION_MODEL if _has_img(history) else MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     for _ in range(12):  # 最多 12 轮工具循环
-        resp = await llm.chat.completions.create(
+        resp = await _telegram_llm_create(
             model=use_model,
             max_tokens=MAX_TOKENS,
             tools=BRAIN_TOOLS,
@@ -525,7 +545,7 @@ async def _plan_management_steps(goal: str) -> list[str]:
         memory = await _call_brain_tool(
             "breath", {"query": goal, "max_tokens": 900, "max_results": 4}
         )
-        response = await llm.chat.completions.create(
+        response = await _telegram_llm_create(
             model=MODEL,
             max_tokens=700,
             messages=[

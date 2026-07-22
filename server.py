@@ -75,6 +75,9 @@ from adhd_manager import ManageStore
 from anno_client import AnnoClient
 from coreading import ReadingError, ReadingStore, fetch_article
 from personality import EMOTIONAL_AGENCY_SYSTEM
+from prompt_cache import read_stats as read_prompt_cache_stats
+from prompt_cache import record_usage as record_prompt_cache_usage
+from prompt_cache import request_extra_body as prompt_cache_extra_body
 from writing_style import INTIMATE_WRITING_ENGINE
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -2312,25 +2315,36 @@ _thinking_param_ok = True  # 万一某个模型不认这个参数，自动降级
 
 
 async def _llm_create(client, **kw):
-    """所有 GLM 调用的统一入口：默认带上「关思考」参数；模型不认就退回原样调用。"""
+    """所有 GLM 调用的统一入口：稳定路由、关思考并记录非流式缓存命中。"""
     global _thinking_param_ok
     _want_off = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in ("on", "1", "true", "enabled")
+    _extra = kw.pop("extra_body", None)
+    _base_url = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
+    _thinking = _GLM_THINKING_OFF if _want_off and _thinking_param_ok else None
+    _body = prompt_cache_extra_body(_extra, base_url=_base_url, thinking=_thinking)
     if _want_off and _thinking_param_ok:
         try:
-            return await client.chat.completions.create(extra_body=_GLM_THINKING_OFF, **kw)
+            _response = await client.chat.completions.create(extra_body=_body, **kw)
+            if not kw.get("stream"):
+                record_prompt_cache_usage(getattr(_response, "usage", None), "brain")
+            return _response
         except Exception as e:  # noqa: BLE001
             if "thinking" in str(e).lower():
                 _thinking_param_ok = False  # 这家模型不认这参数：这次和以后都不带了
             else:
                 raise
-    return await client.chat.completions.create(**kw)
+    _body = prompt_cache_extra_body(_extra, base_url=_base_url)
+    _response = await client.chat.completions.create(extra_body=_body, **kw) if _body else await client.chat.completions.create(**kw)
+    if not kw.get("stream"):
+        record_prompt_cache_usage(getattr(_response, "usage", None), "brain")
+    return _response
 
 
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.4"
-OMBRE_WEB_VERSION_NOTE = "写文模式加入三轴亲密场景引擎：阶段、六要素与玩法持续联动"
+OMBRE_WEB_VERSION = "v5.4.5"
+OMBRE_WEB_VERSION_NOTE = "提高 GLM 上下文缓存命中：稳定前缀与路由，并增加真实 cached_tokens 统计"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2338,6 +2352,13 @@ async def api_version(request):
     """网页开页时查当前版本；和 localStorage 里存的对比，变了就弹「已更新至 …」。"""
     from starlette.responses import JSONResponse
     return JSONResponse({"version": OMBRE_WEB_VERSION, "note": OMBRE_WEB_VERSION_NOTE})
+
+
+@mcp.custom_route("/api/cache/stats", methods=["GET"])
+async def api_prompt_cache_stats(request):
+    """Return token aggregates only; prompts, replies and identifiers are never exposed."""
+    from starlette.responses import JSONResponse
+    return JSONResponse(read_prompt_cache_stats())
 
 
 def _reading_public_chapter(chapter: dict) -> dict:
@@ -3735,7 +3756,9 @@ async def api_chat(request):
             out = collapse_repeated_reply((out or fallback).strip())
             if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
                 try:
-                    _r2 = await _web_llm.chat.completions.create(model=model, max_tokens=web_max_tokens, messages=msgs)
+                    _r2 = await _llm_create(
+                        _web_llm, model=model, max_tokens=web_max_tokens, messages=msgs,
+                    )
                     out = (_r2.choices[0].message.content or "").strip()
                 except Exception:  # noqa: BLE001
                     pass
@@ -3790,7 +3813,10 @@ async def api_chat(request):
                             kwargs["tools"] = _active_tools
                         st = await _llm_create(_web_llm, **kwargs)
                         buf, flushed, tc_acc, saw_tc = "", 0, {}, False
+                        stream_usage = None
                         async for ch in st:
+                            if getattr(ch, "usage", None) is not None:
+                                stream_usage = ch.usage
                             if not ch.choices:
                                 continue
                             d = ch.choices[0].delta
@@ -3814,6 +3840,7 @@ async def api_chat(request):
                                 if not saw_tc and (flushed or len(buf) >= 8):
                                     await _q.put({"t": "d", "x": buf[flushed:]})
                                     flushed = len(buf)
+                        record_prompt_cache_usage(stream_usage, "brain-stream")
                         if not tc_acc:
                             if not saw_tc and buf[flushed:]:
                                 await _q.put({"t": "d", "x": buf[flushed:]})
@@ -3834,8 +3861,9 @@ async def api_chat(request):
                         # 他把回合全用在调辅助工具上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
                         # 绝不落「（……）」（她说"你写吧"他却只记了个记忆就是这么来的）
                         try:
-                            _r2 = await _web_llm.chat.completions.create(
-                                model=model, max_tokens=web_max_tokens, messages=msgs)
+                            _r2 = await _llm_create(
+                                _web_llm, model=model, max_tokens=web_max_tokens, messages=msgs,
+                            )
                             rt = (_r2.choices[0].message.content or "").strip()
                             if rt:
                                 await _q.put({"t": "d", "x": rt})  # 补推出来，直播别干等
