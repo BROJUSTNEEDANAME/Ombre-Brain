@@ -49,7 +49,19 @@ install -m 644 "$REPO/deploy/anno-mcp.service" /etc/systemd/system/anno-mcp.serv
 systemctl daemon-reload
 systemctl enable --now anno-mcp.service
 
-curl -fsS http://127.0.0.1:3300/health >/dev/null
+ANNO_READY=0
+for _ in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:3300/health >/dev/null 2>&1; then
+        ANNO_READY=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ANNO_READY" -ne 1 ]; then
+    systemctl status anno-mcp.service --no-pager -l || true
+    echo "Anno did not become healthy within 30 seconds"
+    exit 1
+fi
 if ss -ltnp | grep -F ':3300 ' | grep -Fq '0.0.0.0'; then
     echo "Anno unexpectedly exposed on 0.0.0.0:3300"
     exit 1
