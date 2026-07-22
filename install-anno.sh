@@ -62,7 +62,7 @@ if [ "$ANNO_READY" -ne 1 ]; then
     echo "Anno did not become healthy within 30 seconds"
     exit 1
 fi
-if ss -ltnp | grep -F ':3300 ' | grep -Fq '0.0.0.0'; then
+if ss -ltnH 'sport = :3300' | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]):3300([[:space:]]|$)'; then
     echo "Anno unexpectedly exposed on 0.0.0.0:3300"
     exit 1
 fi

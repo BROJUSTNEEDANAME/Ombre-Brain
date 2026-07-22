@@ -89,7 +89,7 @@ test "$(systemctl is-active ombre-apibot.service)" = active
 test "$(systemctl is-active cc-bridge.service)" = active
 test "$(systemctl is-active anno-mcp.service)" = active
 curl -fsS http://127.0.0.1:3300/health >/dev/null
-if ss -ltn | grep -F ':3300 ' | grep -Fq '0.0.0.0'; then
+if ss -ltnH 'sport = :3300' | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]):3300([[:space:]]|$)'; then
     echo "Anno is exposed publicly"
     exit 1
 fi
