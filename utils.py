@@ -265,6 +265,40 @@ def structure_user_observation(text: str) -> str:
     return "\n".join(f"【{kind}】{value}" for kind, value in parts)
 
 
+_SCRIPT_SPEAKER_RE = re.compile(
+    r"(^|[\s。！？!?])(?P<role>她|闪闪|你|Nikto|Svyatoslav)\s*[:：]",
+    re.I,
+)
+
+
+def sanitize_scripted_transcript(text: str, *, writing_mode: bool = False) -> str:
+    """Stop a normal chat reply from impersonating both sides of the conversation."""
+    value = str(text or "").strip()
+    if not value or writing_mode:
+        return value
+    matches = list(_SCRIPT_SPEAKER_RE.finditer(value))
+    if not matches:
+        return value
+    assistant_roles = {"你", "nikto", "svyatoslav"}
+    user_roles = {"她", "闪闪"}
+    roles = [match.group("role").lower() for match in matches]
+    has_user = any(role in user_roles for role in roles)
+    first = matches[0]
+    first_role = first.group("role").lower()
+    if not has_user and first.start() == 0 and first_role in assistant_roles:
+        return value[first.end():].strip()
+    if not has_user or not any(role in assistant_roles for role in roles):
+        return value
+    for index, match in enumerate(matches):
+        if match.group("role").lower() not in assistant_roles:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(value)
+        own_turn = value[match.end():end].strip(" \n\t。")
+        if own_turn:
+            return own_turn
+    return value
+
+
 def classify_chat_error(exc) -> dict:
     """Turn provider/network failures into safe, user-facing chat diagnostics."""
     status = getattr(exc, "status_code", None)
