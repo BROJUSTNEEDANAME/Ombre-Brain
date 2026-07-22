@@ -89,9 +89,10 @@ test "$(systemctl is-active ombre-apibot.service)" = active
 test "$(systemctl is-active cc-bridge.service)" = active
 test "$(systemctl is-active anno-mcp.service)" = active
 curl -fsS http://127.0.0.1:3300/health >/dev/null
-if ss -ltnH 'sport = :3300' | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]):3300([[:space:]]|$)'; then
-    echo "Anno is exposed publicly"
-    exit 1
+LISTEN_ADDR="$(ss -ltnH | awk '$4 ~ /:3300$/ { print $4; exit }' || true)"
+if [ "$LISTEN_ADDR" != "127.0.0.1:3300" ] && [ "$LISTEN_ADDR" != "[::1]:3300" ]; then
+    echo "Anno listener is not loopback-only: ${LISTEN_ADDR:-missing}"
+    false
 fi
 
 trap - ERR

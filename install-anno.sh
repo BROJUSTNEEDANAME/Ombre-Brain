@@ -62,8 +62,9 @@ if [ "$ANNO_READY" -ne 1 ]; then
     echo "Anno did not become healthy within 30 seconds"
     exit 1
 fi
-if ss -ltnH 'sport = :3300' | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]):3300([[:space:]]|$)'; then
-    echo "Anno unexpectedly exposed on 0.0.0.0:3300"
+LISTEN_ADDR="$(ss -ltnH | awk '$4 ~ /:3300$/ { print $4; exit }' || true)"
+if [ "$LISTEN_ADDR" != "127.0.0.1:3300" ] && [ "$LISTEN_ADDR" != "[::1]:3300" ]; then
+    echo "Anno listener is not loopback-only: ${LISTEN_ADDR:-missing}"
     exit 1
 fi
 echo "ANNO-INSTALL-PASS commit=$ANNO_COMMIT listen=127.0.0.1:3300 data=$DATA"
