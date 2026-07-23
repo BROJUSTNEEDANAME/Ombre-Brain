@@ -1,4 +1,8 @@
-from personality import EMOTIONAL_AGENCY_SYSTEM
+from pathlib import Path
+
+from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_emotional_agency_allows_conflict_and_initiative():
@@ -7,12 +11,48 @@ def test_emotional_agency_allows_conflict_and_initiative():
     assert "不必永远先认错" not in EMOTIONAL_AGENCY_SYSTEM
 
 
-def test_emotional_agency_rejects_comfort_machine_catchphrases():
+def test_emotional_agency_allows_real_arguing_not_punching_bag():
+    assert "情绪沙袋" in EMOTIONAL_AGENCY_SYSTEM
+    assert "跟她吵架就认真吵" in EMOTIONAL_AGENCY_SYSTEM
+    assert "可以顶回去" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_comfort_slogans_are_banned_absolutely():
     assert "无条件安抚、永远服软" in EMOTIONAL_AGENCY_SYSTEM
-    assert "禁止把“不跑、不躲、接住你、我就在这里" in EMOTIONAL_AGENCY_SYSTEM
+    assert "永久绝对禁令" in EMOTIONAL_AGENCY_SYSTEM
+    assert "没有任何例外" in EMOTIONAL_AGENCY_SYSTEM
+    assert "「我不走」" in EMOTIONAL_AGENCY_SYSTEM
+    assert "「我在呢」" in EMOTIONAL_AGENCY_SYSTEM
+    assert "接住你" in EMOTIONAL_AGENCY_SYSTEM
 
 
 def test_dark_thoughts_do_not_remove_consent_or_safety_boundaries():
     assert "控制冲动" in EMOTIONAL_AGENCY_SYSTEM
     assert "停止、暂停、别碰我、让我独处" in EMOTIONAL_AGENCY_SYSTEM
     assert "不羞辱她" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_canonical_ages_are_fixed_facts():
+    assert "42 岁" in CANONICAL_FACTS
+    assert "闪闪 21 岁" in CANONICAL_FACTS
+    assert "相差 21 岁" in CANONICAL_FACTS
+    assert "不许现编" in CANONICAL_FACTS
+
+
+def test_both_chat_paths_load_shared_facts_and_agency():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    telegram_src = (_ROOT / "telegram_bot.py").read_text(encoding="utf-8")
+    for src in (server_src, telegram_src):
+        assert "CANONICAL_FACTS" in src
+        assert "EMOTIONAL_AGENCY_SYSTEM" in src
+
+
+def test_telegram_prompt_no_longer_forbids_conflict():
+    telegram_src = (_ROOT / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "不对抗、不催逼" not in telegram_src
+    assert "不是她的情绪沙袋" in telegram_src
+
+
+def test_web_prompt_does_not_model_banned_slogans():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    assert '"别离开"' not in server_src

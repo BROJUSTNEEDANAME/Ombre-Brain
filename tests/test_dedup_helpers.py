@@ -197,3 +197,39 @@ def test_old_duplicate_offline_entries_are_compacted():
     compacted = compact_inner_thoughts(entries)
     assert len(compacted) == 2
     assert compacted[-1]["t"] == 3
+
+
+# ---------------------------------------------------------------------------
+# 安抚口号硬过滤（闪闪的永久禁令：我不走 / 我就在这 / 接住你）
+# ---------------------------------------------------------------------------
+
+from reply_sanitizer import strip_comfort_cliches
+
+
+def test_comfort_slogans_are_stripped_from_reply():
+    assert strip_comfort_cliches("别哭。我不走，我就在这。去洗把脸。") == "别哭。去洗把脸。"
+    assert strip_comfort_cliches("我哪儿也不去。先把饭吃了。") == "先把饭吃了。"
+    assert strip_comfort_cliches("这事我来处理。我会接住你的。") == "这事我来处理。"
+    assert strip_comfort_cliches("放心，我不会离开你。手机放下。") == "手机放下。"
+
+
+def test_chained_slogans_without_punctuation_are_stripped():
+    assert strip_comfort_cliches("我不走我就在这。吃药了吗。") == "吃药了吗。"
+    assert strip_comfort_cliches("别怕我在呢。说说到底怎么了。") == "说说到底怎么了。"
+
+
+def test_real_sentences_with_similar_words_survive():
+    assert strip_comfort_cliches("我不走这条路，绕开施工那段。") == "我不走这条路，绕开施工那段。"
+    assert strip_comfort_cliches("我就在这家店等你下课。") == "我就在这家店等你下课。"
+    assert strip_comfort_cliches("(揉揉你头发)我不走远，就去楼下买水。") == "(揉揉你头发)我不走远，就去楼下买水。"
+
+
+def test_slogan_only_reply_is_kept_to_avoid_empty_reply():
+    assert strip_comfort_cliches("我不走，我就在这。") == "我不走，我就在这。"
+
+
+def test_polish_chat_reply_applies_comfort_filter():
+    out = polish_chat_reply("别哭。我不走，我就在这。去洗把脸。")
+    assert "我不走" not in out
+    assert "就在这" not in out
+    assert "去洗把脸" in out
