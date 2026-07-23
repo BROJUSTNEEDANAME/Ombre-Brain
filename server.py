@@ -79,6 +79,7 @@ from personality import EMOTIONAL_AGENCY_SYSTEM
 from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
+from public_site import resolve_public_site_url
 from writing_style import INTIMATE_WRITING_ENGINE
 
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
@@ -1552,6 +1553,12 @@ async def make_page(html: str = "", title: str = "") -> str:
     html = (html or "").strip()
     if not html:
         return "（没有网页内容）"
+    # Prefer the explicit deployment URL, otherwise infer the private Caddy
+    # handle_path. Never return an unrelated legacy Render address on the VPS.
+    base = resolve_public_site_url()
+    if not base:
+        logger.error("make_page has no public site URL")
+        return "服务器没有配置可打开的网页入口，这次没有生成链接。"
     # 没有完整文档结构就补一层,保证 UTF-8 + 移动端可读
     if "<html" not in html.lower():
         safe_title = re.sub(r"[<>]", "", title).strip() or "Ombre"
@@ -1565,13 +1572,6 @@ async def make_page(html: str = "", title: str = "") -> str:
     os.makedirs(pages_dir, exist_ok=True)
     with open(os.path.join(pages_dir, f"{page_id}.html"), "w", encoding="utf-8") as f:
         f.write(html)
-    # 网站公网地址：用 Render 自动注入的 RENDER_EXTERNAL_URL（就是大脑自己的域名）。
-    # 绝不能用 OMBRE_BASE_URL——那是 LLM 接口地址（如 Gemini），拿来拼链接会指错域名。
-    base = (
-        os.environ.get("RENDER_EXTERNAL_URL")
-        or os.environ.get("OMBRE_SITE_URL")
-        or "https://ombre-brain-6e05.onrender.com"
-    ).rstrip("/")
     return f"{base}/p/{page_id}"
 
 
@@ -2383,8 +2383,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.8"
-OMBRE_WEB_VERSION_NOTE = "修复网页长任务被60秒掐断，以及失败后Home持续空转"
+OMBRE_WEB_VERSION = "v5.4.9"
+OMBRE_WEB_VERSION_NOTE = "修复生成网页返回旧域名，部署时验证真实公网链接"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])

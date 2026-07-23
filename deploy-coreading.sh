@@ -7,6 +7,8 @@ SAFE=/root/ombre-coreading-deploy-$STAMP
 OLD_SHA=""
 SWITCHED=0
 ANNO_WAS_ACTIVE=0
+SITE_DROPIN=/etc/systemd/system/ombre-brain.service.d/20-site-url.conf
+HAD_SITE_DROPIN=0
 
 if [ "$(id -u)" -ne 0 ] || [ "$PWD" != "$REPO" ]; then
     echo "Run as root from $REPO"
@@ -24,6 +26,10 @@ git status --short > "$SAFE/git-status.txt"
 printf '%s\n' "$OLD_SHA" > "$SAFE/old-main.sha"
 cp -a /etc/systemd/system/ombre-brain.service "$SAFE/"
 cp -a /etc/systemd/system/ombre-apibot.service "$SAFE/"
+if [ -f "$SITE_DROPIN" ]; then
+    cp -a "$SITE_DROPIN" "$SAFE/20-site-url.conf"
+    HAD_SITE_DROPIN=1
+fi
 for file in "$REPO/.env" "$REPO/.env.apibot" "$REPO/buckets/telegram_state.json"; do
     [ ! -e "$file" ] || cp -a "$file" "$SAFE/"
 done
@@ -34,6 +40,12 @@ rollback() {
     git reset --hard "$OLD_SHA"
     cp -a "$SAFE/ombre-brain.service" /etc/systemd/system/ombre-brain.service
     cp -a "$SAFE/ombre-apibot.service" /etc/systemd/system/ombre-apibot.service
+    if [ "$HAD_SITE_DROPIN" -eq 1 ]; then
+        mkdir -p "$(dirname "$SITE_DROPIN")"
+        cp -a "$SAFE/20-site-url.conf" "$SITE_DROPIN"
+    else
+        rm -f "$SITE_DROPIN"
+    fi
     systemctl daemon-reload
     systemctl restart ombre-brain.service ombre-apibot.service || true
     if [ "$ANNO_WAS_ACTIVE" -eq 0 ]; then
@@ -60,12 +72,15 @@ git merge --ff-only origin/main
     tests/test_chat_store.py tests/test_adhd_manager.py tests/test_coreading.py \
     tests/test_prompt_output.py tests/test_personality.py tests/test_writing_style.py \
     tests/test_prompt_cache.py tests/test_dedup_helpers.py \
-    tests/test_home_recovery_contract.py
+    tests/test_home_recovery_contract.py tests/test_public_site.py
 .venv/bin/python -m compileall -q \
     server.py telegram_bot.py chat_store.py adhd_manager.py coreading.py anno_client.py \
-    personality.py writing_style.py prompt_cache.py reply_sanitizer.py
+    personality.py writing_style.py prompt_cache.py reply_sanitizer.py public_site.py \
+    configure-site-url.py
 bash -n install-anno.sh deploy-coreading.sh
 bash install-anno.sh
+.venv/bin/python configure-site-url.py /etc/caddy/Caddyfile "$SITE_DROPIN"
+systemctl daemon-reload
 
 SWITCHED=1
 systemctl restart ombre-brain.service ombre-apibot.service
@@ -78,7 +93,7 @@ for _ in range(40):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.4.8":
+        if data.get("version") == "v5.4.9":
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -86,6 +101,41 @@ for _ in range(40):
     time.sleep(1)
 else:
     raise SystemExit("brain health/version check failed")
+PY
+
+.venv/bin/python - <<'PY'
+import json
+import secrets
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from public_site import resolve_public_site_url
+
+base = resolve_public_site_url()
+if not base:
+    raise SystemExit("public site URL is not configured")
+marker = "OMBRE_PUBLIC_PAGE_OK_" + secrets.token_hex(4)
+request = urllib.request.Request(
+    "http://127.0.0.1:8000/api/tools/make_page",
+    data=json.dumps({"html": f"<p>{marker}</p>", "title": "deploy check"}).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=15) as response:
+    result = json.load(response).get("result", "")
+if not result.startswith(base + "/p/"):
+    raise SystemExit("make_page returned the wrong public URL")
+page_id = Path(urllib.parse.urlparse(result).path).name
+page = Path("/home/ombre/Ombre-Brain/buckets/pages") / f"{page_id}.html"
+try:
+    with urllib.request.urlopen(result, timeout=15) as response:
+        body = response.read().decode("utf-8")
+    if marker not in body:
+        raise SystemExit("public page returned the wrong content")
+finally:
+    page.unlink(missing_ok=True)
+print("PUBLIC-PAGE-PASS")
 PY
 
 test "$(systemctl is-active ombre-brain.service)" = active
@@ -103,5 +153,5 @@ trap - ERR
 echo "DEPLOY-COREADING-PASS"
 echo "Backup: $SAFE"
 echo "Backup SHA-256: $(cut -d' ' -f1 "$SAFE/SHA256SUMS")"
-echo "Version: v5.4.8"
+echo "Version: v5.4.9"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active anno-mcp=active"
