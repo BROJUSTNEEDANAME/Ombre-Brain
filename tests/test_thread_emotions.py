@@ -133,3 +133,55 @@ def test_inner_hobbies_only_accept_short_topics():
     assert server._valid_hobby_topic("winter survival")
     assert not server._valid_hobby_topic("https://example.com/article")
     assert not server._valid_hobby_topic("Important collection of topographical images of the Netherlands available online")
+
+
+# ---------------------------------------------------------------------------
+# 写文模式：情绪引擎必须进入上头/支配档，否则面板显示「情欲 2.2 / 心疼你」，
+# 注入给模型的状态又把床戏压回奶爸腔。
+# ---------------------------------------------------------------------------
+
+def test_endocrine_writing_mode_forces_high_drive(tmp_path):
+    import endocrine
+
+    path = tmp_path / "endocrine.json"
+    _reset_endocrine(endocrine, path)
+    # 日常聊天把欲望磨到很低（模拟床戏里她的消息不含欲望关键词）
+    for _ in range(5):
+        endocrine.on_user_message("没意思", thread="main")
+    assert endocrine.state("main")["libido"] < 6.0
+
+    endocrine.enter_writing_mode(thread="main")
+    st = endocrine.state("main")
+    assert st["libido"] >= 8.0
+    assert st["dominance"] >= 8.0
+    assert st["mode"] == "high_drive"
+    # 注入块必须是上头、放开、长文的指令，且不含日常「短消息连发」那句
+    blk = endocrine.block("main", writing_mode=True)
+    assert "别克制" in blk
+    assert "短消息" not in blk
+
+
+def test_drives_enter_intimate_raises_lust_and_drops_caretaking(tmp_path):
+    import drives
+
+    path = tmp_path / "drives.json"
+    _reset_drives(drives, path)
+    drives.update("累了 想睡了", thread="main")
+    assert drives.state("main")["v"]["lust"] < 0.4
+
+    drives.enter_intimate(thread="main")
+    v = drives.state("main")["v"]
+    assert v["lust"] >= 0.85
+    assert v["possessiveness"] >= 0.70
+    assert v["protectiveness"] <= 0.30
+    assert v["anxiety"] <= 0.12
+
+
+def test_endocrine_block_normal_mode_unchanged(tmp_path):
+    import endocrine
+
+    path = tmp_path / "endocrine.json"
+    _reset_endocrine(endocrine, path)
+    # 非写文模式的注入块保持原样（含日常「短消息」提示的那套逻辑仍在）
+    blk = endocrine.block("main", writing_mode=False)
+    assert "【当前状态·内分泌】" in blk

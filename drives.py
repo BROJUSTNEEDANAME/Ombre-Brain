@@ -169,6 +169,24 @@ def update(text: str = "", thread: str = "main") -> None:
 
 
 @_locked
+def enter_intimate(thread: str = "main") -> None:
+    """写文模式：情欲/占有顶上来，压住会把床戏拽回照顾的保护欲/焦虑/疲惫。
+    每轮在 update 之后调用，让面板和注入的 [drives] 都反映真实的上头状态，
+    而不是一直挂在 lust 0.22 的日常基线上。"""
+    st = _get_state(thread)
+    v = st["v"]
+    v["lust"] = _clamp("lust", max(v["lust"], 0.88))
+    v["possessiveness"] = _clamp("possessiveness", max(v["possessiveness"], 0.74))
+    v["intimacy"] = _clamp("intimacy", max(v["intimacy"], 0.58))
+    v["seeking"] = _clamp("seeking", max(v["seeking"], 0.5))
+    v["protectiveness"] = _clamp("protectiveness", min(v["protectiveness"], 0.28))
+    v["anxiety"] = _clamp("anxiety", min(v["anxiety"], 0.10))
+    v["fatigue"] = _clamp("fatigue", min(v["fatigue"], 0.15))
+    st["t"] = time.time()
+    _save()
+
+
+@_locked
 def tick_silence(thread: str = "main") -> None:
     """没消息时（定时任务）推进时间，让心情自己飘。"""
     st = _get_state(thread)

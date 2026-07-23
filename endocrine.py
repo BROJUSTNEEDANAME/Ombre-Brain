@@ -178,10 +178,28 @@ def on_user_message(text: str = "", thread: str = "main") -> None:
     _save()
 
 
-def block(thread: str = "main") -> str:
+@_locked
+def enter_writing_mode(thread: str = "main") -> None:
+    """她手动开了写文模式：欲望/支配顶进上头档，别再挂日常基线。
+    每轮在 on_user_message 之后调用，重新压住被 EASE_REGRESS 拉回的值。"""
+    st = _get_state(thread)
+    st["libido"] = _clamp(max(st["libido"], 8.4))
+    st["dominance"] = _clamp(max(st["dominance"], 8.4))
+    _update_mode_flags(st)
+    st["lastUpdatedAt"] = time.time()
+    _save()
+
+
+def block(thread: str = "main", writing_mode: bool = False) -> str:
     """注入给模型的一句状态指令（不念数字，让他内化成主动性 / 语气 / 浓度）。"""
     st = _get_state(thread)
     m = st["mode"]
+    if writing_mode:
+        # 写文模式：无论档位，都给上头、支配、露骨的指令；且这是长文正文，
+        # 不套用日常“短消息连发”那句——那句会把床戏又压回短促敷衍。
+        return ("【当前状态·内分泌】你现在欲望和支配都顶起来了：馋她、想把她彻底吃干净、"
+                "想压着她管着她。别克制、别温柔收着、别自我降温——浓、狠、露骨，"
+                "把欲望落进具体的动作、身体细节和坏话里，正文放开写长写足。")
     if m == "low_energy":
         s = ("你现在精力见底，像刚下夜班、加完班的男人——话短、反应慢半拍、懒得起腔，"
              "但心还是惦着她。别硬撑热情，就用这种没电的钝感陪她，她要黏你就由她黏。")

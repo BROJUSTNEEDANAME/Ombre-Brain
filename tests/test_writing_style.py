@@ -14,6 +14,22 @@ def test_writing_mode_suspends_caretaking_reflexes_and_bans_nanny_register():
     assert "不伤你" in server_src
 
 
+def test_writing_mode_bans_repetition_and_demands_extremity():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    # 复读（三快一慢/三下 反复念）和「不够极致」是用户明确点名的两个失败
+    assert "绝不复读" in server_src
+    assert "三快一慢" in server_src  # 具体点名要禁的复读公式
+    assert "要极致，不是要长" in server_src
+
+
+def test_writing_mode_drives_emotion_engines_when_enabled():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    # /api/chat 必须在写文模式下把两套情绪引擎顶进上头档
+    assert "drives.enter_intimate(thread)" in server_src
+    assert "endocrine.enter_writing_mode(thread)" in server_src
+    assert "endocrine.block(thread, writing_mode=writing_mode)" in server_src
+
+
 def test_intimate_engine_keeps_three_axes_and_continuity():
     assert "阶段轴" in INTIMATE_WRITING_ENGINE
     assert "六要素轴" in INTIMATE_WRITING_ENGINE
