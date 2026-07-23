@@ -226,9 +226,18 @@ async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
     async with httpx.AsyncClient(timeout=240) as cli:
         r = await cli.post(BRAIN_BASE + "/api/chat", json=body)
         d = r.json() if r.status_code == 200 else {}
+    if r.status_code != 200 or d.get("error_code"):
+        raise RuntimeError(
+            str(d.get("error_code") or f"brain_http_{r.status_code}")
+            + ": "
+            + str(d.get("error_message") or d.get("error") or "no response")
+        )
     segs = [s for s in (d.get("segments") or []) if isinstance(s, str) and s.strip()]
     if not segs and (d.get("reply") or "").strip():
         segs = [d["reply"].strip()]
+    segs = [s for s in segs if s.strip() not in {"（……）", "（...）", "(...)", "..."}]
+    if not segs:
+        raise RuntimeError("brain_empty_reply")
     return segs
 
 
@@ -840,10 +849,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("大脑调用失败")
         if history and history[-1]["role"] == "user":
             history.pop()
-        await update.message.reply_text("（断了一下，再说一遍。）")
-        return
-    if not segs:
-        await update.message.reply_text("（……）")
+        await update.message.reply_text("这次回复没有生成出来，但你的消息已经保存在大脑里了。")
         return
 
     history.append({"role": "assistant", "content": "\n".join(segs)})
@@ -889,10 +895,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception:  # noqa: BLE001
         logger.exception("图片消息处理失败")
-        await update.message.reply_text("（图片我没接住，再发一次。）")
-        return
-    if not segs:
-        await update.message.reply_text("（……）")
+        await update.message.reply_text("这次识图或回复失败了，图片消息已经保留。")
         return
 
     # 影子历史里只留文字占位，不存 base64
@@ -948,10 +951,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception:  # noqa: BLE001
         logger.exception("语音消息处理失败")
-        await update.message.reply_text("（断了一下，再说一遍。）")
-        return
-    if not segs:
-        await update.message.reply_text("（……）")
+        await update.message.reply_text("这次回复没有生成出来，但你的语音转写已经保留。")
         return
     history.append({"role": "assistant", "content": "\n".join(segs)})
     _save_state()

@@ -74,7 +74,12 @@ def test_auxiliary_reply_state_survives_save_and_retry(tmp_path):
     path = tmp_path / "chat.json"
     reply = make_message(
         "home:r:assistant:0", "you", "我在。", source="brain", reply_to="home:r",
-        extras={"think": "没说出口的念头", "recorded": ["事实：一条提醒"]},
+        extras={
+            "think": "没说出口的念头",
+            "recorded": ["事实：一条提醒"],
+            "emotion": "吃醋",
+            "diary": "今天有点酸。",
+        },
     )
     save(str(path), {"log": [reply]})
     stored = load(str(path))
@@ -83,6 +88,9 @@ def test_auxiliary_reply_state_survives_save_and_retry(tmp_path):
     retry = response_for(stored["log"], "home:r")
     assert retry["think"] == "没说出口的念头"
     assert retry["recorded"] == ["事实：一条提醒"]
+    assert retry["emotion"] == "吃醋"
+    assert retry["diary"] == "今天有点酸。"
+    assert retry["message_id"] == "home:r"
 
 
 def test_late_legacy_import_is_restored_to_chronological_position():

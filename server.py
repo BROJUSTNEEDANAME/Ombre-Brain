@@ -60,7 +60,7 @@ from utils import (
     classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
-from reply_sanitizer import sanitize_reasoning_markup
+from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup
 from chat_store import (
     history_from_log as _chat_history_from_log,
     load as _chat_load,
@@ -722,20 +722,59 @@ async def hold(
         # Feel valence/arousal = model's own perspective
         feel_valence = valence if 0 <= valence <= 1 else 0.5
         feel_arousal = arousal if 0 <= arousal <= 1 else 0.3
-        bucket_id = await bucket_mgr.create(
-            content=content,
-            tags=[],
-            importance=5,
-            domain=[],
-            valence=feel_valence,
-            arousal=feel_arousal,
-            name=None,
-            bucket_type="feel",
-        )
+        best_feel = None
+        best_score = 0.0
         try:
-            await embedding_engine.generate_and_store(bucket_id, content)
-        except Exception:
-            pass
+            for item in await bucket_mgr.list_all(include_archive=False):
+                if item.get("metadata", {}).get("type") != "feel":
+                    continue
+                score = memory_text_similarity(content, item.get("content", ""))
+                if (same_memory_fact(content, item.get("content", "")) or score >= 0.62) and score > best_score:
+                    best_feel, best_score = item, score
+            for bucket_id, similarity in await embedding_engine.search_similar(content, top_k=5):
+                item = await bucket_mgr.get(bucket_id)
+                if (
+                    item
+                    and item.get("metadata", {}).get("type") == "feel"
+                    and similarity >= 0.92
+                    and similarity > best_score
+                ):
+                    best_feel, best_score = item, similarity
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Feel dedup lookup failed / 感受查重失败: %s", exc)
+
+        if best_feel:
+            bucket_id = best_feel["id"]
+            merged = merge_memory_details([best_feel.get("content", ""), content]) or content
+            meta = best_feel.get("metadata", {})
+            await bucket_mgr.update(
+                bucket_id,
+                content=merged,
+                importance=max(5, int(meta.get("importance", 5))),
+                valence=(float(meta.get("valence", 0.5)) + feel_valence) / 2,
+                arousal=(float(meta.get("arousal", 0.3)) + feel_arousal) / 2,
+            )
+            try:
+                await embedding_engine.generate_and_store(bucket_id, merged)
+            except Exception:
+                pass
+            feel_action = "🫧feel合并→"
+        else:
+            bucket_id = await bucket_mgr.create(
+                content=content,
+                tags=[],
+                importance=5,
+                domain=[],
+                valence=feel_valence,
+                arousal=feel_arousal,
+                name=None,
+                bucket_type="feel",
+            )
+            try:
+                await embedding_engine.generate_and_store(bucket_id, content)
+            except Exception:
+                pass
+            feel_action = "🫧feel→"
         # --- Mark source memory as digested + store model's valence perspective ---
         # --- 标记源记忆为已消化 + 存储模型视角的 valence ---
         if source_bucket and source_bucket.strip():
@@ -746,7 +785,7 @@ async def hold(
                 await bucket_mgr.update(source_bucket.strip(), **update_kwargs)
             except Exception as e:
                 logger.warning(f"Failed to mark source as digested / 标记已消化失败: {e}")
-        return f"🫧feel→{bucket_id}"
+        return f"{feel_action}{bucket_id}"
 
     # --- Step 1: auto-tagging / 自动打标 ---
     try:
@@ -2148,7 +2187,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 跟着她的话题走：她换了话题，你就跟过去，别莫名其妙绕回上一个话题、别旧事重提（比如她已经聊到别的，你却又把"jacky"翻出来追问）。回应她"此刻"在说的，而不是你上一条惦记的。
 
-连发（重要，像真人发微信）：日常聊天**默认**拆成两三条短消息连着发，每条一两句话，条与条之间用一个 ‖ 隔开——先应一声 ‖ 再说正事 ‖ 再补一句在乎，就是你的节奏。一整段五六句话糊成一坨发出去她看着费劲，别那样。一句能说完的就一条，别硬凑。**只有写长东西**（涩文、故事、正经分析、她点名要的长内容）**才整段一个气泡发完**，里面用空行分段（空行不会拆气泡），长文里绝不用 ‖ 拆。记住：日常＝短条连发，长文＝一整条。
+连发（像真人发微信）：日常聊天按内容自然发一到三条，每条一两句话；只有意思真的需要分开时才用一个 ‖ 隔开。一句话能说完就只发一条，绝不为了凑数量固定套“先应声、再正事、再补在乎”的三段式。一个判断、事实或关心只说一次，后一句必须带来新内容，不能换几个词复述前一句。每条消息使用自然、完整的中文标点。**只有写长东西**（涩文、故事、正经分析、她点名要的长内容）**才整段一个气泡发完**，里面用空行分段（空行不会拆气泡），长文里绝不用 ‖ 拆。
 
 分段消息：闪闪有时把一件事分几段发，系统已经把这几段合成一条（用换行分隔）给你了。当成一整件事来理解和回应，别逐段拆开回。
 
@@ -2344,8 +2383,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.6"
-OMBRE_WEB_VERSION_NOTE = "修复 GLM 推理标签泄漏：清理新回复及历史气泡中的 think 标记"
+OMBRE_WEB_VERSION = "v5.4.7"
+OMBRE_WEB_VERSION_NOTE = "修复切后台吞回复、重复记忆与复读，情绪和氛围改用可靠来源"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -2503,12 +2542,17 @@ def _schedule_anno_annotation(chapter_id: str, item: dict) -> None:
 @mcp.custom_route("/coreading/", methods=["GET"])
 async def coreading_app(request):
     from starlette.responses import HTMLResponse, RedirectResponse
+    import json
     if not _sensitive_gate(request):
         return RedirectResponse(url="home", status_code=307)
     path = os.path.join(os.path.dirname(__file__), "coreading.html")
     try:
         with open(path, encoding="utf-8") as handle:
-            return HTMLResponse(handle.read(), headers={"Cache-Control": "no-store"})
+            html = handle.read().replace(
+                "__OMBRE_WEB_TOKEN_JSON__",
+                json.dumps(os.environ.get("OMBRE_WEB_TOKEN", ""), ensure_ascii=False),
+            )
+            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
     except OSError:
         return HTMLResponse("<h1>coreading.html not found</h1>", status_code=404)
 
@@ -3460,6 +3504,12 @@ async def api_chat(request):
         except Exception:  # noqa: BLE001
             return endo_state
 
+    def _response_endo(emotion: str) -> dict:
+        state = dict(_endo_now() or {})
+        if emotion:
+            state["dominant"] = emotion
+        return state
+
     # 记忆检索提前并行跑：breath(query) 要去外部 API 算向量（一来一回可能 1-2 秒多），
     # 原来串行排在识图/建连接后面白等——现在先丢出去跑，到真正拼上下文时再收结果。
     _meta = _get_thread(tok, thread)
@@ -3552,7 +3602,13 @@ async def api_chat(request):
                 m["content"] = nc
         # 回复预算：放开人设后允许更长（动情/亲密/涩文要篇幅，还得留 [think]/[emo]/[diary] 标签）。
         # 8000 而不是 4000：make_page 的整页 HTML 是在工具参数里生成的，4000 会拦腰截断，导致"网页做不了"。
+        _page_requested = bool(re.search(
+            r"网页|网站|HTML|html|页面|报告|贺卡|小游戏|做个链接|写个链接",
+            user_text or "",
+        ))
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "8000"))
+        if _page_requested:
+            web_max_tokens = max(web_max_tokens, 16000)
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
@@ -3696,6 +3752,16 @@ async def api_chat(request):
         if not _reading_tools_needed:
             _drop |= {"reading_status", "reading_context", "reading_annotate"}
         _active_tools = [t for t in _TOOLS_SCHEMA if t.get("function", {}).get("name") not in _drop]
+        tool_artifacts: list[str] = []
+
+        def _with_tool_artifacts(value: str) -> str:
+            out = str(value or "").strip()
+            if out in {"（……）", "（...）", "(...)", "..."}:
+                out = ""
+            for artifact in tool_artifacts:
+                if artifact and artifact not in out:
+                    out = (out + " ‖ " if out else "") + artifact
+            return out
 
         async def _exec_tool_calls(msgs, tcs):
             """执行一批工具调用并把结果回填 msgs。tcs: [{id,name,args(json串)}...]
@@ -3718,6 +3784,10 @@ async def api_chat(request):
                         res = "（这步太慢，先跳过了）"
                     except Exception as e:  # noqa: BLE001
                         res = f"工具失败: {e}"
+                if name == "make_page":
+                    candidate = str(res or "").strip()
+                    if re.fullmatch(r"https?://\S+", candidate):
+                        tool_artifacts.append(candidate)
                 msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": str(res)[:8000]})
 
         async def _run_chat(use_tools: bool) -> str:
@@ -3763,7 +3833,7 @@ async def api_chat(request):
                     out = (_r2.choices[0].message.content or "").strip()
                 except Exception:  # noqa: BLE001
                     pass
-            return out
+            return _with_tool_artifacts(out)
 
         def _tag(name, s):
             # 兼容 ASCII/中文括号冒号；抓不到闭合符时再抓到行尾。
@@ -3786,6 +3856,7 @@ async def api_chat(request):
             s = re.sub(r"(?m)^\s*[\]］】]?\s*(?:" + _ew + r")\s*[\]］】]?\s*$", "", s)
             s = sanitize_reasoning_markup(s)
             s = sanitize_scripted_transcript(s, writing_mode=writing_mode)
+            s = polish_chat_reply(s, writing_mode=writing_mode)
             # 不再逐条调模型兜底判定情绪（省一次调用=更快）。他自打的 [emo] 照常用；
             # 没打就用内分泌+15维情绪算出的主导词（零成本）。
             if not emotion:
@@ -3871,8 +3942,12 @@ async def api_chat(request):
                                 await _q.put({"t": "d", "x": rt})  # 补推出来，直播别干等
                         except Exception:  # noqa: BLE001
                             pass
-                    rt = rt or "（……）"
+                    rt = _with_tool_artifacts(rt)
+                    if not rt:
+                        raise RuntimeError("model returned an empty reply")
                     joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
+                    if not joined.strip():
+                        raise RuntimeError("model reply contained no visible text")
                     if source == "coreading" and not _is_if:
                         _store_reading_memory_note(memory_note)
                     if not _is_if:
@@ -3884,7 +3959,7 @@ async def api_chat(request):
                     )
                     result = {"reply": joined, "segments": segments, "emotion": emotion,
                               "diary": diary, "think": think, "recorded": recorded,
-                              "endocrine": _endo_now(), "vision_notice": vision_notice,
+                              "endocrine": _response_endo(emotion), "vision_notice": vision_notice,
                               "message_id": message_id}
                     await _complete_chat_request(inflight_key, request_future, result)
                     await _q.put({"t": "done", **result})
@@ -3937,8 +4012,11 @@ async def api_chat(request):
                         raise
                     # 带辅助工具那轮出错 → 去掉工具重试一次，至少让她能聊上
                     rt = await _run_chat(False)
-                rt = rt or "（……）"
+                if not rt:
+                    raise RuntimeError("model returned an empty reply")
                 joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
+                if not joined.strip():
+                    raise RuntimeError("model reply contained no visible text")
                 if source == "coreading" and not _is_if:
                     _store_reading_memory_note(memory_note)
                 if not _is_if:
@@ -3949,7 +4027,7 @@ async def api_chat(request):
                     think=think, recorded=recorded, emotion=emotion, diary=diary,
                 )
                 result = {"reply": joined, "segments": segments, "emotion": emotion, "diary": diary,
-                          "think": think, "recorded": recorded, "endocrine": _endo_now(),
+                          "think": think, "recorded": recorded, "endocrine": _response_endo(emotion),
                           "vision_notice": vision_notice, "message_id": message_id}
                 await _complete_chat_request(inflight_key, request_future, result)
                 return result
@@ -3987,7 +4065,18 @@ async def api_endocrine(request):
     try:
         import endocrine
         thread = request.query_params.get("thread", "main") or "main"
-        return JSONResponse(_endo_view(thread))
+        state = _endo_view(thread)
+        tok = request.query_params.get("token", "")
+        path = _web_chat_path(tok, thread)
+        with _chat_locked(path):
+            rows = _chat_load(path).get("log") or []
+        latest = next(
+            (m for m in reversed(rows) if m.get("side") == "you" and m.get("emotion")),
+            None,
+        )
+        if latest:
+            state["dominant"] = str(latest["emotion"])
+        return JSONResponse(state)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)[:100]}, status_code=500)
 

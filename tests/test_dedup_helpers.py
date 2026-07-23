@@ -10,7 +10,7 @@ from utils import (
     structure_user_observation,
     repetitive_inner_thought,
 )
-from reply_sanitizer import sanitize_reasoning_markup
+from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup
 
 
 def test_memory_summary_channel_parses_fact_and_feeling_separately():
@@ -70,6 +70,27 @@ def test_orphan_provider_reasoning_tag_is_removed():
 def test_fully_wrapped_reply_keeps_usable_text():
     text = "<think>回床上，我给你盖被子。</think>"
     assert sanitize_reasoning_markup(text) == "回床上，我给你盖被子。"
+
+
+def test_repeated_sentence_prefix_keeps_only_new_clause():
+    text = "你今天已经很累了。你今天已经很累了，但是饭还是要吃。"
+    assert polish_chat_reply(text) == "你今天已经很累了。但是饭还是要吃。"
+
+
+def test_near_duplicate_sentence_is_not_repeated():
+    text = "先去喝口水再回来。先去喝口水再回来找我。"
+    assert polish_chat_reply(text) == "先去喝口水再回来。"
+
+
+def test_daily_chat_gets_complete_terminal_punctuation():
+    assert polish_chat_reply("过来 ‖ 我看看") == "过来。 ‖ 我看看。"
+    assert polish_chat_reply("第一句\n第二句") == "第一句。第二句。"
+    assert polish_chat_reply("他说“过来。”") == "他说“过来。”"
+
+
+def test_writing_mode_is_not_rewritten_by_chat_polisher():
+    text = "第一段没有句号\n\n第二段保留原样"
+    assert polish_chat_reply(text, writing_mode=True) == text
 
 
 def test_parenthesized_user_content_is_visible_action_not_dialogue():

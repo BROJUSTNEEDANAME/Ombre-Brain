@@ -1007,7 +1007,7 @@
   async function pullPrefs(){
     let serverHadData=false;
     try{
-      const res=await fetch('api/prefs');
+      const res=await fetch('api/prefs?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       if(!res.ok) throw 0;
       const data=await res.json(); const p=data&&data.prefs;
       if(!p||typeof p!=='object') throw 0;
@@ -1110,12 +1110,14 @@
   async function refreshEndocrineForThread(){
     const wanted=curThread;
     try{
-      const r=await fetch('api/endocrine?thread='+encodeURIComponent(wanted));
+      const r=await fetch('api/endocrine?thread='+encodeURIComponent(wanted)+'&token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const st=await r.json();
       if(wanted!==curThread) return;
       if(st&&!st.error&&typeof st.libido!=='undefined'){
+        const spoken=(typeof chatLog!=='undefined'&&chatLog.slice().reverse().find(m=>m&&m.side==='you'&&m.emotion))||null;
+        if(spoken) st.dominant=spoken.emotion;
         applyEndocrine(st);
-        if(st.dominant&&typeof setEmotion==='function') setEmotion(st.dominant);
+        if(spoken&&typeof setEmotion==='function') setEmotion(spoken.emotion);
       }
     }catch(e){}
   }
@@ -1501,12 +1503,12 @@
     try{ localStorage.setItem('brainLog',JSON.stringify(brainLog)); }catch(e){}
   }
   compactBrainLog();
-  function recordBrain(text){
-    addMsg('sys','记忆记录：'+text);                    // 独立状态：永远排在他说完的气泡之后
+  function recordBrain(text,showNotice=true){
     const k=(function(){ const d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); })();
     const list=(brainLog[k]=brainLog[k]||[]);
     let found=null; Object.keys(brainLog).some(d=>{ const i=(brainLog[d]||[]).findIndex(r=>_brainSame(r.text||'',text)); if(i>=0){found={d,i};return true;} return false; });
     if(found){ brainLog[found.d][found.i].text=_brainMerge(brainLog[found.d][found.i].text,text); localStorage.setItem('brainLog',JSON.stringify(brainLog)); renderBrain(); if(typeof pushPrefs==='function')pushPrefs(); return; }
+    if(showNotice) addMsg('sys','记忆记录：'+text);
     list.push({text, t:now()});
     localStorage.setItem('brainLog',JSON.stringify(brainLog));
     if(typeof renderBrain==='function') renderBrain();
@@ -1570,6 +1572,10 @@
   let threadsList=[];
   function _lsChat(){ return curThread==='main'?'chatLog':'chatLog_'+curThread; }
   function _lsHist(){ return curThread==='main'?'chatHist':'chatHist_'+curThread; }
+  function _pendingKey(){ return 'pendingChatRequest_'+curThread; }
+  function _pendingRequest(){ try{return JSON.parse(localStorage.getItem(_pendingKey())||'null');}catch(e){return null;} }
+  function _rememberPending(req){ try{localStorage.setItem(_pendingKey(),JSON.stringify(req));}catch(e){} }
+  function _clearPending(id){ const p=_pendingRequest(); if(!id||(p&&p.id===id)){try{localStorage.removeItem(_pendingKey());}catch(e){}} }
   // 聊天记录持久化：关掉重开也在（按当前线取）
   let chatLog=[]; try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){}
   function _uuid(){
@@ -1646,6 +1652,17 @@
   }
   function _mergeLogs(a,b,keepLocalOnly){
     const positions=new Map(), out=[];
+    const pendingId=((_pendingRequest()||{}).id)||'';
+    const repliedTo=new Set((a||[]).filter(m=>m&&m.side==='you'&&m.reply_to).map(m=>m.reply_to));
+    const recentUnanswered=new Set();
+    // 只保护聊天末尾连续发出的用户消息；一遇到已有回复就停止。
+    // 这样能救回切后台前尚未上传的几条，又不会把历史中零散的旧本地行复活。
+    for(let i=(a||[]).length-1;i>=0;i--){
+      const m=a[i];
+      if(!m||!['me','you'].includes(m.side)) continue;
+      if(m.side==='you') break;
+      if(m.id&&!repliedTo.has(m.id)&&Date.now()-_msgTime(m)<86400000) recentUnanswered.add(m.id);
+    }
     const normalized=raw=>{ if(!raw||typeof raw!=='object')return null; let m=_repairLegacyDate(raw);
       if(m.side==='you'){
         const cleaned=cleanAssistantText(m.text);
@@ -1659,7 +1676,9 @@
     (b||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);if(k&&positions.has(k))return;if(k)positions.set(k,out.length);out.push(m);});
     (a||[]).forEach(raw=>{const m=normalized(raw);if(!m)return;const k=_msgSig(m);
       if(k&&positions.has(k)){const at=positions.get(k);out[at]=Object.assign({},m,out[at]);return;}
-      if(!keepLocalOnly)return;
+      // 首次导入后仍只保留一个很窄的例外：最近且尚无 reply_to 的本地用户消息。
+      // 它可能刚显示就因 iPhone 切后台而没上传；保住 ID 才能安全重发，不复活旧回复。
+      if(!keepLocalOnly && !(k&&(k===pendingId||recentUnanswered.has(k))))return;
       if(k)positions.set(k,out.length);out.push(m);
     });
     return out.map((m,i)=>({m,i})).sort((x,y)=>{
@@ -1667,15 +1686,15 @@
       return delta||x.i-y.i;
     }).map(x=>x.m);
   }
-  async function loadServerChat(){
-    if(typeof inFlight!=='undefined' && inFlight) return;  // 正在流式打字：绝不整屏重画（会把直播气泡抹掉）；等这轮说完再同步
+  async function loadServerChat(force=false){
+    if(typeof inFlight!=='undefined' && inFlight && !force) return;
     try{
       const importKey='chatServerImportedV2_'+curThread;
       if(!localStorage.getItem(importKey) && chatLog.length){
         const imported=await fetch('api/chat/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread,log:chatLog.slice(-300),hist:(chatHistory||[]).slice(-40),import_legacy:true})});
         if(imported.ok) localStorage.setItem(importKey,'1');
       }
-      const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread));
+      const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread)+'&token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
       // Server is authoritative for ordering, but local rows may contain UI
@@ -1694,13 +1713,18 @@
         chatLog=merged;
         if(Array.isArray(data.hist)) chatHistory=data.hist;
         try{ localStorage.setItem(_lsChat(),JSON.stringify(chatLog.slice(-300))); localStorage.setItem(_lsHist(),JSON.stringify((chatHistory||[]).slice(-40))); }catch(e){}
-        scroll.querySelectorAll('.row').forEach(r=>r.remove());
-        chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m));
+        scroll.querySelectorAll('.row,.sysnote').forEach(r=>r.remove());
+        renderStoredChat(chatLog);
         // Rehydrate auxiliary state from canonical message metadata. recordBrain
         // already merges equivalent entries, so repeated refreshes stay idempotent.
         const withThink=chatLog.slice().reverse().find(m=>m.side==='you'&&m.think);
         if(withThink){ lastThink=withThink.think; try{localStorage.setItem('lastThink',lastThink);}catch(e){} }
-        chatLog.forEach(m=>{ if(Array.isArray(m.recorded)&&typeof recordBrain==='function') m.recorded.forEach(recordBrain); });
+        const withEmotion=chatLog.slice().reverse().find(m=>m.side==='you'&&m.emotion);
+        if(withEmotion){
+          if(lastEndo) lastEndo=Object.assign({},lastEndo,{dominant:withEmotion.emotion});
+          if(typeof setEmotion==='function') setEmotion(withEmotion.emotion);
+        }
+        chatLog.forEach(m=>{ if(Array.isArray(m.recorded)&&typeof recordBrain==='function') m.recorded.forEach(x=>recordBrain(x,false)); });
       }
     }catch(e){}
   }
@@ -1711,10 +1735,14 @@
   const _orphanEmotion=new RegExp('(^|\\n)\\s*[\\]】］]?\\s*('+CONTROL_EMOTIONS.join('|')+')\\s*[\\]】］]?\\s*(?=\\n|$)','g');
   function cleanAssistantText(value){
     let s=''+(value||'');
+    s=s.replace(/&lt;\s*think\s*&gt;/gi,'<think>').replace(/&lt;\s*\/\s*think\s*&gt;/gi,'</think>');
+    s=s.replace(/<\s*think\b[^>]*>[\s\S]*?<\s*\/\s*think\s*>/gi,'');
+    s=s.replace(/<\s*\/?\s*(?:think|thinking)\b[^>]*>/gi,'');
     // 同时兼容模型偶尔写出的英文/中文括号和冒号；这些都是控制元数据，不是台词。
     s=s.replace(/[\[［【]\s*(?:emo|diary|think|memory|情绪|心情|记忆)\s*[:：][^\]］】\n]*(?:[\]］】]|$)/gi,'');
     // 流中断时可能只剩 `占有]` 这一截；仅删除独占一行的情绪词，不碰正常句子里的“占有”。
     s=s.replace(_orphanEmotion,(all,lead)=>lead);
+    if(['（……）','（...）','(...)','...'].includes(s.trim())) return '';
     return s;
   }
   function _glowify(t){
@@ -1762,11 +1790,38 @@
   function addMsg(side,text,img,think,meta){
     if(side==='you')text=cleanAssistantText(text).trim();
     if(!(text&&(''+text).trim()) && !img) return null;
+    if(meta&&meta.id){
+      const existing=chatLog.find(m=>m&&m.id===meta.id);
+      if(existing){
+        Object.assign(existing,meta);
+        if(text) existing.text=text;
+        if(think) existing.think=think;
+        saveChat();
+        return existing;
+      }
+    }
     const utc=(meta&&meta.ts)||new Date().toISOString();
     const t=(meta&&meta.t)||now();
     const m={id:(meta&&meta.id)||_homeMessageId(),source:(meta&&meta.source)||'home',side,text,t,img,think,ts:utc,dk:(meta&&meta.dk)||(typeof tKey==='function'?tKey():'')};
     if(meta&&meta.reply_to)m.reply_to=meta.reply_to;
+    if(meta&&Array.isArray(meta.recorded))m.recorded=meta.recorded.slice();
+    if(meta&&meta.emotion)m.emotion=meta.emotion;
+    if(meta&&meta.diary)m.diary=meta.diary;
     renderBubble(side,text,t,img,think,m); chatLog.push(m); saveChat(); return m;
+  }
+  function renderStoredChat(log){
+    const shownMemories=[];
+    (log||[]).forEach(m=>{
+      renderBubble(m.side,m.text,m.t,m.img,m.think,m);
+      if(m.side==='you'&&Array.isArray(m.recorded)){
+        m.recorded.forEach(note=>{
+          if(!shownMemories.some(old=>_brainSame(old,note))){
+            shownMemories.push(note);
+            renderBubble('sys','记忆记录：'+note);
+          }
+        });
+      }
+    });
   }
   let thinkTimer=null, thinkWarnTimer=null, petBusy=false, petCtl=null;
   function startThinking(){
@@ -1814,21 +1869,24 @@
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   // 像真人发微信：把回复分成几条气泡，逐条蹦出来，中间冒「正在输入」的小停顿
   async function showReply(data){
-    const reply=(data&&data.reply)||'（……）';
+    const reply=(data&&data.reply)||'';
     const replyTo=(data&&data.message_id)||_homeMessageId();
     let segs=(data&&Array.isArray(data.segments)&&data.segments.length)?data.segments.slice(0,6):[reply];
     // 只清理本轮内部的重复段。不能拿历史气泡去重：他再次说“嗯”“睡吧”也是真实的新回复，
     // 历史去重会把整条正常消息吞掉，尤其容易出现在存记忆后的非流式降级路径。
     const seen=new Set();
     segs=segs.map(s=>cleanAssistantText(s).trim()).filter(s=>{ if(!s||seen.has(s)) return false; seen.add(s); return true; });
-    if(!segs.length) return;                       // 全是重复 → 一句都不发，避免复读
+    if(!segs.length) throw new Error('empty visible reply');
     stopThinking();
     const _think=(data&&data.think)||'';           // 他这轮的内心/记忆，挂到最后一条气泡上，默认缩着
     for(let i=0;i<segs.length;i++){
       if(i>0) await sleep(300+Math.min(segs[i].length*14, 800));   // 条与条之间小停顿，像他在打下一条
       addMsg('you', segs[i], null, i===segs.length-1 ? _think : '', {
         id:replyTo+':assistant:'+i,
-        source:'brain', reply_to:replyTo
+        source:'brain', reply_to:replyTo,
+        recorded:i===segs.length-1&&Array.isArray(data.recorded)?data.recorded:[],
+        emotion:i===segs.length-1?(data.emotion||''):'',
+        diary:i===segs.length-1?(data.diary||''):''
       });
     }
     petCtl && petCtl.fromType(true);
@@ -1849,13 +1907,32 @@
     const TAGRE=/^\[(?:emo|diary|think|memory):[^\]\n]*\]/;                  // 完整标签
     const OPENRE=/^\[(?:emo|diary|think|memory):[^\]\n]*$/;                   // 开了没闭合（可能还没传完）
     const PREFIX=/^\[(?:e(?:m(?:o:?)?)?|d(?:i(?:a(?:r(?:y:?)?)?)?)?|t(?:h(?:i(?:n(?:k:?)?)?)?)?|m(?:e(?:m(?:o(?:r(?:y:?)?)?)?)?)?)?$/; // 半截标签名
+    const XMLBLOCK=/^<\s*think\b[^>]*>[\s\S]*?<\s*\/\s*think\s*>/i;
+    const XMLCLOSE=/^<\s*\/\s*think\s*>/i;
+    const XMLOPEN=/^<\s*think\b[^>]*>[\s\S]*$/i;
+    const XMLPREFIX=/^<\s*\/?\s*t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?[^>]*$/i;
     function put(x){ if(!x) return; const sp=ensure(); sp.textContent=cleanAssistantText(sp.textContent+x); shown=!!sp.textContent; toBottom(); }
     function feed(chunk){
       let s=hold+chunk; hold='';
       while(s){
-        const br=s.indexOf('‖'), lb=s.indexOf('[');
-        if(lb===-1 && br===-1){ put(s); return; }
-        if(br!==-1 && (lb===-1 || br<lb)){ put(s.slice(0,br)); cur=null; s=s.slice(br+1); continue; }
+        const br=s.indexOf('‖'), lb=s.indexOf('['), xml=s.search(/<\s*\/?\s*think/i);
+        const controls=[lb,xml].filter(x=>x>=0);
+        const nextControl=controls.length?Math.min(...controls):-1;
+        if(nextControl===-1 && br===-1){
+          const partial=s.match(/<\s*\/?\s*t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?$/i);
+          if(partial){ put(s.slice(0,partial.index)); hold=partial[0]; return; }
+          put(s); return;
+        }
+        if(br!==-1 && (nextControl===-1 || br<nextControl)){ put(s.slice(0,br)); cur=null; s=s.slice(br+1); continue; }
+        if(xml!==-1 && xml===nextControl){
+          put(s.slice(0,xml)); s=s.slice(xml);
+          const block=s.match(XMLBLOCK);
+          if(block){ s=s.slice(block[0].length); continue; }
+          const close=s.match(XMLCLOSE);
+          if(close){ s=s.slice(close[0].length); continue; }
+          if(XMLOPEN.test(s)||XMLPREFIX.test(s)){ hold=s; return; }
+          put('<'); s=s.slice(1); continue;
+        }
         put(s.slice(0,lb)); s=s.slice(lb);
         const m=s.match(TAGRE);
         if(m){ s=s.slice(m[0].length); continue; }                     // 完整标签 → 吞掉不显示
@@ -1908,7 +1985,7 @@
           const seen=sink.texts?sink.texts():[];
           sink.destroy();
           seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
-          stopThinking(); pollForReply(60000); return null;
+          stopThinking(); pollForReply(300000,true,messageId); return null;
         }
         sink.destroy(); throw e;   // 一个字没收到 → 让外层退回非流式重来
       }
@@ -1921,7 +1998,7 @@
         const seen=sink.texts?sink.texts():[];
         sink.destroy();
         seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
-        stopThinking(); pollForReply(60000); return null;
+        stopThinking(); pollForReply(300000,true,messageId); return null;
       }
       sink.destroy(); throw new Error('stream no done');
     }
@@ -1933,11 +2010,15 @@
     // 吃掉重复=吃掉他说的话（踩过坑：去重把整条回复吞了，看起来像"回复消失"）。
     // 流式一条流一个 done，不存在非流式那种重发复读问题。
     sink.destroy();
-    const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||'（……）'];
+    const segs=(Array.isArray(done.segments)&&done.segments.length)?done.segments.slice(0,6):[done.reply||''];
     const fin=segs.map(s=>cleanAssistantText(s).trim()).filter(Boolean);
+    if(!fin.length) throw new Error('stream empty visible reply');
     stopThinking();
     fin.forEach((s,i)=>addMsg('you',s,null,i===fin.length-1?(done.think||''):'',{
-      id:((done&&done.message_id)||messageId)+':assistant:'+i,source:'brain',reply_to:(done&&done.message_id)||messageId
+      id:((done&&done.message_id)||messageId)+':assistant:'+i,source:'brain',reply_to:(done&&done.message_id)||messageId,
+      recorded:i===fin.length-1&&Array.isArray(done.recorded)?done.recorded:[],
+      emotion:i===fin.length-1?(done.emotion||''):'',
+      diary:i===fin.length-1?(done.diary||''):''
     }));
     petCtl && petCtl.fromType(true);
     return done;
@@ -1968,7 +2049,7 @@
   }
   async function refreshInner(openAfter){
     try{
-      const r=await fetch('api/inner');
+      const r=await fetch('api/inner?token='+encodeURIComponent(window.OMBRE_TOKEN||''));
       const d=await r.json();
       _innerCache={entries:(d&&Array.isArray(d.entries))?d.entries:[], hobbies:(d&&d.hobbies)||[]};
     }catch(e){ _innerCache={entries:[],hobbies:[]}; }
@@ -2001,12 +2082,11 @@
     setTimeout(wb, 1500);
     document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') wb(); });
   })();
-  // 欲望内分泌 → 网页视觉：libido 高直接入夜(正经深色主题,字看得清)、dominance 高他的话暗自发光；消退自动切回
+  // 暗红与发光只由闪闪手动控制；数值状态只展示，不再擅自改页面。
   let _endoDim=false, _endoGlow=false, lastEndo=null;
-  // 手动氛围开关（外观面板）：不看他的状态，想开就开；和自动触发是「或」的关系
   let manualVibe={red:false,glow:false}; try{ manualVibe=Object.assign(manualVibe, JSON.parse(localStorage.getItem('manualVibe')||'{}')); }catch(e){}
   function _applyFx(){
-    const red=manualVibe.red||_endoDim, glow=manualVibe.glow||_endoGlow;
+    const red=!!manualVibe.red, glow=!!manualVibe.glow;
     document.body.classList.toggle('dom-glow', glow);
     const had=document.body.classList.contains('desire-red');
     if(red && !had){ document.documentElement.setAttribute('data-theme','dark'); document.body.classList.add('desire-red'); }
@@ -2026,8 +2106,8 @@
       lastEndo=st; try{ localStorage.setItem('endoState',JSON.stringify(st)); }catch(e){}
       const _em=document.getElementById('endoModal');
       if(_em&&_em.classList.contains('show')&&typeof renderEndoPanel==='function') renderEndoPanel();
-      _endoDim=!!st.dim; _endoGlow=!!st.glow;   // 自动触发（内分泌阈值）
-      _applyFx();                                // 和手动开关合并后统一上/卸妆
+      _endoDim=false; _endoGlow=false;
+      _applyFx();
     }catch(e){}
   }
   // 带超时的请求。只在「很快就失败」（请求根本没到、服务器没处理）时重试一次，避免重复生成/重复说。
@@ -2053,22 +2133,32 @@
   // 切屏/刷新回来后，耐心轮询把他在后台写好的回复捞回来——IF线首句要建缓存、生成慢，
   // 只试一两次会漏，所以持续轮询直到他那条回复真的进来（或超时）。
   let _recoverTimer=null;
-  function pollForReply(maxMs, resendOnFail){
+  function pollForReply(maxMs, resendOnFail, requestId){
     clearInterval(_recoverTimer);
-    const start=Date.now(); const before=chatLog.length;
+    const pendingReq=_pendingRequest();
+    const targetId=requestId||(pendingReq&&pendingReq.id)||((chatLog.slice().reverse().find(m=>m&&m.side==='me')||{}).id);
+    if(!targetId) return;
+    const start=Date.now();
     startThinking(); if(thinkText) thinkText.textContent='他还在写…';
     const tick=async()=>{
-      await loadServerChat();
-      const last=chatLog[chatLog.length-1];
-      if(chatLog.length>before && last && last.side==='you'){ clearInterval(_recoverTimer); stopThinking(); return; }
+      await loadServerChat(true);
+      const found=chatLog.some(m=>m&&m.side==='you'&&m.reply_to===targetId);
+      if(found){
+        clearInterval(_recoverTimer); stopThinking(); _clearPending(targetId);
+        if(activeRequestId===targetId) activeRequestId='';
+        return;
+      }
       if(Date.now()-start>maxMs){
         clearInterval(_recoverTimer); stopThinking();
         // 捞了这么久服务器上也没有回复＝那条消息大概率根本没送到（熄屏时请求被系统掐死）。
         // resendOnFail 时把她最后那条自动重发一遍——否则消息就永远丢了（早安发完睡着→他一直没收到）。
         // 只在「切屏恢复/开页发现没回复」的场景开这个开关；流式半路断线的恢复不开（那边服务器多半已在写）。
         if(resendOnFail && !inFlight){
-          const lm=chatLog[chatLog.length-1];
-          if(lm && lm.side==='me' && lm.text && !lm.img){ requestReply(lm.text, lm.text, lm.id||_homeMessageId(), lm.ts||new Date().toISOString()); }
+          const saved=_pendingRequest();
+          const lm=chatLog.find(m=>m&&m.id===targetId&&m.side==='me');
+          const text=(saved&&saved.id===targetId&&saved.text)||((lm&&lm.text)||'');
+          const ts=(saved&&saved.id===targetId&&saved.ts)||((lm&&lm.ts)||new Date().toISOString());
+          if(text && !(saved&&saved.rich) && !(lm&&lm.img)) requestReply(text,text,targetId,ts);
         }
       }
     };
@@ -2077,16 +2167,18 @@
   }
   // 核心：把一条用户消息发给大脑，处理回复。userApiContent 可以是字符串或富内容块数组（图片/文件）；
   // histText 是存进上下文的纯文字占位（图片/文件不存 base64，省 token）。
-  let inFlight=false, recoverOnReturn=false, lastHiddenAt=0;
+  let inFlight=false, recoverOnReturn=false, lastHiddenAt=0, activeRequestId='';
   // 切屏/熄屏会让浏览器挂起在途请求。但服务器会在后台把回复算完、存住（像 Telegram），
   // 所以回前台时不重发（省钱、不重复），而是去服务器把他存好的回复捞回来。
   document.addEventListener('visibilitychange', ()=>{
     if(document.hidden){ lastHiddenAt=Date.now(); }
-    else if(recoverOnReturn){
-      recoverOnReturn=false;
-      pollForReply(120000, true);       // 回前台：耐心轮询最多2分钟；真捞不到=没送到过 → 自动重发那条
+    else {
+      const saved=_pendingRequest();
+      if(recoverOnReturn||inFlight||saved){
+        recoverOnReturn=false;
+        pollForReply(300000,true,(saved&&saved.id)||activeRequestId);
+      } else loadServerChat();
     }
-    else { loadServerChat(); }          // 普通回前台：同步一下——把你在 Telegram 那边聊的拉进来
   });
   async function requestReply(userApiContent, histText, messageId, messageTs){
     if(inFlight) return;            // 防重入：同一时刻只允许一条在途，杜绝重复请求/重复说
@@ -2095,6 +2187,8 @@
     const reqStart=Date.now();
     startThinking();
     messageId=messageId||_homeMessageId(); messageTs=messageTs||new Date().toISOString();
+    activeRequestId=messageId;
+    _rememberPending({id:messageId,ts:messageTs,text:histText||'',rich:typeof userApiContent!=='string',started:reqStart});
     const outgoing = [{role:'user',content:userApiContent}];
     try{
       // 先走流式（一个字一个字打出来）；流式起不来（老浏览器/代理不支持）才退回一次性等全文
@@ -2105,31 +2199,35 @@
       if(!streamed){
         data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode,
                               source:'home', message_id:messageId, timestamp:messageTs, server_history:true });
-        if(data&&data.error_code){ showChatError(data); return; }
+        if(data&&data.error_code){ showChatError(data); _clearPending(messageId); activeRequestId=''; return; }
         await showReply(data);
       }
-      if(data&&data.error_code){ showChatError(data); return; }
+      if(data&&data.error_code){ showChatError(data); _clearPending(messageId); activeRequestId=''; return; }
       showVisionNotice(data);
-      const reply=(data&&data.reply)||'（……）';
+      const reply=(data&&data.reply)||'';
       chatHistory.push({role:'user',content:histText},{role:'assistant',content:reply});
       if(chatHistory.length>40) chatHistory=chatHistory.slice(-40);
       saveChat();
-      if(data&&data.endocrine) applyEndocrine(data.endocrine);
-      // 顶栏情绪 = 面板同一个来源（身体状态算出的主导情绪），保证俩一致；没有就退回他自标的
-      const _emo=(data&&data.endocrine&&data.endocrine.dominant)||(data&&data.emotion)||'';
+      if(data&&data.endocrine){
+        const state=Object.assign({},data.endocrine);
+        if(data.emotion) state.dominant=data.emotion;
+        applyEndocrine(state);
+      }
+      const _emo=(data&&data.emotion)||(data&&data.endocrine&&data.endocrine.dominant)||'';
       if(_emo) setEmotion(_emo);
       // 日历由每天收尾任务统一总结；普通聊天不再逐条写雾气/日记，省 token。
       if(data&&data.think){ lastThink=data.think; localStorage.setItem('lastThink',lastThink); }
       if(data&&Array.isArray(data.recorded)&&data.recorded.length && typeof recordBrain==='function'){ data.recorded.forEach(rec=>recordBrain(rec)); }
+      _clearPending(messageId); activeRequestId='';
     }catch(e){
       stopThinking();
       const wasBackgrounded = document.hidden || lastHiddenAt>=reqStart;   // 这次请求期间切过屏
       if(wasBackgrounded){
         // 切屏被挂断：他在后台会把回复存到服务器，别重发，回来捞即可
         if(document.hidden){ recoverOnReturn=true; }     // 还在后台 → 回前台时捞
-        else { pollForReply(120000, true); }             // 已回前台 → 耐心轮询直到他写好；捞不到就自动重发
+        else { pollForReply(300000,true,messageId); }
       } else {
-        addMsg('you','（我这边断了一下，网不好。再说一次。）');     // 真·网络问题才报错
+        pollForReply(180000,true,messageId);
       }
     } finally {
       inFlight=false;
@@ -2164,7 +2262,7 @@
   // ---------- 线（IF 平行宇宙）交互 ----------
   function _threadName(){ if(curThread==='main')return '主线'; const t=threadsList.find(x=>x.id===curThread); return t?t.name:'主线'; }
   function paintThreadChip(){ const c=document.getElementById('threadChip'); if(c) c.textContent='🌌 '+_threadName(); }
-  async function loadThreads(){ try{ const r=await fetch('api/threads'); const d=await r.json(); threadsList=Array.isArray(d.threads)?d.threads:[]; }catch(e){ threadsList=[]; } paintThreadChip(); }
+  async function loadThreads(){ try{ const r=await fetch('api/threads?token='+encodeURIComponent(window.OMBRE_TOKEN||'')); const d=await r.json(); threadsList=Array.isArray(d.threads)?d.threads:[]; }catch(e){ threadsList=[]; } paintThreadChip(); }
   async function switchThread(tid){
     if(tid===curThread){ document.getElementById('threadModal').classList.remove('show'); return; }
     saveChat();
@@ -2172,8 +2270,8 @@
     refreshEndocrineForThread();
     try{ chatLog=JSON.parse(localStorage.getItem(_lsChat()))||[]; }catch(e){ chatLog=[]; }
     try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){ chatHistory=[]; }
-    scroll.querySelectorAll('.row').forEach(r=>r.remove());
-    if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img,m.think,m)); }
+    scroll.querySelectorAll('.row,.sysnote').forEach(r=>r.remove());
+    if(chatLog.length){ renderStoredChat(chatLog); }
     else if(curThread!=='main'){ renderBubble('sys','—— 这条线还没开始，说句话吧 ——'); }
     // 切进 IF 线，冒一条「设定已加载」确认（灰字，不入库），让她一眼看到世界书/人设吃进去了
     if(curThread!=='main'){ const t=threadsList.find(x=>x.id===curThread); const n=_loadedNote(t); if(n) renderBubble('sys',n); }
@@ -2212,7 +2310,7 @@
   }
   async function previewThread(tid){
     let d=null;
-    try{ const r=await fetch('api/threads/preview?thread='+encodeURIComponent(tid)); d=await r.json(); }catch(e){}
+    try{ const r=await fetch('api/threads/preview?thread='+encodeURIComponent(tid)+'&token='+encodeURIComponent(window.OMBRE_TOKEN||'')); d=await r.json(); }catch(e){}
     const m=document.getElementById('previewModal'); const b=document.getElementById('previewBody');
     if(!m||!b) return;
     b.textContent=(d&&d.text)?d.text:'（读不到设定）';
@@ -2275,14 +2373,19 @@
   })();
 
   // 开场：有历史就恢复，没有就打个招呼（招呼不入库）
-  if(chatLog.length){ chatLog.forEach(m=>renderBubble(m.side,m.text,m.t,m.img)); }
+  if(chatLog.length){ renderStoredChat(chatLog); }
   else if(curThread!=='main'){ renderBubble('sys','—— 这条线还没开始，说句话吧 ——'); }
   else { renderBubble('you','回来了。'); setTimeout(()=>renderBubble('you','今天还好吗。'),500); }
   loadThreads();
   loadServerChat().then(()=>{
     // 刷新时若最后一条是「我」发的、还没等到他回复 → 他可能正在后台写（IF线尤其慢），耐心轮询捞回来
+    const saved=_pendingRequest();
     const last=chatLog[chatLog.length-1];
-    if(last && last.side==='me'){ pollForReply(120000, true); }   // 开页发现欠回复：捞不到就自动重发那条
+    if(saved&&saved.id) pollForReply(300000,true,saved.id);
+    else if(last && last.side==='me'){
+      _rememberPending({id:last.id,ts:last.ts,text:last.text||'',rich:!!last.img,started:Date.now()});
+      pollForReply(300000,true,last.id);
+    }
   });
 
   // 你回家时我先开口（home 版的「想你」——代替 Telegram 定时打扰，只在你离开久了、重新打开时出现）
@@ -2748,7 +2851,7 @@
     if(dot){ const vx=(st.valence!=null?st.valence:st.libido), vy=(st.arousal!=null?st.arousal:st.dominance);
       dot.style.left=(Math.max(0,Math.min(10,vx))*10)+'%'; dot.style.bottom=(Math.max(0,Math.min(10,vy))*10)+'%'; }
     const modeTxt=st.mode==='low_energy'?'没电了（社畜档）':(st.mode==='high_drive'?'上头了':'平稳');
-    modeEl.textContent='状态：'+modeTxt+' · '+(st.visual_reason||'未达到暗红或发光阈值')+' · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
+    modeEl.textContent='状态：'+modeTxt+' · 外观仅由你手动开启 · 距下次自然起伏还有 '+Math.max(0,15-(st.messageCountSinceRoll||0))+' 条';
   }
   (function(){
     const modal=document.getElementById('endoModal'); if(!modal) return;
@@ -2765,13 +2868,13 @@
       try{
         const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
         const st=await r.json();
-        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); if(st.dominant) setEmotion(st.dominant); }
+        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
       }catch(e){}
       setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
     };
-    // 开页先把他当前的身体状态捞回来（恢复入夜/发光 + 顶栏情绪同步——以前刷新后顶栏会掉回默认"安定"）
+    // 开页只恢复数值面板；暗红和发光由外观按钮手动决定。
     refreshEndocrineForThread();
-    // 手动氛围合并开关 + 真正恢复正常：同时清手动效果和两套情绪状态。
+    // 手动氛围开关；恢复正常只改外观，不擅自重置人物情绪。
     const vb=document.getElementById('skinVibe');
     if(vb){
       const both=vb.querySelector('[data-vb="both"]'), reset=vb.querySelector('[data-vb="reset"]');
@@ -2781,17 +2884,10 @@
         try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
         _applyFx();
       };
-      if(reset) reset.onclick=async()=>{
-        reset.disabled=true; const old=reset.textContent; reset.textContent='正在恢复…';
+      if(reset) reset.onclick=()=>{
         manualVibe={red:false,glow:false};
         try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
         _endoDim=false; _endoGlow=false; _applyFx();
-        try{
-          const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
-          const st=await r.json();
-          if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); if(st.dominant) setEmotion(st.dominant); }
-        }catch(e){}
-        reset.disabled=false; reset.textContent=old; _applyFx();
       };
     }
     _applyFx();

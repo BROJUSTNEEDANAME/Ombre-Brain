@@ -25,6 +25,7 @@
   <div class="selectbar" id="selectbar"><button id="commentBtn">写批注</button><button id="onlyMark">只划线</button><button class="ask" id="markAsk">划线，问他</button></div>
   <aside class="drawer" id="drawer"><div class="grab" id="grab"><strong>Nikto 在这</strong><span id="chatHint">上拉聊天</span></div><div class="chatlog" id="chatlog"></div><div class="compose"><input id="chatInput" maxlength="2000" placeholder="边读边跟他说…"><button id="send">↑</button></div></aside>
 <script>
+  window.OMBRE_TOKEN=__OMBRE_WEB_TOKEN_JSON__;
   const $=id=>document.getElementById(id), token=window.OMBRE_TOKEN||'';
   let chapter=null,currentPara='',selectedText='',selectedPara='',drawerOpen=false,chatBusy=false;
   const uuid=()=>window.crypto&&crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
@@ -48,7 +49,7 @@
   $('commentBtn').onclick=addComment;
   async function claimAnchor(pid){if(!chapter)return;try{const d=await api('api/coreading/anchor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,chapter_id:chapter.id,paragraph_id:pid})});if(d.anchor){await saveState(pid,'');const message='【共读后台事件，不是闪闪说的话】她刚读到 '+pid+'。你预读时注意到：'+d.anchor.hint+'。现在以你平常和她说话的方式，只有确实想说的那一句或两句；不要复述剧情，不要提后台分析。';await askBrain(message,true)}}catch(e){}}
   function appendMsg(side,text){if(!text)return;const d=document.createElement('div');d.className='msg '+side;d.textContent=text;$('chatlog').appendChild(d);$('chatlog').scrollTop=$('chatlog').scrollHeight}
-  async function loadChat(){try{const d=await api('api/chat/state?thread=main');$('chatlog').innerHTML='';(d.log||[]).slice(-24).forEach(m=>appendMsg(m.side==='me'?'me':'you',m.text))}catch(e){}}
+  async function loadChat(){try{const d=await api('api/chat/state?thread=main&token='+encodeURIComponent(window.OMBRE_TOKEN||''));$('chatlog').innerHTML='';(d.log||[]).slice(-24).forEach(m=>appendMsg(m.side==='me'?'me':'you',m.text))}catch(e){}}
   async function askBrain(text,ghost=false){if(chatBusy)return;chatBusy=true;$('send').disabled=true;if(!ghost)appendMsg('me',text);try{const id='coreading:'+uuid(),d=await api('api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:[{role:'user',content:text}],token,thread:'main',source:'coreading',message_id:id,timestamp:new Date().toISOString(),server_history:true,ghost_user:ghost})});(d.segments&&d.segments.length?d.segments:[d.reply]).filter(Boolean).forEach(s=>appendMsg('you',s));if(Array.isArray(d.recorded)&&d.recorded.length)localStorage.setItem('coreadingLastMemory',JSON.stringify(d.recorded))}catch(e){appendMsg('you','这一下没接上，但阅读位置已经留住了。')}finally{chatBusy=false;$('send').disabled=false}}
   async function sendChat(forced){const text=(forced||$('chatInput').value).trim();if(!text)return;$('chatInput').value='';await askBrain(text,false)}
   $('send').onclick=()=>sendChat();$('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendChat()}});

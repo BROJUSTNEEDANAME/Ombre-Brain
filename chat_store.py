@@ -206,6 +206,9 @@ def response_for(log: list, request_id: str) -> dict | None:
         "segments": segments,
         "think": str(last.get("think") or ""),
         "recorded": list(last.get("recorded") or []),
+        "emotion": str(last.get("emotion") or ""),
+        "diary": str(last.get("diary") or ""),
+        "message_id": str(request_id),
         "deduplicated": True,
     }
 
