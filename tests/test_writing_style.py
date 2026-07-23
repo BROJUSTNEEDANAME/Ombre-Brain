@@ -30,6 +30,24 @@ def test_writing_mode_drives_emotion_engines_when_enabled():
     assert "endocrine.block(thread, writing_mode=writing_mode)" in server_src
 
 
+def test_reply_generation_applies_repetition_penalty():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    # GLM/Grok 复读的根治杠杆：解码层的 frequency/presence penalty
+    assert "frequency_penalty=fp" in server_src
+    assert "presence_penalty=pp" in server_src
+    assert "async def _llm_reply(" in server_src
+    # 所有主回复生成点都必须走带惩罚的入口，而不是裸 _llm_create
+    assert "_llm_reply(_web_llm, writing_mode=writing_mode" in server_src
+    # provider 不认惩罚参数时能自动降级，不能把聊天打挂
+    assert "_penalty_param_ok = False" in server_src
+
+
+def test_new_looping_formulas_are_named_in_ban_list():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    assert "第二回比第一回更满" in server_src
+    assert "不是从零开始" in server_src
+
+
 def test_intimate_engine_keeps_three_axes_and_continuity():
     assert "阶段轴" in INTIMATE_WRITING_ENGINE
     assert "六要素轴" in INTIMATE_WRITING_ENGINE
