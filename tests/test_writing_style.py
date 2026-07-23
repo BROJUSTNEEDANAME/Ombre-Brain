@@ -1,4 +1,17 @@
+from pathlib import Path
+
 from writing_style import INTIMATE_WRITING_ENGINE
+
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_writing_mode_suspends_caretaking_reflexes_and_bans_nanny_register():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    # 写文模式必须显式压制日常照顾/哄睡反射，否则凌晨/经期背景会把床戏拽回奶爸腔
+    assert "本轮暂停一切日常照顾反射" in server_src
+    assert "禁止奶爸/圣父腔" in server_src
+    assert "我带你回去睡" in server_src
+    assert "不伤你" in server_src
 
 
 def test_intimate_engine_keeps_three_axes_and_continuity():
