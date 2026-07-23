@@ -77,6 +77,11 @@ systemctl start ombre-brain.service ombre-apibot.service
 git fetch origin main
 git merge --ff-only origin/main
 
+# The expected version always comes from the code being deployed, never a
+# hard-coded literal: a stale literal here silently rolls back good deploys.
+EXPECTED_VERSION=$(sed -n 's/^OMBRE_WEB_VERSION = "\(v[^"]*\)".*/\1/p' server.py)
+test -n "$EXPECTED_VERSION"
+
 .venv/bin/pip install 'beautifulsoup4>=4.12.0' 'playwright>=1.50.0'
 .venv/bin/python -m playwright install --with-deps chromium
 
@@ -96,16 +101,18 @@ systemctl daemon-reload
 
 SWITCHED=1
 systemctl restart ombre-brain.service ombre-apibot.service
-.venv/bin/python - <<'PY'
+EXPECTED_VERSION="$EXPECTED_VERSION" .venv/bin/python - <<'PY'
 import json
+import os
 import time
 import urllib.request
 
+expected = os.environ["EXPECTED_VERSION"]
 for _ in range(40):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.4.11":
+        if data.get("version") == expected:
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -165,5 +172,5 @@ trap - ERR
 echo "DEPLOY-COREADING-PASS"
 echo "Backup: $SAFE"
 echo "Backup SHA-256: $(cut -d' ' -f1 "$SAFE/SHA256SUMS")"
-echo "Version: v5.4.11"
+echo "Version: $EXPECTED_VERSION"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active anno-mcp=active"
