@@ -2383,8 +2383,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.7"
-OMBRE_WEB_VERSION_NOTE = "修复切后台吞回复、重复记忆与复读，情绪和氛围改用可靠来源"
+OMBRE_WEB_VERSION = "v5.4.8"
+OMBRE_WEB_VERSION_NOTE = "修复网页长任务被60秒掐断，以及失败后Home持续空转"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3524,6 +3524,20 @@ async def api_chat(request):
                 return ""
         _mem_task = asyncio.create_task(_safe_breath(user_text))
 
+    _page_requested = bool(re.search(
+        r"网页|网站|HTML|html|页面|报告|贺卡|小游戏|做个链接|写个链接",
+        user_text or "",
+    ))
+
+    def _chat_error_info(exc):
+        info = classify_chat_error(exc)
+        if _page_requested and info["code"] == "model_timeout":
+            return {
+                "code": "model_timeout",
+                "message": "网页生成超过 180 秒，本次请求已停止；不是还在思考。",
+            }
+        return info
+
     global _web_llm, _web_vision
     try:
         from openai import AsyncOpenAI
@@ -3602,13 +3616,10 @@ async def api_chat(request):
                 m["content"] = nc
         # 回复预算：放开人设后允许更长（动情/亲密/涩文要篇幅，还得留 [think]/[emo]/[diary] 标签）。
         # 8000 而不是 4000：make_page 的整页 HTML 是在工具参数里生成的，4000 会拦腰截断，导致"网页做不了"。
-        _page_requested = bool(re.search(
-            r"网页|网站|HTML|html|页面|报告|贺卡|小游戏|做个链接|写个链接",
-            user_text or "",
-        ))
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "8000"))
         if _page_requested:
             web_max_tokens = max(web_max_tokens, 16000)
+        model_timeout = 180.0 if _page_requested else 60.0
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
         # 绝不塞进 system——否则 system 每轮都变，前缀缓存全断（连带对话历史的缓存也断）。
@@ -3799,7 +3810,10 @@ async def api_chat(request):
             out = ""
             fallback = ""  # 工具轮正文仅兜底；最终轮才是完整、有效的回复
             for _ in range(4):  # 限轮次省钱：工具来回越多，前面的大坨内容就被重发越多遍
-                kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs)
+                kwargs = dict(
+                    model=model, max_tokens=web_max_tokens,
+                    messages=msgs, timeout=model_timeout,
+                )
                 if use_tools and _active_tools:
                     kwargs["tools"] = _active_tools
                 resp = await _llm_create(_web_llm, **kwargs)
@@ -3824,11 +3838,17 @@ async def api_chat(request):
                 await _exec_tool_calls(msgs, [
                     {"id": tc.id, "name": tc.function.name, "args": tc.function.arguments} for tc in tcs
                 ])
+                # make_page 已经成功就直接交付链接。再向模型追问一句总结既慢，
+                # 又可能把有效工具结果变成空白或「（...）」。
+                if _page_requested and tool_artifacts:
+                    out = "写好了。"
+                    break
             out = collapse_repeated_reply((out or fallback).strip())
             if not out:  # 光调工具没说话 → 再来一轮不带工具，逼他把话说出来
                 try:
                     _r2 = await _llm_create(
-                        _web_llm, model=model, max_tokens=web_max_tokens, messages=msgs,
+                        _web_llm, model=model, max_tokens=web_max_tokens,
+                        messages=msgs, timeout=model_timeout,
                     )
                     out = (_r2.choices[0].message.content or "").strip()
                 except Exception:  # noqa: BLE001
@@ -3879,9 +3899,14 @@ async def api_chat(request):
                 rt = ""
                 fallback = ""  # 工具轮正文不与最终轮拼接；只在最终轮为空时兜底
                 try:
+                    if _page_requested:
+                        await _q.put({"t": "status", "x": "正在生成网页…"})
                     msgs = _build_msgs()
                     for _ in range(4):  # 限轮次省钱，同非流式
-                        kwargs = dict(model=model, max_tokens=web_max_tokens, messages=msgs, stream=True)
+                        kwargs = dict(
+                            model=model, max_tokens=web_max_tokens,
+                            messages=msgs, stream=True, timeout=model_timeout,
+                        )
                         if _active_tools:
                             kwargs["tools"] = _active_tools
                         st = await _llm_create(_web_llm, **kwargs)
@@ -3929,13 +3954,17 @@ async def api_chat(request):
                         await _exec_tool_calls(msgs, [
                             {"id": s2["id"] or f"call_{i}", "name": s2["name"], "args": s2["args"]}
                             for i, s2 in sorted(tc_acc.items())])
+                        if _page_requested and tool_artifacts:
+                            rt = "写好了。"
+                            break
                     rt = collapse_repeated_reply((rt or fallback or "").strip())
                     if not rt:
                         # 他把回合全用在调辅助工具上、一句正文没产出 → 再来一轮「不许用工具」逼他把话说出来，
                         # 绝不落「（……）」（她说"你写吧"他却只记了个记忆就是这么来的）
                         try:
                             _r2 = await _llm_create(
-                                _web_llm, model=model, max_tokens=web_max_tokens, messages=msgs,
+                                _web_llm, model=model, max_tokens=web_max_tokens,
+                                messages=msgs, timeout=model_timeout,
                             )
                             rt = (_r2.choices[0].message.content or "").strip()
                             if rt:
@@ -3964,7 +3993,7 @@ async def api_chat(request):
                     await _complete_chat_request(inflight_key, request_future, result)
                     await _q.put({"t": "done", **result})
                 except Exception as exc:  # noqa: BLE001
-                    info = classify_chat_error(exc)
+                    info = _chat_error_info(exc)
                     logger.warning("Web chat failed [%s]: %s", info["code"], str(exc)[:300])
                     result = {"reply": "", "segments": [], "emotion": "",
                               "error_code": info["code"], "error_message": info["message"],
@@ -3992,7 +4021,11 @@ async def api_chat(request):
                 # 开头塞一坨 2KB 注释行：有些代理要攒够一个缓冲块才肯放，先把它喂饱，逼它立刻开闸
                 yield (":" + " " * 2048 + "\n\n").encode("utf-8")
                 while True:
-                    item = await _q.get()
+                    try:
+                        item = await asyncio.wait_for(_q.get(), timeout=10)
+                    except asyncio.TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
                     if item is None:
                         break
                     yield ("data: " + json.dumps(item, ensure_ascii=False) + "\n\n").encode("utf-8")
@@ -4008,7 +4041,7 @@ async def api_chat(request):
                 try:
                     rt = await _run_chat(True)
                 except Exception as first_exc:  # noqa: BLE001
-                    if classify_chat_error(first_exc)["code"] in ("api_quota", "api_auth", "model_timeout", "model_connection"):
+                    if _chat_error_info(first_exc)["code"] in ("api_quota", "api_auth", "model_timeout", "model_connection"):
                         raise
                     # 带辅助工具那轮出错 → 去掉工具重试一次，至少让她能聊上
                     rt = await _run_chat(False)
@@ -4047,7 +4080,7 @@ async def api_chat(request):
         # 客户端切屏断开了：_finish 已被 shield 跑完并存好回复，这里安静退出即可
         raise
     except Exception as exc:
-        info = classify_chat_error(exc)
+        info = _chat_error_info(exc)
         logger.warning("Web chat failed [%s]: %s", info["code"], str(exc)[:300])
         result = {"reply": "", "emotion": "", "error_code": info["code"],
                   "error_message": info["message"], "message_id": message_id}

@@ -1695,6 +1695,7 @@
         if(imported.ok) localStorage.setItem(importKey,'1');
       }
       const res=await fetch('api/chat/state?thread='+encodeURIComponent(curThread)+'&token='+encodeURIComponent(window.OMBRE_TOKEN||''));
+      if(!res.ok) return null;
       const data=await res.json();
       const srv=(data&&Array.isArray(data.log))?data.log:[];
       // Server is authoritative for ordering, but local rows may contain UI
@@ -1726,7 +1727,8 @@
         }
         chatLog.forEach(m=>{ if(Array.isArray(m.recorded)&&typeof recordBrain==='function') m.recorded.forEach(x=>recordBrain(x,false)); });
       }
-    }catch(e){}
+      return srv;
+    }catch(e){ return null; }
   }
   // 特殊词发光：高 dom 时他话里的这些词会亮起来（想换词就改这个列表）
   const GLOW_WORDS=['乖','听话','我的','过来','别动','看着我','别躲','坐好','girl','дорогая','solnyshko','жена','闪闪'];
@@ -1841,6 +1843,9 @@
   function showVisionNotice(data){
     if(data&&data.vision_notice) renderBubble('sys','识图状态：'+data.vision_notice);
   }
+  function isLongChatTask(text){
+    return /网页|网站|HTML|html|页面|报告|贺卡|小游戏|做个链接|写个链接/.test(''+(text||''));
+  }
   let chatHistory=[]; try{ chatHistory=JSON.parse(localStorage.getItem(_lsHist()))||[]; }catch(e){} // 上下文，持久化（按当前线）
   let pending=[], debTimer=null, busy=false;
   const SEND_WAIT=0;           // 即时回：你一发我就开始（不再等待并条）
@@ -1944,16 +1949,23 @@
     function texts(){ return rows.map(r=>{ const sp=r.querySelector('.btxt'); return sp?sp.textContent:''; }); }
     return { feed, destroy, texts, gotAny:()=>shown };
   }
-  async function streamReply(outgoing,messageId,messageTs){
+  async function streamReply(outgoing,messageId,messageTs,longTask=false){
     const ctrl=new AbortController(); let idleT=null;
-    const arm=()=>{ clearTimeout(idleT); idleT=setTimeout(()=>ctrl.abort(),120000); }; // 120s 没动静才算断
+    const idleMs=longTask?200000:62000;
+    const absoluteT=setTimeout(()=>ctrl.abort(),longTask?210000:65000);
+    const arm=()=>{ clearTimeout(idleT); idleT=setTimeout(()=>ctrl.abort(),idleMs); };
     arm();
-    const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
-      // UTC 是持久层唯一时间；服务器按 America/Los_Angeles 生成显示日期，自动处理夏令时。
-      body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode, stream:true,
-                            source:'home', message_id:messageId, timestamp:messageTs, server_history:true }),
-      signal:ctrl.signal });
-    if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); throw new Error('stream http '+(res.status||0)); }
+    let res;
+    try{
+      res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
+        // UTC 是持久层唯一时间；服务器按 America/Los_Angeles 生成显示日期，自动处理夏令时。
+        body:JSON.stringify({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode, stream:true,
+                              source:'home', message_id:messageId, timestamp:messageTs, server_history:true }),
+        signal:ctrl.signal });
+    }catch(e){
+      clearTimeout(idleT); clearTimeout(absoluteT); throw e;
+    }
+    if(!res.ok || !res.body || !res.body.getReader){ clearTimeout(idleT); clearTimeout(absoluteT); throw new Error('stream http '+(res.status||0)); }
     const sink=makeStreamSink();
     let done=null, first=true, got=false;
     const rd=res.body.getReader();
@@ -1965,6 +1977,7 @@
         let j; try{ j=JSON.parse(line); }catch(e){ return; }
         if(j.t==='d'){ if(first){ stopThinking(); first=false; } got=true; sink.feed(j.x); }
         else if(j.t==='done'){ done=j; }
+        else if(j.t==='status'&&j.x){ if(thinkText) thinkText.textContent=j.x; }
         else if(!j.t && j.reply!==undefined){ done=j; }   // 服务端还是旧版(整包JSON)：当done用，别退回去重新生成一遍
       };
       while(true){
@@ -1978,6 +1991,7 @@
       }
     }catch(e){
       clearTimeout(idleT);
+      clearTimeout(absoluteT);
       // done 已经到手 → 这单赢了，尾巴上的断线(RESET等)不作数，照常落定
       if(!done){
         if(got){
@@ -1985,20 +1999,21 @@
           const seen=sink.texts?sink.texts():[];
           sink.destroy();
           seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
-          stopThinking(); pollForReply(300000,true,messageId); return null;
+          stopThinking(); pollForReply(longTask?210000:70000,true,messageId,true); return null;
         }
         sink.destroy(); throw e;   // 一个字没收到 → 让外层退回非流式重来
       }
     }
     try{ rd.cancel(); }catch(e){}
     clearTimeout(idleT);
+    clearTimeout(absoluteT);
     if(!done){
       // 流正常结束却没有 done：有字就本地落定+对账，没字才报错
       if(got){
         const seen=sink.texts?sink.texts():[];
         sink.destroy();
         seen.forEach((s,i)=>{ if(s&&s.trim()) addMsg('you',s.trim(),null,'',{id:messageId+':partial:'+i,source:'home-partial',reply_to:messageId}); });
-        stopThinking(); pollForReply(300000,true,messageId); return null;
+        stopThinking(); pollForReply(longTask?210000:70000,true,messageId,true); return null;
       }
       sink.destroy(); throw new Error('stream no done');
     }
@@ -2111,11 +2126,11 @@
     }catch(e){}
   }
   // 带超时的请求。只在「很快就失败」（请求根本没到、服务器没处理）时重试一次，避免重复生成/重复说。
-  async function postChat(body){
+  async function postChat(body,longTask=false){
     for(let attempt=0; attempt<2; attempt++){
       const t0=Date.now();
       const ctrl=new AbortController();
-      const to=setTimeout(()=>ctrl.abort(), 180000);  // 单次最多等 180s（生成整页 HTML 报告很慢，别中途掐断）
+      const to=setTimeout(()=>ctrl.abort(), longTask?210000:65000);
       try{
         const res=await fetch('api/chat',{ method:'POST', headers:{'Content-Type':'application/json'},
           body:JSON.stringify(body), signal:ctrl.signal });
@@ -2133,33 +2148,46 @@
   // 切屏/刷新回来后，耐心轮询把他在后台写好的回复捞回来——IF线首句要建缓存、生成慢，
   // 只试一两次会漏，所以持续轮询直到他那条回复真的进来（或超时）。
   let _recoverTimer=null;
-  function pollForReply(maxMs, resendOnFail, requestId){
+  function pollForReply(maxMs, resendOnFail, requestId, showTimeoutNotice=false){
     clearInterval(_recoverTimer);
     const pendingReq=_pendingRequest();
     const targetId=requestId||(pendingReq&&pendingReq.id)||((chatLog.slice().reverse().find(m=>m&&m.side==='me')||{}).id);
     if(!targetId) return;
     const start=Date.now();
-    startThinking(); if(thinkText) thinkText.textContent='他还在写…';
+    let ticking=false, resent=false;
+    startThinking(); if(thinkText) thinkText.textContent='正在恢复刚才的回复…';
     const tick=async()=>{
-      await loadServerChat(true);
-      const found=chatLog.some(m=>m&&m.side==='you'&&m.reply_to===targetId);
-      if(found){
-        clearInterval(_recoverTimer); stopThinking(); _clearPending(targetId);
-        if(activeRequestId===targetId) activeRequestId='';
-        return;
-      }
-      if(Date.now()-start>maxMs){
-        clearInterval(_recoverTimer); stopThinking();
-        // 捞了这么久服务器上也没有回复＝那条消息大概率根本没送到（熄屏时请求被系统掐死）。
-        // resendOnFail 时把她最后那条自动重发一遍——否则消息就永远丢了（早安发完睡着→他一直没收到）。
-        // 只在「切屏恢复/开页发现没回复」的场景开这个开关；流式半路断线的恢复不开（那边服务器多半已在写）。
-        if(resendOnFail && !inFlight){
+      if(ticking) return;
+      ticking=true;
+      try{
+        const serverLog=await loadServerChat(true);
+        const found=chatLog.some(m=>m&&m.side==='you'&&m.reply_to===targetId);
+        if(found){
+          clearInterval(_recoverTimer); stopThinking(); _clearPending(targetId);
+          if(activeRequestId===targetId) activeRequestId='';
+          return;
+        }
+        const serverHasRequest=Array.isArray(serverLog)&&serverLog.some(m=>m&&m.id===targetId);
+        // 只有服务器明确表示没收到，才用同一个稳定 ID 安全重发一次。
+        if(resendOnFail&&!resent&&!inFlight&&Array.isArray(serverLog)&&!serverHasRequest){
+          resent=true;
           const saved=_pendingRequest();
           const lm=chatLog.find(m=>m&&m.id===targetId&&m.side==='me');
           const text=(saved&&saved.id===targetId&&saved.text)||((lm&&lm.text)||'');
           const ts=(saved&&saved.id===targetId&&saved.ts)||((lm&&lm.ts)||new Date().toISOString());
-          if(text && !(saved&&saved.rich) && !(lm&&lm.img)) requestReply(text,text,targetId,ts);
+          if(text && !(saved&&saved.rich) && !(lm&&lm.img)){
+            clearInterval(_recoverTimer); stopThinking();
+            requestReply(text,text,targetId,ts);
+            return;
+          }
         }
+        if(Date.now()-start>maxMs){
+          clearInterval(_recoverTimer); stopThinking(); _clearPending(targetId);
+          if(activeRequestId===targetId) activeRequestId='';
+          if(showTimeoutNotice) renderBubble('sys','这次没有生成回复，已经停止等待。你的原消息还在。');
+        }
+      }finally{
+        ticking=false;
       }
     };
     _recoverTimer=setInterval(tick, 3000);
@@ -2176,7 +2204,8 @@
       const saved=_pendingRequest();
       if(recoverOnReturn||inFlight||saved){
         recoverOnReturn=false;
-        pollForReply(300000,true,(saved&&saved.id)||activeRequestId);
+        const longRecovery=!!(saved&&(saved.long||isLongChatTask(saved.text)));
+        pollForReply(longRecovery?210000:70000,true,(saved&&saved.id)||activeRequestId,true);
       } else loadServerChat();
     }
   });
@@ -2187,18 +2216,24 @@
     const reqStart=Date.now();
     startThinking();
     messageId=messageId||_homeMessageId(); messageTs=messageTs||new Date().toISOString();
+    const longTask=isLongChatTask(histText);
     activeRequestId=messageId;
-    _rememberPending({id:messageId,ts:messageTs,text:histText||'',rich:typeof userApiContent!=='string',started:reqStart});
+    _rememberPending({id:messageId,ts:messageTs,text:histText||'',rich:typeof userApiContent!=='string',long:longTask,started:reqStart});
     const outgoing = [{role:'user',content:userApiContent}];
     try{
       // 先走流式（一个字一个字打出来）；流式起不来（老浏览器/代理不支持）才退回一次性等全文
       let data=null, streamed=false;
-      try{ data=await streamReply(outgoing,messageId,messageTs); streamed=true; }
-      catch(e){ streamed=false; }
+      const streamStarted=Date.now();
+      try{ data=await streamReply(outgoing,messageId,messageTs,longTask); streamed=true; }
+      catch(e){
+        // 只有 6 秒内的连接级失败才换非流式；慢失败再次生成只会再空等一轮。
+        if(Date.now()-streamStarted>=6000) throw e;
+        streamed=false;
+      }
       if(streamed && data===null){ return; }          // 半路断线：已转入轮询捞服务器存好的回复
       if(!streamed){
         data=await postChat({ messages:outgoing, token:(window.OMBRE_TOKEN||''), thread:curThread, model:chatModel, writing_mode:writingMode,
-                              source:'home', message_id:messageId, timestamp:messageTs, server_history:true });
+                              source:'home', message_id:messageId, timestamp:messageTs, server_history:true },longTask);
         if(data&&data.error_code){ showChatError(data); _clearPending(messageId); activeRequestId=''; return; }
         await showReply(data);
       }
@@ -2225,9 +2260,9 @@
       if(wasBackgrounded){
         // 切屏被挂断：他在后台会把回复存到服务器，别重发，回来捞即可
         if(document.hidden){ recoverOnReturn=true; }     // 还在后台 → 回前台时捞
-        else { pollForReply(300000,true,messageId); }
+        else { pollForReply(longTask?210000:70000,true,messageId,true); }
       } else {
-        pollForReply(180000,true,messageId);
+        pollForReply(5000,true,messageId,true);
       }
     } finally {
       inFlight=false;
@@ -2381,10 +2416,11 @@
     // 刷新时若最后一条是「我」发的、还没等到他回复 → 他可能正在后台写（IF线尤其慢），耐心轮询捞回来
     const saved=_pendingRequest();
     const last=chatLog[chatLog.length-1];
-    if(saved&&saved.id) pollForReply(300000,true,saved.id);
+    if(saved&&saved.id) pollForReply((saved.long||isLongChatTask(saved.text))?210000:70000,true,saved.id,true);
     else if(last && last.side==='me'){
-      _rememberPending({id:last.id,ts:last.ts,text:last.text||'',rich:!!last.img,started:Date.now()});
-      pollForReply(300000,true,last.id);
+      const longRecovery=isLongChatTask(last.text);
+      _rememberPending({id:last.id,ts:last.ts,text:last.text||'',rich:!!last.img,long:longRecovery,started:Date.now()});
+      pollForReply(longRecovery?210000:70000,true,last.id,true);
     }
   });
 
