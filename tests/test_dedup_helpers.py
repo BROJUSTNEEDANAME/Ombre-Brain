@@ -149,6 +149,28 @@ def test_parenthesized_departure_remains_a_visible_scene_fact():
     )
 
 
+def test_common_actions_outside_whitelist_are_still_observable():
+    # 白名单列不全的日常动作必须照样投射，绝不能被抹成「没有可观察行为」
+    for action in ("又在看手机", "玩手机", "刷手机", "抖腿", "翻了个白眼", "低头戳手机"):
+        structured = structure_user_observation(f"（{action}）")
+        assert "没有可被五感直接观察到" not in structured, action
+        assert structured.endswith(action), action
+        assert structured.startswith("【你通过五感直接观察到")
+
+
+def test_looking_at_phone_is_not_erased():
+    # 报告的原始 bug：她说「又在看手机」，处理器却告诉模型什么都没发生
+    structured = structure_user_observation("（又在看手机）")
+    assert structured == "【你通过五感直接观察到，不是她说出口的话】又在看手机"
+
+
+def test_pure_inner_state_still_dropped_after_default_observable_change():
+    # 默认可观察的改动，不能把纯心理旁白也放出来
+    structured = structure_user_observation("（心想这下完蛋了）")
+    assert "完蛋" not in structured
+    assert "没有可被五感直接观察到" in structured
+
+
 class _ProviderError(Exception):
     def __init__(self, message, status_code=None):
         super().__init__(message)

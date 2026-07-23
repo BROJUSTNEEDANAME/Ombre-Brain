@@ -227,13 +227,25 @@ def structure_user_observation(text: str) -> str:
             visible = []
             for raw_clause in clauses:
                 clause = raw_clause.strip()
-                cue = observable.search(clause)
-                if not clause or not cue:
+                if not clause:
                     continue
-                # If private motive/thought precedes a bodily cue, expose only
-                # the cue onward. A human sees “发抖”, not “因为害怕”.
                 hidden = private.search(clause)
-                visible.append(clause[cue.start():] if hidden and hidden.start() < cue.start() else clause)
+                if not hidden:
+                    # 默认可观察：括号里是她当着他的面做的动作/表情/声音。动作动词
+                    # 无穷无尽（看手机、玩手机、抖腿、翻白眼…），白名单永远列不全，
+                    # 漏掉就等于把她真做的事抹成“什么都没发生”。所以没有心理线索的
+                    # 子句一律当作他能看见/听见的事实投射给他。
+                    visible.append(clause)
+                    continue
+                # 有心理/动机线索（感觉、因为、故意、假装…）：剥掉不可知的私心，
+                # 只把随后可见的身体动作投射给他——他看见“发抖”，不知道“因为害怕”。
+                cue = observable.search(clause)
+                if cue and cue.start() > hidden.start():
+                    visible.append(clause[cue.start():])
+                elif cue:
+                    # 身体动作在前、心理在后：只留动作那截，别把心理带出来
+                    visible.append(clause[:hidden.start()].strip() or clause[cue.start():])
+                # 否则整条都是心理活动/上帝视角旁白 → 不投射
             if visible:
                 parts.append(("你通过五感直接观察到，不是她说出口的话", "，".join(visible)))
         action.clear()
