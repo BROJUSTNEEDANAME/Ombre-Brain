@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 
 _SITE_HEADER = re.compile(r"(?m)^\s*(https?://[^\s{]+)\s*\{")
@@ -27,11 +28,21 @@ def _braced_block(text: str, opening_brace: int) -> str:
     return ""
 
 
+def _public_listener_url(site_url: str) -> str:
+    """Tailscale Funnel maps the local Caddy 8443 listener to public HTTPS 443."""
+    parsed = urlsplit(site_url)
+    if parsed.hostname and parsed.hostname.endswith(".ts.net") and parsed.port == 8443:
+        return urlunsplit(
+            (parsed.scheme, parsed.hostname, parsed.path, parsed.query, parsed.fragment)
+        )
+    return site_url
+
+
 def infer_caddy_site_url(caddy_text: str) -> str:
     """Find the HTTPS site and handle_path that proxy to Ombre on port 8000."""
     text = re.sub(r"(?m)#.*$", "", caddy_text or "")
     for site_match in _SITE_HEADER.finditer(text):
-        site_url = site_match.group(1).rstrip("/")
+        site_url = _public_listener_url(site_match.group(1).rstrip("/"))
         opening = text.find("{", site_match.start())
         site_block = _braced_block(text, opening)
         if not site_block:

@@ -105,7 +105,7 @@ for _ in range(40):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.4.10":
+        if data.get("version") == "v5.4.11":
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -165,5 +165,5 @@ trap - ERR
 echo "DEPLOY-COREADING-PASS"
 echo "Backup: $SAFE"
 echo "Backup SHA-256: $(cut -d' ' -f1 "$SAFE/SHA256SUMS")"
-echo "Version: v5.4.10"
+echo "Version: v5.4.11"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active anno-mcp=active"

@@ -25,6 +25,19 @@ def test_infers_private_brain_route_in_correct_https_site():
     )
 
 
+def test_tailscale_funnel_removes_internal_caddy_port():
+    caddy = """
+    https://ombre-host.tailabc123.ts.net:8443 {
+        handle_path /private1234567890/* {
+            reverse_proxy 127.0.0.1:8000
+        }
+    }
+    """
+    assert infer_caddy_site_url(caddy) == (
+        "https://ombre-host.tailabc123.ts.net/private1234567890"
+    )
+
+
 def test_live_caddy_route_wins_over_stale_explicit_url(tmp_path: Path):
     caddy = tmp_path / "Caddyfile"
     caddy.write_text(

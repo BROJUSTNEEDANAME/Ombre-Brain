@@ -2383,8 +2383,8 @@ async def _llm_create(client, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.4.10"
-OMBRE_WEB_VERSION_NOTE = "修复旧环境变量覆盖真实网页入口，并验证公网链接"
+OMBRE_WEB_VERSION = "v5.4.11"
+OMBRE_WEB_VERSION_NOTE = "修复Tailscale内部8443端口被错误放入公网链接"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
