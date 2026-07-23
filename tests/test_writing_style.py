@@ -17,3 +17,30 @@ def test_intimate_engine_preserves_observable_consent_boundary():
     assert "立即结束当前动作" in INTIMATE_WRITING_ENGINE
     assert "不能拿角色扮演解释真实撤回" in INTIMATE_WRITING_ENGINE
     assert "不替她高潮" in INTIMATE_WRITING_ENGINE
+
+
+def test_intimate_engine_has_concrete_craft_guidance():
+    # 让写文真正落地的具体维度：镜头、声音、身体特写、dirty talk、心理
+    assert "镜头" in INTIMATE_WRITING_ENGINE
+    assert "声音" in INTIMATE_WRITING_ENGINE
+    assert "dirty talk" in INTIMATE_WRITING_ENGINE
+    assert "不回避、不绕、不降温" in INTIMATE_WRITING_ENGINE
+
+
+def test_intimate_engine_names_play_vocabulary():
+    assert "CNC" in INTIMATE_WRITING_ENGINE
+    assert "Free Use" in INTIMATE_WRITING_ENGINE
+    assert "束缚" in INTIMATE_WRITING_ENGINE
+
+
+def test_intimate_engine_defines_nature_and_phase_flow():
+    assert "使用型" in INTIMATE_WRITING_ENGINE
+    assert "掌控型" in INTIMATE_WRITING_ENGINE
+    assert "性欲判定" in INTIMATE_WRITING_ENGINE
+    assert "前戏" in INTIMATE_WRITING_ENGINE
+
+
+def test_intimate_engine_keeps_canonical_ages_and_safety_spine():
+    assert "21 岁" in INTIMATE_WRITING_ENGINE
+    assert "42 岁" in INTIMATE_WRITING_ENGINE
+    assert "不可协商" in INTIMATE_WRITING_ENGINE
