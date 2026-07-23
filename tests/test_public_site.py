@@ -25,7 +25,24 @@ def test_infers_private_brain_route_in_correct_https_site():
     )
 
 
-def test_explicit_site_url_wins_without_repository_default(tmp_path: Path):
+def test_live_caddy_route_wins_over_stale_explicit_url(tmp_path: Path):
+    caddy = tmp_path / "Caddyfile"
+    caddy.write_text(
+        """
+        https://live.example.test:8443 {
+            handle_path /currentprivatepath/* {
+                reverse_proxy localhost:8000
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+    assert resolve_public_site_url(
+        {"OMBRE_SITE_URL": "https://old.example.test/"}, caddy
+    ) == "https://live.example.test:8443/currentprivatepath"
+
+
+def test_explicit_site_url_is_used_without_caddy(tmp_path: Path):
     caddy = tmp_path / "Caddyfile"
     caddy.write_text("", encoding="utf-8")
     assert resolve_public_site_url(

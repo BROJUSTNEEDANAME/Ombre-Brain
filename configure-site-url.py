@@ -12,23 +12,10 @@ from pathlib import Path
 from public_site import resolve_public_site_url
 
 
-def main() -> int:
-    caddy_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/caddy/Caddyfile"
-    output_path = Path(
-        sys.argv[2]
-        if len(sys.argv) > 2
-        else "/etc/systemd/system/ombre-brain.service.d/20-site-url.conf"
-    )
-    site_url = resolve_public_site_url({}, caddy_path)
-    if not site_url:
-        raise SystemExit("Cannot infer Ombre public route from Caddy")
-    if not re.fullmatch(r"https://[A-Za-z0-9._:-]+(?:/[A-Za-z0-9._~-]+)*", site_url):
-        raise SystemExit("Inferred Ombre public route contains unsafe characters")
-
-    output_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    content = f'[Service]\nEnvironment="OMBRE_SITE_URL={site_url}"\n'
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(
-        prefix=".site-url-", dir=output_path.parent, text=True
+        prefix=".site-url-", dir=path.parent, text=True
     )
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -36,10 +23,33 @@ def main() -> int:
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o600)
-        os.replace(temporary, output_path)
+        os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def main() -> int:
+    caddy_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/caddy/Caddyfile"
+    dropin_path = Path(
+        sys.argv[2]
+        if len(sys.argv) > 2
+        else "/etc/systemd/system/ombre-brain.service.d/20-site-url.conf"
+    )
+    env_path = Path(
+        sys.argv[3] if len(sys.argv) > 3 else "/etc/ombre/site-url.env"
+    )
+    site_url = resolve_public_site_url({}, caddy_path)
+    if not site_url:
+        raise SystemExit("Cannot infer Ombre public route from Caddy")
+    if not re.fullmatch(r"https://[A-Za-z0-9._:-]+(?:/[A-Za-z0-9._~-]+)*", site_url):
+        raise SystemExit("Inferred Ombre public route contains unsafe characters")
+
+    _atomic_write(env_path, f"OMBRE_SITE_URL={site_url}\n")
+    _atomic_write(
+        dropin_path,
+        f"[Service]\nEnvironmentFile={env_path}\n",
+    )
     print("SITE-URL-CONFIGURED")
     return 0
 

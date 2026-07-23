@@ -8,7 +8,9 @@ OLD_SHA=""
 SWITCHED=0
 ANNO_WAS_ACTIVE=0
 SITE_DROPIN=/etc/systemd/system/ombre-brain.service.d/20-site-url.conf
+SITE_ENV=/etc/ombre/site-url.env
 HAD_SITE_DROPIN=0
+HAD_SITE_ENV=0
 
 if [ "$(id -u)" -ne 0 ] || [ "$PWD" != "$REPO" ]; then
     echo "Run as root from $REPO"
@@ -30,6 +32,10 @@ if [ -f "$SITE_DROPIN" ]; then
     cp -a "$SITE_DROPIN" "$SAFE/20-site-url.conf"
     HAD_SITE_DROPIN=1
 fi
+if [ -f "$SITE_ENV" ]; then
+    cp -a "$SITE_ENV" "$SAFE/site-url.env"
+    HAD_SITE_ENV=1
+fi
 for file in "$REPO/.env" "$REPO/.env.apibot" "$REPO/buckets/telegram_state.json"; do
     [ ! -e "$file" ] || cp -a "$file" "$SAFE/"
 done
@@ -45,6 +51,12 @@ rollback() {
         cp -a "$SAFE/20-site-url.conf" "$SITE_DROPIN"
     else
         rm -f "$SITE_DROPIN"
+    fi
+    if [ "$HAD_SITE_ENV" -eq 1 ]; then
+        mkdir -p "$(dirname "$SITE_ENV")"
+        cp -a "$SAFE/site-url.env" "$SITE_ENV"
+    else
+        rm -f "$SITE_ENV"
     fi
     systemctl daemon-reload
     systemctl restart ombre-brain.service ombre-apibot.service || true
@@ -79,7 +91,7 @@ git merge --ff-only origin/main
     configure-site-url.py
 bash -n install-anno.sh deploy-coreading.sh
 bash install-anno.sh
-.venv/bin/python configure-site-url.py /etc/caddy/Caddyfile "$SITE_DROPIN"
+.venv/bin/python configure-site-url.py /etc/caddy/Caddyfile "$SITE_DROPIN" "$SITE_ENV"
 systemctl daemon-reload
 
 SWITCHED=1
@@ -93,7 +105,7 @@ for _ in range(40):
     try:
         with urllib.request.urlopen("http://127.0.0.1:8000/api/version", timeout=2) as response:
             data = json.load(response)
-        if data.get("version") == "v5.4.9":
+        if data.get("version") == "v5.4.10":
             print("Brain version:", data["version"])
             break
     except Exception:
@@ -153,5 +165,5 @@ trap - ERR
 echo "DEPLOY-COREADING-PASS"
 echo "Backup: $SAFE"
 echo "Backup SHA-256: $(cut -d' ' -f1 "$SAFE/SHA256SUMS")"
-echo "Version: v5.4.9"
+echo "Version: v5.4.10"
 echo "Services: ombre-brain=active ombre-apibot=active cc-bridge=active anno-mcp=active"

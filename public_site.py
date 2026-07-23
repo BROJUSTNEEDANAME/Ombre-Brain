@@ -50,12 +50,8 @@ def resolve_public_site_url(
     environ: Mapping[str, str] | None = None,
     caddy_path: str | os.PathLike[str] | None = None,
 ) -> str:
-    """Resolve an explicit URL first, then the private Caddy route, then Render."""
+    """Use the live private Caddy route before any possibly stale environment."""
     env = os.environ if environ is None else environ
-    explicit = str(env.get("OMBRE_SITE_URL", "")).strip()
-    if explicit:
-        return explicit.rstrip("/")
-
     path = Path(caddy_path or env.get("OMBRE_CADDYFILE", "/etc/caddy/Caddyfile"))
     try:
         inferred = infer_caddy_site_url(path.read_text(encoding="utf-8"))
@@ -63,6 +59,10 @@ def resolve_public_site_url(
         inferred = ""
     if inferred:
         return inferred
+
+    explicit = str(env.get("OMBRE_SITE_URL", "")).strip()
+    if explicit:
+        return explicit.rstrip("/")
 
     render_url = str(env.get("RENDER_EXTERNAL_URL", "")).strip()
     return render_url.rstrip("/")
