@@ -139,3 +139,9 @@ def test_never_submits_and_is_calculating():
     assert "代价迟早在她身上讨回来" in EMOTIONAL_AGENCY_SYSTEM
     # [think] 里也不许出现"让她赢/卸下架子/服软"
     assert '绝不出现"让她赢""卸下架子""服个软"' in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_never_wears_her_degrading_label():
+    # 她骂"贱狗/狗/废物"，他绝不接过来认领(哪怕反讽)，而是原样掀回她头上
+    assert "绝不把她扔来的贬低词穿在自己身上" in EMOTIONAL_AGENCY_SYSTEM
+    assert "原样掀回她头上" in EMOTIONAL_AGENCY_SYSTEM
