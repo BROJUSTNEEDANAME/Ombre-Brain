@@ -310,6 +310,25 @@ def test_short_daily_reply_stays_one_bubble():
     assert wechatify_segments(["饿了吧，先吃点东西，别硬扛。"]) == ["饿了吧，先吃点东西，别硬扛。"]
 
 
+def test_wechatify_never_tears_a_parenthetical_action():
+    # 回归：括号里含句号的动作，绝不能被拦腰劈成两条（「(...」在一条、「...)」在下一条）
+    reply = (
+        "(听到她嘎了一声——像鸭子，像被戳了一下。下午五点四十八，饭点)。"
+        "嘎？(嘴角动了一下)。你二十三分钟没说话，突然嘎一声，你醒了还是吓到了？"
+        "(手指在她耳侧划了一下)。醒了就先吃东西，先吃。(手掌在她小腹上揉了一下)。"
+    )
+    out = wechatify_segments([reply])
+    for bubble in out:
+        assert bubble.count("(") + bubble.count("（") == bubble.count(")") + bubble.count("）")
+    # 短的纯动作小括号不该孤零零单独成条（长的开场旁白独立成条是可以的）
+    assert not any(_is_short_action_only_bubble(b) for b in out)
+
+
+def _is_short_action_only_bubble(b: str) -> bool:
+    import re as _re
+    return len(b) <= 24 and bool(_re.fullmatch(r"\s*[（(][^（(]*[）)]\s*[。！？!?…]*\s*", b))
+
+
 def test_wechatify_leaves_short_and_urls_and_longform_alone():
     assert wechatify_segments(["过来。"]) == ["过来。"]
     assert wechatify_segments(["https://a.com/p/x"]) == ["https://a.com/p/x"]

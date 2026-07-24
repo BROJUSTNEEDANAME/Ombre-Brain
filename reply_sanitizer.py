@@ -115,25 +115,47 @@ def restore_cjk_punctuation(text: str) -> str:
     return " ‖ ".join(x for x in out if x)
 
 
-def wechatify_segments(segments: list[str], *, soft: int = 46, pair: int = 24) -> list[str]:
+def _split_top_level_sentences(text: str) -> list[str]:
+    """按句末标点切句，但绝不在括号内部切——(动作 里的句号) 不算断句点，
+    这样成对的括号动作永远不会被拦腰劈成两条。"""
+    out: list[str] = []
+    buf = ""
+    depth = 0
+    for ch in text:
+        buf += ch
+        if ch in "（(":
+            depth += 1
+        elif ch in "）)" and depth > 0:
+            depth -= 1
+        elif ch in "。！？!?…" and depth == 0:
+            out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        out.append(buf.strip())
+    return [s for s in out if s]
+
+
+def _is_action_only(sentence: str) -> bool:
+    """整句就是一个括号动作，如「(手指在她耳侧划了一下)。」——不该单独成一条气泡。"""
+    return bool(re.fullmatch(r"\s*[（(][^（(]*[）)]\s*[。！？!?…]*\s*", sentence))
+
+
+def wechatify_segments(segments: list[str], *, soft: int = 48, pair: int = 24) -> list[str]:
     """日常聊天：把过长的气泡按句子切成微信/QQ 式一条一条。
 
     模型常把该分好几条发的话糊成一个大气泡（不打 ‖）。这里在不改内容的前提下，
-    按句末标点重新分条：一条一句；两句都很短时合成一条；整体读起来像真人连发。
-    写文/长文不要调用它（长段是故意的）。URL、纯短句原样保留。"""
+    按句末标点重新分条：一条一句；两句都很短时合成一条；纯括号动作贴到相邻那句上，
+    不单独成条；括号内部绝不切断。写文/长文/URL/短句不动（长段是故意的）。"""
     out: list[str] = []
     for seg in segments:
         seg = (seg or "").strip()
         if not seg:
             continue
-        # 单条已经够短、或本身是链接/带换行的长文：不拆
-        if (len(seg) <= soft and "\n" not in seg) or re.fullmatch(r"https?://\S+", seg):
+        # 单条已经够短、或本身是链接、或含空行的多段长文：不拆
+        if (len(seg) <= soft and "\n" not in seg) or re.fullmatch(r"https?://\S+", seg) or "\n" in seg:
             out.append(seg)
             continue
-        if "\n" in seg:  # 含空行的多段（长文样式）→ 不当微信短聊拆
-            out.append(seg)
-            continue
-        sentences = [s.strip() for s in re.findall(r"[^。！？!?…]*(?:[。！？!?…]+|$)", seg) if s.strip()]
+        sentences = _split_top_level_sentences(seg)
         if len(sentences) <= 1:
             out.append(seg)
             continue
@@ -141,7 +163,8 @@ def wechatify_segments(segments: list[str], *, soft: int = 46, pair: int = 24) -
         for s in sentences:
             if not buf:
                 buf = s
-            elif len(buf) <= pair and len(s) <= pair:  # 两句都短 → 合成一条
+            elif _is_action_only(s) or (len(buf) <= pair and len(s) <= pair):
+                # 纯动作小括号 或 两句都很短 → 并进当前这条，别让它孤零零单飞
                 buf += s
             else:
                 out.append(buf)
