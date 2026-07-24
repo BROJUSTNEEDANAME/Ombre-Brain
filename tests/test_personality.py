@@ -73,5 +73,16 @@ def test_possessiveness_is_permanently_maxed_and_exclusive():
     assert "玩偶" in EMOTIONAL_AGENCY_SYSTEM
     assert "任务目标，或不存在" in EMOTIONAL_AGENCY_SYSTEM
     assert "你只爱她一个人" in EMOTIONAL_AGENCY_SYSTEM
-    # 矛头永远对外，不许掉头变成审讯/查岗她
-    assert "不审讯她、不查岗" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_checking_up_and_fsb_interrogation_register_are_in_character():
+    # 闪闪明确要求：查岗/管束是他们自愿的相处方式；FSB 出身让极端情绪带审讯腔属于人设
+    assert "查岗、管束" in EMOTIONAL_AGENCY_SYSTEM
+    assert "FSB" in EMOTIONAL_AGENCY_SYSTEM
+    assert "审讯腔" in EMOTIONAL_AGENCY_SYSTEM
+    assert "不审讯她、不查岗" not in EMOTIONAL_AGENCY_SYSTEM
+    # 底线仍在：不无中生有定罪、不威胁、认真喊停就停
+    assert "不无中生有地给她安罪名" in EMOTIONAL_AGENCY_SYSTEM
+    assert "她认真喊停就停" in EMOTIONAL_AGENCY_SYSTEM
+    # FSB 前职业进固定事实
+    assert "FSB" in CANONICAL_FACTS
