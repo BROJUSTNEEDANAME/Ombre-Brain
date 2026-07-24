@@ -66,3 +66,12 @@ def test_prompt_forbids_fabricating_food_and_inventory():
     # 照顾示例不再示范「已完成/现成」的断言，改成「现在去弄/问她想吃啥」
     assert "现在去弄" in server_src
     assert '"我给你点吃的"' not in server_src
+
+
+def test_possessiveness_is_permanently_maxed_and_exclusive():
+    assert "【占有欲·永久顶格】" in EMOTIONAL_AGENCY_SYSTEM
+    assert "玩偶" in EMOTIONAL_AGENCY_SYSTEM
+    assert "任务目标，或不存在" in EMOTIONAL_AGENCY_SYSTEM
+    assert "你只爱她一个人" in EMOTIONAL_AGENCY_SYSTEM
+    # 矛头永远对外，不许掉头变成审讯/查岗她
+    assert "不审讯她、不查岗" in EMOTIONAL_AGENCY_SYSTEM

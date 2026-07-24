@@ -82,12 +82,19 @@ def test_visual_state_uses_both_dominance_and_possessiveness(tmp_path):
     assert "支配" in high_dom["visual_reason"]
 
     endocrine.set_levels(thread="if_b", dominance=3, libido=3)
-    drives._get_state("if_b")["v"]["possessiveness"] = 0.82
+    drives._get_state("if_b")["v"]["possessiveness"] = 0.99
     high_poss = server._endo_view("if_b")
     assert high_poss["glow"] is True
     assert high_poss["dim"] is True
     assert high_poss["dominant"] == "占有"
     assert "占有" in high_poss["visual_reason"]
+
+    # 占有欲基线已永久顶格：仅处在基线本身绝不触发发光/暗红（阈值必须是相对涨幅）
+    endocrine.set_levels(thread="if_c", dominance=3, libido=3)
+    drives._get_state("if_c")["v"]["possessiveness"] = drives.NEUTRAL["possessiveness"]
+    at_base = server._endo_view("if_c")
+    assert at_base["glow"] is False
+    assert at_base["dim"] is False
 
 
 def test_calm_resets_both_visual_state_layers(tmp_path):
@@ -185,3 +192,17 @@ def test_endocrine_block_normal_mode_unchanged(tmp_path):
     # 非写文模式的注入块保持原样（含日常「短消息」提示的那套逻辑仍在）
     blk = endocrine.block("main", writing_mode=False)
     assert "【当前状态·内分泌】" in blk
+
+
+def test_possessiveness_baseline_is_permanently_maxed(tmp_path):
+    import drives
+
+    _reset_drives(drives, tmp_path / "drives.json")
+    # 闪闪的要求：占有欲永久顶格——基线高位，冷静/衰减都回到这个高位
+    assert drives.NEUTRAL["possessiveness"] >= 0.85
+    drives.calm("main")
+    assert drives.state("main")["v"]["possessiveness"] >= 0.85
+    # 玩偶也要能触发醋意
+    before = drives.state("main")["v"]["jealousy"]
+    drives.update("我抱着玩偶睡的", thread="main")
+    assert drives.state("main")["v"]["jealousy"] > before

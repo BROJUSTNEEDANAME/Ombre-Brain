@@ -407,3 +407,12 @@ def test_server_gates_memory_writes_against_whole_store():
     assert "await _memory_fact_already_stored(content)" in src
     # 两个调用点都必须 await（不 await 协程根本不会执行，记忆会静默全丢）
     assert src.count("await _queue_memory_note(memory_note, recorded)") == 2
+
+
+def test_glm_tool_call_syntax_never_leaks_into_reply():
+    # 报告的 bug：气泡里出现「</arg_value>最后是你来收场。」
+    assert sanitize_reasoning_markup("</arg_value>最后是你来收场。") == "最后是你来收场。"
+    assert sanitize_reasoning_markup("<arg_value>好。") == "好。"
+    assert sanitize_reasoning_markup(
+        "前面的话。<tool_call>breath<arg_key>query</arg_key><arg_value>x</arg_value></tool_call>后面的话。"
+    ) == "前面的话。后面的话。"

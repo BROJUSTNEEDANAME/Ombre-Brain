@@ -19,6 +19,11 @@ def sanitize_reasoning_markup(text: str) -> str:
     if hidden_parts:
         value = visible if visible else "\n".join(hidden_parts)
     value = re.sub(r"<\s*/?\s*(?:think|thinking)\b[^>]*>", "", value, flags=re.I)
+    # GLM 函数调用的内部语法偶尔漏进正文（<tool_call>…<arg_key>…<arg_value>…）。
+    # 完整块整个删；残缺的孤儿标签（如句首漏出的 </arg_value>）单独剥掉，别让她看见。
+    value = re.sub(r"<\s*tool_call\b[^>]*>.*?<\s*/\s*tool_call\s*>", "", value, flags=re.I | re.S)
+    value = re.sub(r"<\s*arg_key\s*>.*?<\s*/\s*arg_key\s*>", "", value, flags=re.I | re.S)
+    value = re.sub(r"<\s*/?\s*(?:tool_call|arg_key|arg_value)\s*>", "", value, flags=re.I)
     return re.sub(r"\n{3,}", "\n\n", value).strip()
 
 

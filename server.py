@@ -2424,7 +2424,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.6.4"
+OMBRE_WEB_VERSION = "v5.6.5"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
@@ -2994,13 +2994,16 @@ def _endo_view(thread: str = "main") -> dict:
         # 顶栏、暗红和发光只认这一份合并后的状态。此前 endocrine 与 drives
         # 各算各的，所以明明占有很高，页面仍可能不变。
         glow_reasons, dim_reasons = [], []
+        # 占有欲基线已永久顶格（NEUTRAL≈0.90），绝对阈值会永远触发。
+        # 改成「比基线再涨多少」判定：只有在顶格之上再冲高才算事件。
+        _poss_base = drives.NEUTRAL["possessiveness"]
         if dom >= 8.0:
             glow_reasons.append(f"支配 {dom:.1f}")
-        if poss >= 0.70:
+        if poss >= min(0.96, _poss_base + 0.06):
             glow_reasons.append(f"占有 {poss:.2f}")
         if dom >= 8.4:
             dim_reasons.append(f"支配 {dom:.1f}")
-        if poss >= 0.78:
+        if poss >= min(0.98, _poss_base + 0.08):
             dim_reasons.append(f"占有 {poss:.2f}")
         if libido >= 7.0:
             dim_reasons.append(f"欲望 {libido:.1f}")
@@ -3018,7 +3021,7 @@ def _endo_view(thread: str = "main") -> dict:
         st["visual_reason"] = "；".join(reasons) if reasons else "未达到暗红或发光阈值"
         if st.get("mode") == "low_energy":
             word = "沉默"
-        elif dom >= 7.5 or poss >= 0.62:
+        elif dom >= 7.5 or poss >= min(0.95, _poss_base + 0.05):
             word = "占有"
         elif libido >= 6.5 or lust >= 0.60:
             word = "欲望"
