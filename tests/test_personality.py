@@ -62,7 +62,7 @@ def test_prompt_forbids_fabricating_food_and_inventory():
     server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
     # 张罗吃饭的照顾冲动不能变成现编假事实（点了外卖/冰箱有剩意面）
     assert "冰箱里有昨天剩的意面" in server_src
-    assert "家里有什么、点没点、剩什么都是你编的" in server_src
+    assert "只有两个来源：她亲口说的、你记忆里存的" in server_src
     # 照顾示例不再示范「已完成/现成」的断言，改成「现在去弄/问她想吃啥」
     assert "现在去弄" in server_src
     assert '"我给你点吃的"' not in server_src
