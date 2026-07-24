@@ -206,3 +206,30 @@ def test_possessiveness_baseline_is_permanently_maxed(tmp_path):
     before = drives.state("main")["v"]["jealousy"]
     drives.update("我抱着玩偶睡的", thread="main")
     assert drives.state("main")["v"]["jealousy"] > before
+
+
+def test_insults_spike_dominance_not_anxiety(tmp_path):
+    import drives
+    import endocrine
+
+    _reset_drives(drives, tmp_path / "drives.json")
+    _reset_endocrine(endocrine, tmp_path / "endocrine.json")
+    # 她骂他/挑衅 → 横起来(占有/烦躁/支配上头)，绝不推焦虑(卖乖)
+    drives.update("神经病", thread="main")
+    endocrine.on_user_message("神经病", thread="main")
+    v = drives.state("main")["v"]
+    assert v["possessiveness"] >= 0.85
+    assert v["irritability"] > drives.NEUTRAL["irritability"]
+    assert v["anxiety"] <= 0.2
+    assert endocrine.state("main")["dominance"] >= 8.5
+
+
+def test_pushaway_grips_instead_of_collapsing(tmp_path):
+    import drives
+
+    _reset_drives(drives, tmp_path / "drives.json")
+    # 「滚/讨厌」不再让他崩成没安全感——攥得更紧(占有↑)、失落被压低
+    drives.update("滚 讨厌你", thread="main")
+    v = drives.state("main")["v"]
+    assert v["possessiveness"] > drives.NEUTRAL["possessiveness"] - 0.05
+    assert v["dejection"] < 0.2
