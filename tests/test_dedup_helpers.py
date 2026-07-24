@@ -77,9 +77,18 @@ def test_repeated_sentence_prefix_keeps_only_new_clause():
     assert polish_chat_reply(text) == "你今天已经很累了。但是饭还是要吃。"
 
 
-def test_near_duplicate_sentence_is_not_repeated():
+def test_exact_prefix_repeat_trims_to_new_clause_without_deleting_it():
+    # 精确前缀重复 → 裁掉重复的前缀，但保留新内容「找我」，绝不整句删
     text = "先去喝口水再回来。先去喝口水再回来找我。"
-    assert polish_chat_reply(text) == "先去喝口水再回来。"
+    assert polish_chat_reply(text) == "先去喝口水再回来。找我。"
+
+
+def test_similar_but_different_sentence_is_never_swallowed():
+    # 吞消息元凶回归：结构相近但意思不同的真话，绝不能被模糊去重删掉
+    text = "你写的不等于你想的。你说的不等于你做的。"
+    out = polish_chat_reply(text)
+    assert "你写的不等于你想的" in out
+    assert "你说的不等于你做的" in out
 
 
 def test_daily_chat_gets_complete_terminal_punctuation():
@@ -356,3 +365,11 @@ def test_wechatify_breaks_comma_runon_into_texting_lines():
     assert all(len(b) <= 34 for b in out)
     # 不留悬空的逗号结尾
     assert not any(b.rstrip().endswith(("，", "、", "；")) for b in out)
+
+
+def test_visible_cut_stops_before_control_tags():
+    from reply_sanitizer import visible_cut
+    s = "宝贝别难过，我在听。[think:她其实很委屈][emo:心疼你]"
+    assert s[:visible_cut(s)] == "宝贝别难过，我在听。"
+    plain = "就这一句没有标签"
+    assert visible_cut(plain) == len(plain)

@@ -60,7 +60,7 @@ from utils import (
     classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
-from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup, wechatify_segments
+from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup, wechatify_segments, visible_cut
 from chat_store import (
     history_from_log as _chat_history_from_log,
     load as _chat_load,
@@ -2423,7 +2423,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.6.1"
+OMBRE_WEB_VERSION = "v5.6.2"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
@@ -3988,14 +3988,19 @@ async def api_chat(request):
                             if c:
                                 buf += c
                                 # 这轮一旦出现工具调用就不外推正文（多半是工具前碎碎念）；
-                                # 攒够几个字再开推，防止「刚吐字就发现是工具轮」的闪烁
+                                # 攒够几个字再开推，防止「刚吐字就发现是工具轮」的闪烁。
+                                # 只推正文，隐藏控制标签（[think]/[memory]/[emo]）之后的一律不外推——
+                                # 否则她会看着标签被一个字一个字打出来又消失，像"消息被吞了"。
                                 if not saw_tc and (flushed or len(buf) >= 8):
-                                    await _q.put({"t": "d", "x": buf[flushed:]})
-                                    flushed = len(buf)
+                                    vis = visible_cut(buf)
+                                    if vis > flushed:
+                                        await _q.put({"t": "d", "x": buf[flushed:vis]})
+                                        flushed = vis
                         record_prompt_cache_usage(stream_usage, "brain-stream")
                         if not tc_acc:
-                            if not saw_tc and buf[flushed:]:
-                                await _q.put({"t": "d", "x": buf[flushed:]})
+                            _vis = visible_cut(buf)
+                            if not saw_tc and _vis > flushed:
+                                await _q.put({"t": "d", "x": buf[flushed:_vis]})
                             rt = buf or fallback
                             break
                         if buf:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from difflib import SequenceMatcher
 
 
 def sanitize_reasoning_markup(text: str) -> str:
@@ -197,6 +196,17 @@ def wechatify_segments(segments: list[str], *, keep: int = 42, target: int = 30)
     return out or [s for s in segments if s.strip()]
 
 
+_CTRL_TAG_START = re.compile(r"[\[［【]\s*(?:emo|diary|think|memory|情绪|心情|记忆)", re.I)
+
+
+def visible_cut(text: str) -> int:
+    """返回正文该在哪里截断——第一个隐藏控制标签（[think]/[memory]/[emo]/[diary]）
+    的起点。流式外推时用它，别把这些标签一个字一个字打给她看、然后又抹掉（那看着就像
+    '他写了一句然后消失了'）。没有标签就返回全长。"""
+    m = _CTRL_TAG_START.search(text or "")
+    return m.start() if m else len(text or "")
+
+
 def _needs_terminal(value: str) -> bool:
     if not value or re.fullmatch(r"https?://\S+", value):
         return False
@@ -231,35 +241,24 @@ def polish_chat_reply(text: str, *, writing_mode: bool = False) -> str:
                 ending = match.group(1)
                 core = raw[:match.start()].strip()
 
-            # If a new sentence repeats the whole previous sentence before
-            # adding one new clause, keep only that new clause.
+            # 一句话若「完整重复了前面某句」再接一小段新内容 → 只留那段新内容，
+            # 但绝不删掉带新意思的整句。这是安全的：只在精确前缀重复时裁掉重复的前缀。
             for previous_core, _previous_norm in reversed(seen):
                 if len(_reply_norm(previous_core)) < 8:
                     continue
                 if core.startswith(previous_core):
                     remainder = core[len(previous_core):].lstrip(" ，,。；;：:")
-                    if len(_reply_norm(remainder)) >= 4:
+                    if len(_reply_norm(remainder)) >= 2:
                         core = remainder
                     break
 
             norm = _reply_norm(core)
             if not norm:
                 continue
-            duplicate = False
-            if len(norm) >= 8:
-                for _previous_core, previous_norm in seen:
-                    if norm == previous_norm:
-                        duplicate = True
-                        break
-                    similarity = SequenceMatcher(
-                        None, norm, previous_norm, autojunk=False
-                    ).ratio()
-                    length_ratio = max(len(norm), len(previous_norm)) / max(
-                        1, min(len(norm), len(previous_norm))
-                    )
-                    if similarity >= 0.87 and length_ratio <= 1.35:
-                        duplicate = True
-                        break
+            # ⚠️ 只删「一字不差的精确重复」。绝不再用相似度模糊删整句——
+            # 那会把她亲眼看到打出来的、只是结构相近的真话吞掉（吞消息的元凶）。
+            # 宁可偶尔留一点重复，也绝不吞掉有新意思的句子。
+            duplicate = len(norm) >= 6 and any(norm == prev_norm for _c, prev_norm in seen)
             if duplicate:
                 continue
             seen.append((core, norm))
