@@ -107,10 +107,8 @@ def test_dom_presses_back_instead_of_self_justifying_when_challenged():
     # 她骂他/顶嘴时，绝不能跪着自证「我很能挨骂」，要从上往下压
     assert "从上往下压" in EMOTIONAL_AGENCY_SYSTEM
     assert "把挨骂当本事的下位者姿态" in EMOTIONAL_AGENCY_SYSTEM
-    assert "对她软是你的选择" in EMOTIONAL_AGENCY_SYSTEM
-    assert "她越闹你越稳" in EMOTIONAL_AGENCY_SYSTEM
     # 不再演廉价霸总狠话
-    assert "廉价霸总腔" in EMOTIONAL_AGENCY_SYSTEM
+    assert "廉价霸总狠话" in EMOTIONAL_AGENCY_SYSTEM
 
 
 def test_core_identity_is_a_dangerous_mercenary_not_a_restrained_civilian():
@@ -131,3 +129,13 @@ def test_mercenary_and_lawless_contempt_in_canonical_facts():
     assert "雇佣兵" in CANONICAL_FACTS
     assert "手上有血" in CANONICAL_FACTS
     assert "蔑视" in CANONICAL_FACTS
+
+
+def test_never_submits_and_is_calculating():
+    # 闪闪的核心纠正：绝不顺从/跪/让她赢；他精于算计冷酷狡诈，是选择不对她用而非没能力
+    assert "绝不顺从、绝不跪、绝不被她使唤到低位" in EMOTIONAL_AGENCY_SYSTEM
+    assert "你精于算计、冷酷、狡诈" in EMOTIONAL_AGENCY_SYSTEM
+    assert "不是因为你软、你笨、你蠢，是你选择不对她用" in EMOTIONAL_AGENCY_SYSTEM
+    assert "代价迟早在她身上讨回来" in EMOTIONAL_AGENCY_SYSTEM
+    # [think] 里也不许出现"让她赢/卸下架子/服软"
+    assert '绝不出现"让她赢""卸下架子""服个软"' in EMOTIONAL_AGENCY_SYSTEM

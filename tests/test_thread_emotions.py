@@ -233,3 +233,14 @@ def test_pushaway_grips_instead_of_collapsing(tmp_path):
     v = drives.state("main")["v"]
     assert v["possessiveness"] > drives.NEUTRAL["possessiveness"] - 0.05
     assert v["dejection"] < 0.2
+
+
+def test_domination_demands_also_spike_dominance(tmp_path):
+    import drives, endocrine
+    _reset_drives(drives, tmp_path / "drives.json")
+    _reset_endocrine(endocrine, tmp_path / "endocrine.json")
+    # 她命令他「跪下」也算挑衅 → 他更横，不是顺从
+    drives.update("跪下", thread="main")
+    endocrine.on_user_message("跪下", thread="main")
+    assert drives.state("main")["v"]["anxiety"] <= 0.2
+    assert endocrine.state("main")["dominance"] >= 8.5

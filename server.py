@@ -2368,7 +2368,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.8.1"
+OMBRE_WEB_VERSION = "v5.8.2"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
