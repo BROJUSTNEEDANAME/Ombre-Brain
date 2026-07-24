@@ -208,7 +208,8 @@
   /* 记忆折叠：他这条话背后读/存的记忆，默认缩着，点开看 */
   .mem-toggle { align-self: flex-start; font-size: 11px; color: var(--text-dim); margin: 3px 5px 0; cursor: pointer; user-select: none; opacity: .7; letter-spacing: .3px; }
   .mem-toggle:active { opacity: 1; }
-  .mem-body { display: none; align-self: flex-start; max-width: 100%; margin: 5px 5px 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); background: rgba(127,122,110,.12); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; white-space: pre-wrap; word-break: break-word; }
+  /* 思维链卡片：磨砂玻璃，浓度由外观面板的「思维链磨砂」滑条控制（--think-alpha/--think-blur） */
+  .mem-body { display: none; align-self: flex-start; max-width: 100%; margin: 5px 5px 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); background: rgba(127,122,110,var(--think-alpha,.38)); backdrop-filter: blur(var(--think-blur,14px)) saturate(1.35); -webkit-backdrop-filter: blur(var(--think-blur,14px)) saturate(1.35); border: 1px solid var(--hair); border-radius: 12px; padding: 9px 12px; white-space: pre-wrap; word-break: break-word; }
   .mem-body.open { display: block; }
   /* 欲望内分泌视觉：dominance 高 → 他的话暗自发光；libido 高 → 拉窗帘(深色) */
   /* dom 冲高 → 他的话暗自发光（挂在他的气泡上；之前误挂在她的橙色气泡上，橙光配橙底根本看不见） */
@@ -282,7 +283,7 @@
   /* 思考池 */
   .thinking { display: none; align-items: center; margin: 6px 0 2px; padding-left: 14px; }
   .thinking.show { display: flex; animation: pop .3s ease; }
-  .think-bubble { background: var(--bubble-you); color: var(--text-dim); font-size: 12px; padding: 7px 12px; border-radius: 15px; border-bottom-left-radius: 6px; box-shadow: var(--sh-bubble); border: 1px solid var(--hair); font-style: italic; display: flex; align-items: center; gap: 8px; }
+  .think-bubble { background: var(--bubble-you); color: var(--text-dim); font-size: 12px; padding: 7px 12px; border-radius: 15px; border-bottom-left-radius: 6px; box-shadow: var(--sh-bubble); border: 1px solid var(--hair); font-style: italic; display: flex; align-items: center; gap: 8px; backdrop-filter: blur(var(--think-blur,14px)) saturate(1.35); -webkit-backdrop-filter: blur(var(--think-blur,14px)) saturate(1.35); }
   .dots { display: inline-flex; gap: 3px; }
   .dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); opacity: .5; animation: blink 1.3s infinite; }
   .dots i:nth-child(2){ animation-delay: .2s; } .dots i:nth-child(3){ animation-delay: .4s; }
@@ -947,6 +948,11 @@
         <button data-vb="both">暗红＋发光</button>
         <button data-vb="reset">恢复正常</button>
       </div>
+      <div class="skin-label">思维链磨砂（越大越不透底）</div>
+      <div class="skin-rowg">
+        <input type="range" id="skinThinkGlass" min="0" max="100" step="5">
+        <span id="skinThinkGlassV">60</span>
+      </div>
       <div class="skin-label">预设套装</div>
       <div class="skin-presets" id="skinPresets"></div>
       <div class="skin-label">自定义</div>
@@ -1249,7 +1255,22 @@
   function syncSkinInputs(){ document.getElementById('skinAccent').value=curSkin.accent||'#C5743A'; document.getElementById('skinBubble').value=curSkin.bubble||curSkin.accent||'#C5743A'; }
   document.getElementById('skinAccent').oninput=e=>{ curSkin.accent=e.target.value; applySkin(curSkin.accent,curSkin.bubble); saveSkin(); markSw(); };
   document.getElementById('skinBubble').oninput=e=>{ curSkin.bubble=e.target.value; applySkin(curSkin.accent||'#C5743A',curSkin.bubble); saveSkin(); };
-  document.getElementById('skinReset').onclick=()=>{ curSkin={}; localStorage.removeItem('skin'); ['--accent','--accent-warm','--accent-soft','--bubble-me'].forEach(v=>document.documentElement.style.removeProperty(v)); markSw(); syncSkinInputs(); };
+  // 思维链磨砂玻璃：0=全透（旧样子），100=厚磨砂完全不透底。默认 60。
+  let thinkGlass=60; try{ const _v=parseInt(localStorage.getItem('thinkGlass')); if(!isNaN(_v)) thinkGlass=Math.max(0,Math.min(100,_v)); }catch(e){}
+  function applyThinkGlass(){
+    const t=thinkGlass/100;
+    document.documentElement.style.setProperty('--think-blur',(t*24).toFixed(1)+'px');
+    document.documentElement.style.setProperty('--think-alpha',(0.10+t*0.55).toFixed(3));
+    const sl=document.getElementById('skinThinkGlass'), sv=document.getElementById('skinThinkGlassV');
+    if(sl && sl.value!==String(thinkGlass)) sl.value=thinkGlass;
+    if(sv) sv.textContent=thinkGlass;
+  }
+  applyThinkGlass();
+  (function(){ const sl=document.getElementById('skinThinkGlass'); if(!sl) return;
+    sl.value=thinkGlass;
+    sl.oninput=e=>{ thinkGlass=Math.max(0,Math.min(100,parseInt(e.target.value)||0)); try{ localStorage.setItem('thinkGlass',String(thinkGlass)); }catch(e2){} applyThinkGlass(); };
+  })();
+  document.getElementById('skinReset').onclick=()=>{ curSkin={}; localStorage.removeItem('skin'); ['--accent','--accent-warm','--accent-soft','--bubble-me'].forEach(v=>document.documentElement.style.removeProperty(v)); markSw(); syncSkinInputs(); thinkGlass=60; try{ localStorage.removeItem('thinkGlass'); }catch(e){} applyThinkGlass(); };
   document.getElementById('skinBgPick').onclick=()=>bgFile.click();
   document.getElementById('skinBgClear').onclick=()=>{ localStorage.removeItem('chatBg'); applyBg(''); };
   const skinModal=document.getElementById('skinModal');
