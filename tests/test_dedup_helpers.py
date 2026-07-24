@@ -429,3 +429,20 @@ def test_generic_model_error_carries_raw_brief():
     info = classify_chat_error(_ProviderError("Internal server error: upstream 500"))
     assert info["code"] == "model_error"
     assert "upstream 500" in info["message"]
+
+
+def test_tag_only_reply_failure_is_classified_honestly():
+    # 日志实锤的失败：model reply contained no visible text（只回标签没正文）
+    info = classify_chat_error(RuntimeError("model reply contained no visible text"))
+    assert info["code"] == "model_empty"
+    assert "没说出口" in info["message"]
+    info2 = classify_chat_error(RuntimeError("model returned an empty reply"))
+    assert info2["code"] == "model_empty"
+
+
+def test_server_retries_before_raising_no_visible_text():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "server.py").read_text(encoding="utf-8")
+    assert "async def _force_visible" in src
+    # 流式与非流式两条路径都必须在抛错前先逼正文重试
+    assert src.count("more = await _force_visible(rt)") == 2

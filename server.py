@@ -2424,7 +2424,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.6.7"
+OMBRE_WEB_VERSION = "v5.6.8"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
@@ -3965,6 +3965,25 @@ async def api_chat(request):
                 segments = wechatify_segments(segments)
             return "\n".join(segments), segments, emotion, diary, think, memory_note
 
+        async def _force_visible(rt: str) -> str:
+            """他这轮只输出了隐藏标签（[think]/[memory]/[emo]）、一句正文都没有——
+            日志里的 model reply contained no visible text 就是这么来的。
+            追加一条系统指令逼他把话说出口，再试一次；失败返回空串由调用方兜底。"""
+            try:
+                msgs2 = _build_msgs() + [
+                    {"role": "assistant", "content": rt},
+                    {"role": "user", "content": (
+                        "[系统提示] 你上一条只输出了隐藏标签，一句正文都没有，她那边什么都收不到。"
+                        "现在直接把你要对她说的话写出来——只写正文，不调工具，别再只写标签。")},
+                ]
+                _r = await _llm_reply(
+                    _web_llm, writing_mode=writing_mode, model=model, max_tokens=web_max_tokens,
+                    messages=msgs2, timeout=model_timeout,
+                )
+                return (_r.choices[0].message.content or "").strip()
+            except Exception:  # noqa: BLE001
+                return ""
+
         # ── 流式模式（body.stream=true）：边生成边把字推给前端，他一个字一个字打出来 ──
         # 生成跑在独立后台任务里：就算她中途切屏断线，照样写完、照样落盘（回来轮询能捞到）。
         if body.get("stream"):
@@ -4059,6 +4078,18 @@ async def api_chat(request):
                         raise RuntimeError("model returned an empty reply")
                     joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
                     if not joined.strip():
+                        # 全是标签没正文 → 逼他开口补一轮，别直接报错吞掉这一回合
+                        more = await _force_visible(rt)
+                        if more:
+                            _vis2 = visible_cut(more)
+                            if _vis2 > 0:
+                                await _q.put({"t": "d", "x": more[:_vis2]})
+                            j2, s2, e2, d2, t2, m2 = _parse_reply(more)
+                            if j2.strip():
+                                joined, segments = j2, s2
+                                emotion, diary = emotion or e2, diary or d2
+                                think, memory_note = think or t2, memory_note or m2
+                    if not joined.strip():
                         raise RuntimeError("model reply contained no visible text")
                     if source == "coreading" and not _is_if:
                         _store_reading_memory_note(memory_note)
@@ -4131,6 +4162,15 @@ async def api_chat(request):
                 if not rt:
                     raise RuntimeError("model returned an empty reply")
                 joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
+                if not joined.strip():
+                    # 全是标签没正文 → 逼他开口补一轮，别直接报错吞掉这一回合
+                    more = await _force_visible(rt)
+                    if more:
+                        j2, s2, e2, d2, t2, m2 = _parse_reply(more)
+                        if j2.strip():
+                            joined, segments = j2, s2
+                            emotion, diary = emotion or e2, diary or d2
+                            think, memory_note = think or t2, memory_note or m2
                 if not joined.strip():
                     raise RuntimeError("model reply contained no visible text")
                 if source == "coreading" and not _is_if:

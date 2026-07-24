@@ -334,6 +334,9 @@ def classify_chat_error(exc) -> dict:
     if any(word in detail for word in (
             "connection", "connecterror", "network", "dns", "reset by peer")):
         return {"code": "model_connection", "message": "服务器暂时连不上模型 API，请稍后再试。"}
+    if "no visible text" in detail or "empty reply" in detail:
+        return {"code": "model_empty",
+                "message": "他这轮只在心里想了、一句话没说出口（模型只回了隐藏标签），自动重试也没成。再发一句他就会开口，这轮消息已保存不会丢。"}
     # 兜底：把原始错误的前一小段直接带给她看——「返回异常」四个字什么都说明不了，
     # 带上原文她截图发过来就能直接定位，不用再去翻服务器日志。
     brief = re.sub(r"\s+", " ", str(exc or "")).strip()[:100]
