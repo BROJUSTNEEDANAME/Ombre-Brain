@@ -321,13 +321,24 @@ def classify_chat_error(exc) -> dict:
     if status in (401, 403) or any(word in detail for word in (
             "invalid api key", "invalid_api_key", "authentication", "unauthorized")):
         return {"code": "api_auth", "message": "模型 API 密钥失效或无权限，请检查服务器上的 API 配置。"}
+    # z.ai/GLM 的内容安全审核拒绝（错误码 1301 等）。以前落在模糊的「返回异常」里，
+    # 看不出原因；单独点名，她一眼就知道是服务商审核拦截、不是程序坏了。
+    if any(word in detail for word in (
+            "1301", "content_filter", "contentfilter", "content filter", "moderation",
+            "安全审核", "内容审核", "敏感内容", "安全策略", "unsafe content")):
+        return {"code": "provider_moderation",
+                "message": "这条被模型服务商的内容安全审核拦截了，本次没有生成回复；不是程序故障，换个说法或稍后再试。"}
     if isinstance(exc, TimeoutError) or any(word in detail for word in (
             "timeout", "timed out", "readtimeout")):
         return {"code": "model_timeout", "message": "模型超过 60 秒没有响应，本次请求已停止；这不是还在思考。"}
     if any(word in detail for word in (
             "connection", "connecterror", "network", "dns", "reset by peer")):
         return {"code": "model_connection", "message": "服务器暂时连不上模型 API，请稍后再试。"}
-    return {"code": "model_error", "message": "模型 API 返回异常，本次没有生成回复。"}
+    # 兜底：把原始错误的前一小段直接带给她看——「返回异常」四个字什么都说明不了，
+    # 带上原文她截图发过来就能直接定位，不用再去翻服务器日志。
+    brief = re.sub(r"\s+", " ", str(exc or "")).strip()[:100]
+    return {"code": "model_error",
+            "message": "模型 API 返回异常，本次没有生成回复。" + (f"（原始错误：{brief}）" if brief else "")}
 
 
 def parse_memory_note(note: str) -> list[tuple[str, bool]]:

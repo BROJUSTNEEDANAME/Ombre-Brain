@@ -416,3 +416,16 @@ def test_glm_tool_call_syntax_never_leaks_into_reply():
     assert sanitize_reasoning_markup(
         "前面的话。<tool_call>breath<arg_key>query</arg_key><arg_value>x</arg_value></tool_call>后面的话。"
     ) == "前面的话。后面的话。"
+
+
+def test_provider_moderation_is_classified_not_generic():
+    # z.ai 内容审核拒绝（1301）以前落在模糊的「返回异常」——现在单独点名
+    info = classify_chat_error(_ProviderError('{"error":{"code":"1301","message":"系统检测到输入或生成内容可能包含不安全或敏感内容"}}'))
+    assert info["code"] == "provider_moderation"
+    assert "审核" in info["message"]
+
+
+def test_generic_model_error_carries_raw_brief():
+    info = classify_chat_error(_ProviderError("Internal server error: upstream 500"))
+    assert info["code"] == "model_error"
+    assert "upstream 500" in info["message"]
