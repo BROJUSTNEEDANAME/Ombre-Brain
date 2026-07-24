@@ -373,3 +373,37 @@ def test_visible_cut_stops_before_control_tags():
     assert s[:visible_cut(s)] == "宝贝别难过，我在听。"
     plain = "就这一句没有标签"
     assert visible_cut(plain) == len(plain)
+
+
+# ---------------------------------------------------------------------------
+# 写记忆前的全库查重：换措辞复读 → 拦下；带新细节 → 放行合并
+# ---------------------------------------------------------------------------
+
+from utils import memory_already_covered
+
+
+def test_paraphrased_refact_is_covered_by_existing_memory():
+    old = "闪闪妈妈会十字绣，花了一年绣了两米长的画作。"
+    new = "闪闪的妈妈会十字绣，绣了一年完成两米长画作。"
+    assert memory_already_covered(new, old)
+
+
+def test_same_fact_with_new_detail_is_not_covered():
+    old = "闪闪妈妈会十字绣，花了一年绣了两米长的画作。"
+    new = "闪闪妈妈会十字绣，花了一年绣了两米长的画作。她还教闪闪绣了一条小金鱼。"
+    assert not memory_already_covered(new, old)
+
+
+def test_different_fact_is_not_covered():
+    old = "闪闪妈妈会十字绣，花了一年绣了两米长的画作。"
+    new = "闪闪周五要交实习报告，很紧张。"
+    assert not memory_already_covered(new, old)
+
+
+def test_server_gates_memory_writes_against_whole_store():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "server.py").read_text(encoding="utf-8")
+    assert "async def _memory_fact_already_stored" in src
+    assert "await _memory_fact_already_stored(content)" in src
+    # 两个调用点都必须 await（不 await 协程根本不会执行，记忆会静默全丢）
+    assert src.count("await _queue_memory_note(memory_note, recorded)") == 2

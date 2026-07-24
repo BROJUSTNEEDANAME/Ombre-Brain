@@ -485,6 +485,18 @@ def merge_memory_details(texts: list[str]) -> str:
     return "".join(kept).strip()
 
 
+def memory_already_covered(new: str, old: str) -> bool:
+    """新摘要是否已被某条旧记忆完全覆盖——同一事实、且合并后几乎不产生新内容。
+
+    用于写记忆前的全库查重（跨进程重启）：纯复读/换措辞再记一遍 → True（跳过写入）；
+    同一事实但带来新细节 → False（照常走合并，让旧桶变得更全）。"""
+    if not same_memory_fact(new, old):
+        return False
+    base = merge_memory_details([old])
+    merged = merge_memory_details([old, new])
+    return len(merged) <= len(base) + 6
+
+
 def collapse_repeated_reply(text: str) -> str:
     """Remove an accidentally duplicated adjacent response block."""
     if not text or len(text) < 80:

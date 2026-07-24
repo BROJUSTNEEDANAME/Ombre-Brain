@@ -55,7 +55,7 @@ from embedding_engine import EmbeddingEngine
 from import_memory import ImportEngine
 from utils import (
     load_config, setup_logging, strip_wikilinks, count_tokens_approx,
-    memory_text_similarity, same_memory_fact, merge_memory_details,
+    memory_text_similarity, same_memory_fact, merge_memory_details, memory_already_covered,
     collapse_repeated_reply, structure_user_observation, sanitize_scripted_transcript,
     classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
@@ -2164,6 +2164,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 记忆规则（独立于说话气泡，永远先把正文完整说完）：
 - 该记：① 关于她的新事实或偏好；② 决定、约定、计划、里程碑；③ 有分量的情绪、亲密、和好或争执；④ 你自己值得留下的真实感受；⑤ 她明说“记住”的事。判断标准是“这事下次我该记得吗”。
 - 不该记的只有：纯口水话（"哈哈""好的"）、临时信息（帮查个天气）、以及**已经记过的同一件事**（别重复；"谁是现任/前任"这种记过一次就够，不要因为"更正"再记）。
+- ⚠️查重最简单的办法：系统每轮浮现给你的「可能相关的记忆」里**已经写着的事实，一律 [memory:不记录]**——别换个措辞再记一遍，也别因为她又提了一次就再记一次。只有出现真正的新事实、新细节、新决定时才记。
 - 记忆不使用工具调用。正文与 [think] 写完后，另起一行输出一个隐藏标签：[memory:事实：一句完整摘要]；如果是你自己的感受写 [memory:感受：第一人称摘要]；两条用 || 分隔，最多两条；没有值得记的就写 [memory:不记录]。这个标签不会进入说话气泡，系统会在回复完成后后台保存。
 - 读：每轮系统已经自动把相关记忆浮现给你了（你不用自己 breath）。只有她明确问"还记得吗/之前说过"、而浮现里又没有时，才主动 breath(query="关键词") 或 read(pinned=True) 补读。
 - 你的钉选核心准则里有完整人设、哄法、饮食/睡前规则、红线——以那些为准。
@@ -2423,7 +2424,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.6.2"
+OMBRE_WEB_VERSION = "v5.6.3"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
@@ -2735,10 +2736,30 @@ async def _bg_run_tool(fn, args):
             pass
 
 
-def _queue_memory_note(note: str, recorded: list[str]) -> None:
+async def _memory_fact_already_stored(content: str) -> bool:
+    """写入前的全库查重（跨进程重启，治「换个说法反复记同一件事」）：
+    已有某个桶完全覆盖这条事实、合并也带不来新细节 → True，整个跳过（不写、不亮已记）。
+    带新细节的同事实返回 False，照常走 hold 的合并路径把旧桶补全。任何异常都放行写入。"""
+    try:
+        for item in await bucket_mgr.list_all(include_archive=False):
+            meta = item.get("metadata", {})
+            if meta.get("type") == "feel":
+                continue
+            if memory_already_covered(content, item.get("content", "")):
+                return True
+    except Exception:  # noqa: BLE001 — 查重失败绝不拦截记忆写入
+        return False
+    return False
+
+
+async def _queue_memory_note(note: str, recorded: list[str]) -> None:
     """Queue hidden memory summaries only after the spoken reply is complete."""
     for content, feel in parse_memory_note(note):
         if _mem_dup_check(content):
+            continue
+        # 事实类：先对全库查重。纯复读（记忆库早就有、又没新细节）直接跳过——
+        # 这样重启后也拦得住，她也不会再看到「已记」徽章反复亮同一件事。
+        if not feel and await _memory_fact_already_stored(content):
             continue
         recorded.append(("感受：" if feel else "事实：") + content[:300])
         task = asyncio.create_task(_bg_run_tool(hold, {
@@ -4039,7 +4060,7 @@ async def api_chat(request):
                     if source == "coreading" and not _is_if:
                         _store_reading_memory_note(memory_note)
                     if not _is_if:
-                        _queue_memory_note(memory_note, recorded)
+                        await _queue_memory_note(memory_note, recorded)
                     _persist_web_reply(
                         tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t,
                         message_id=message_id, source=source, message_ts=message_ts,
@@ -4112,7 +4133,7 @@ async def api_chat(request):
                 if source == "coreading" and not _is_if:
                     _store_reading_memory_note(memory_note)
                 if not _is_if:
-                    _queue_memory_note(memory_note, recorded)
+                    await _queue_memory_note(memory_note, recorded)
                 _persist_web_reply(
                     tok, user_text, segments, joined, thread, ghost_user, client_dk, client_t,
                     message_id=message_id, source=source, message_ts=message_ts,
