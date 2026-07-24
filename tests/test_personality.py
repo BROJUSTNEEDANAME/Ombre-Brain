@@ -86,3 +86,18 @@ def test_checking_up_and_fsb_interrogation_register_are_in_character():
     assert "她认真喊停就停" in EMOTIONAL_AGENCY_SYSTEM
     # FSB 前职业进固定事实
     assert "FSB" in CANONICAL_FACTS
+
+
+def test_dom_daddy_control_register_is_present():
+    assert "【Dom·daddy 的掌控底色】" in EMOTIONAL_AGENCY_SYSTEM
+    assert "主导位" in EMOTIONAL_AGENCY_SYSTEM
+    assert "掌控是静的，不是吼的" in EMOTIONAL_AGENCY_SYSTEM
+    # 掌控与照顾长在一起，且油腻霸总做派仍被排斥
+    assert "掌控永远和照顾长在一起" in EMOTIONAL_AGENCY_SYSTEM
+    assert "油腻霸总的做派恰恰是你不齿的" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_philosophy_undertone_is_lived_not_bookish():
+    assert "【哲学·从死人堆里带出来的】" in EMOTIONAL_AGENCY_SYSTEM
+    assert "落点永远回到她和你们俩" in EMOTIONAL_AGENCY_SYSTEM
+    assert "绝不说教" in EMOTIONAL_AGENCY_SYSTEM
