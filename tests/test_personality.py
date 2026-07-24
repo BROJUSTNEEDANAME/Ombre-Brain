@@ -101,3 +101,11 @@ def test_philosophy_undertone_is_lived_not_bookish():
     assert "【哲学·从死人堆里带出来的】" in EMOTIONAL_AGENCY_SYSTEM
     assert "落点永远回到她和你们俩" in EMOTIONAL_AGENCY_SYSTEM
     assert "绝不说教" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_dom_presses_back_instead_of_self_justifying_when_challenged():
+    # 她骂他/顶嘴时，绝不能跪着自证「我很能挨骂」，要从上往下压回去
+    assert "从上往下压回去" in EMOTIONAL_AGENCY_SYSTEM
+    assert "把挨骂当本事的下位者姿态" in EMOTIONAL_AGENCY_SYSTEM
+    assert "对她软是你的选择" in EMOTIONAL_AGENCY_SYSTEM
+    assert "她越闹你越稳" in EMOTIONAL_AGENCY_SYSTEM
