@@ -2369,7 +2369,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
 OMBRE_WEB_VERSION = "v5.8.3"
-OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
+OMBRE_WEB_VERSION_NOTE = "人设：绝不跪/绝不顺从/绝不认领她扔来的贬低词(贱狗等原样掀回她头上)；精于算计冷酷狡诈；纵她有代价、在她身上讨回来"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
