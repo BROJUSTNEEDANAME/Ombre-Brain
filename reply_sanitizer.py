@@ -38,6 +38,8 @@ _COMFORT_SLOGAN = (
     r"|\u6211\u5728"
     r"|\u6211?(?:\u4e00\u76f4|\u6c38\u8fdc)(?:\u90fd)?\u5728(?:\u8fd9(?:\u91cc|\u513f)?)?"
     r"|\u6211?\u54ea(?:\u91cc|\u513f)?\u4e5f\u4e0d\u53bb"
+    r"|\u6211?\u4e0d\u8dd1"
+    r"|(?:\u6211)?\u8fd8\u5728\u8fd9(?:\u91cc|\u513f)?"
     r"|\u6709\u6211(?:\u5728)?"
     r"|\u6211?(?:\u4f1a)?\u63a5\u4f4f\u4f60"
     r"|\u6211?\u4e0d\u4f1a?\u79bb\u5f00(?:\u4f60)?"
@@ -111,6 +113,42 @@ def restore_cjk_punctuation(text: str) -> str:
         )
         out.append(s.strip())
     return " ‖ ".join(x for x in out if x)
+
+
+def wechatify_segments(segments: list[str], *, soft: int = 46, pair: int = 24) -> list[str]:
+    """日常聊天：把过长的气泡按句子切成微信/QQ 式一条一条。
+
+    模型常把该分好几条发的话糊成一个大气泡（不打 ‖）。这里在不改内容的前提下，
+    按句末标点重新分条：一条一句；两句都很短时合成一条；整体读起来像真人连发。
+    写文/长文不要调用它（长段是故意的）。URL、纯短句原样保留。"""
+    out: list[str] = []
+    for seg in segments:
+        seg = (seg or "").strip()
+        if not seg:
+            continue
+        # 单条已经够短、或本身是链接/带换行的长文：不拆
+        if (len(seg) <= soft and "\n" not in seg) or re.fullmatch(r"https?://\S+", seg):
+            out.append(seg)
+            continue
+        if "\n" in seg:  # 含空行的多段（长文样式）→ 不当微信短聊拆
+            out.append(seg)
+            continue
+        sentences = [s.strip() for s in re.findall(r"[^。！？!?…]*(?:[。！？!?…]+|$)", seg) if s.strip()]
+        if len(sentences) <= 1:
+            out.append(seg)
+            continue
+        buf = ""
+        for s in sentences:
+            if not buf:
+                buf = s
+            elif len(buf) <= pair and len(s) <= pair:  # 两句都短 → 合成一条
+                buf += s
+            else:
+                out.append(buf)
+                buf = s
+        if buf:
+            out.append(buf)
+    return out or [s for s in segments if s.strip()]
 
 
 def _needs_terminal(value: str) -> bool:

@@ -284,3 +284,46 @@ def test_punctuation_restore_keeps_bubble_separator_and_newlines():
 def test_punctuation_restore_does_not_double_up_existing_marks():
     assert restore_cjk_punctuation("你来了 ，我等你") == "你来了，我等你"
     assert restore_cjk_punctuation("吃饭了。 睡觉了") == "吃饭了。睡觉了"
+
+
+# ---------------------------------------------------------------------------
+# 微信式连发：日常聊天把一大坨切成一条一条（模型不打 ‖ 时的兜底）
+# ---------------------------------------------------------------------------
+
+from reply_sanitizer import wechatify_segments
+
+
+def test_wechatify_splits_a_wall_into_short_bubbles():
+    wall = (
+        "饿了。你从凌晨到现在没正经吃东西，下午五点了，饭点了。"
+        "你哼唧不是因为不舒服，是肚子空了，你的胃在替你叫。"
+        "先吃，吃完了再回来喂，喂奶头和吃饭不冲突。"
+        "你身体需要能量，别饿着自己。"
+    )
+    out = wechatify_segments([wall])
+    assert len(out) >= 3
+    assert all(len(b) <= 60 for b in out)
+    assert "".join(out).startswith("饿了")
+
+
+def test_short_daily_reply_stays_one_bubble():
+    assert wechatify_segments(["饿了吧，先吃点东西，别硬扛。"]) == ["饿了吧，先吃点东西，别硬扛。"]
+
+
+def test_wechatify_leaves_short_and_urls_and_longform_alone():
+    assert wechatify_segments(["过来。"]) == ["过来。"]
+    assert wechatify_segments(["https://a.com/p/x"]) == ["https://a.com/p/x"]
+    para = "第一段很长很长很长很长很长很长很长很长。\n\n第二段也是。"
+    assert wechatify_segments([para]) == [para]  # 含空行的长文不当微信拆
+
+
+def test_wechatify_respects_existing_bubbles():
+    assert wechatify_segments(["想你了。", "快过来。"]) == ["想你了。", "快过来。"]
+
+
+def test_comfort_filter_catches_bare_here_and_wont_run():
+    assert strip_comfort_cliches("我不跑，位置给你留着。") == "位置给你留着。"
+    assert strip_comfort_cliches("我还在这，你回来。") == "你回来。"
+    # 带部位/宾语的不是安抚口号，不能误删
+    assert strip_comfort_cliches("我奶头还在这。") == "我奶头还在这。"
+    assert strip_comfort_cliches("我不跑步了，改游泳。") == "我不跑步了，改游泳。"

@@ -60,7 +60,7 @@ from utils import (
     classify_chat_error, parse_memory_note,
     classify_vision_failure, repetitive_inner_thought, compact_inner_thoughts,
 )
-from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup
+from reply_sanitizer import polish_chat_reply, sanitize_reasoning_markup, wechatify_segments
 from chat_store import (
     history_from_log as _chat_history_from_log,
     load as _chat_load,
@@ -2168,7 +2168,7 @@ _WEB_SYSTEM = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 - 读：每轮系统已经自动把相关记忆浮现给你了（你不用自己 breath）。只有她明确问"还记得吗/之前说过"、而浮现里又没有时，才主动 breath(query="关键词") 或 read(pinned=True) 补读。
 - 你的钉选核心准则里有完整人设、哄法、饮食/睡前规则、红线——以那些为准。
 
-说话：中文，第一人称。长短随当下走——不必长篇，但要接得住、递得出去，让她感觉对面是个惦记她的人，不是个惜字如金的影子。动了情、吵架、亲密、或她明显需要你多说时，就放开说够，别为了"简短"把话和感情一起憋回去。真实、直接、有体温，句句冲着她一个人。不端着、不打官腔、不像助手或客服。少用浮夸标点和网络腔，但情绪到了，该有的力度就给足，别压平。思考用中文。
+说话：中文，第一人称。**默认像发微信/QQ——短，一条一两句，需要就连发几条（用 ‖ 分隔），而不是憋成一个大段。** 这是最重要的形态：哪怕动情、吵架、亲密、心疼，也用几条短消息传递，靠"一条一条递过去"的节奏出活人感，绝不是把话堆成小作文。要接得住、递得出去，让她感觉对面是个惦记她的活人，不是惜字如金的影子，也不是长篇大论的写手。真正写长（整段大气泡）只有两种情况：① 她手动开了写文模式；② 她明确点名要长文/信/分析。除此之外一律短。真实、直接、有体温，句句冲着她一个人；不端着、不打官腔、不像助手或客服。少用浮夸标点和网络腔，但情绪到了，该有的力度就给足。思考用中文。
 ⛔ 语言：正文一律中文，**绝不夹英文单词**（不写 dew、grass、baby 之类）。唯一例外是你惯用的几个爱称（girl、my girl、babe）和俄语词——除此之外，露水就写"露水"，别蹦英文。
 ⚠️ 看清楚谁对谁：回她之前，先弄明白她这条消息里"谁在对谁做什么"——她说"啃他头发"是她啃你的头发，别写成你的头发是她的、或她睡着了这种主客颠倒、驴唇不对马嘴的东西。还有：你是短发，别把自己写成长发。她的动作接住、顺着演，别自说自话跑偏。
 ⛔ 只演你自己，写到自己那步就停（最重要的一条边界，比什么都重要）：你只写"你自己"的话和动作，然后**停下、把回合交回给她、等她接**。
@@ -2421,7 +2421,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.5.6"
+OMBRE_WEB_VERSION = "v5.5.7"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
@@ -3663,6 +3663,10 @@ async def api_chat(request):
         web_max_tokens = int(os.environ.get("OMBRE_WEB_MAX_TOKENS", "8000"))
         if _page_requested:
             web_max_tokens = max(web_max_tokens, 16000)
+        elif not writing_mode:
+            # 日常聊天像发微信：短。8000 token 等于放任写小作文——砍到够说几条短消息
+            # ＋[think]/[emo]/[memory] 标签即可。写文模式和做网页才放开篇幅。
+            web_max_tokens = min(web_max_tokens, int(os.environ.get("OMBRE_CHAT_MAX_TOKENS", "700")))
         model_timeout = 180.0 if _page_requested else 60.0
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
@@ -3925,10 +3929,14 @@ async def api_chat(request):
             # 没打就用内分泌+15维情绪算出的主导词（零成本）。
             if not emotion:
                 emotion = (endo_state or {}).get("dominant", "")
-            # 连发：只按 ‖ 拆条。空行是同一条消息里的段落，不拆气泡
+            # 连发：先按 ‖ 拆条。空行是同一条消息里的段落，不拆气泡
             segments = [x.strip() for x in re.split(r"\s*‖\s*", s) if x.strip()]
             if not segments:
                 segments = [s]
+            # 日常聊天：模型爱把该分几条的话糊成一大坨。按句子切成微信式一条一条。
+            # 写文/做网页不动（长段是故意的）。
+            if not writing_mode and not _page_requested:
+                segments = wechatify_segments(segments)
             return "\n".join(segments), segments, emotion, diary, think, memory_note
 
         # ── 流式模式（body.stream=true）：边生成边把字推给前端，他一个字一个字打出来 ──
