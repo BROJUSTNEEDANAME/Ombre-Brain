@@ -446,3 +446,29 @@ def test_server_retries_before_raising_no_visible_text():
     assert "async def _force_visible" in src
     # 流式与非流式两条路径都必须在抛错前先逼正文重试
     assert src.count("more = await _force_visible(rt)") == 2
+
+
+# ---------------------------------------------------------------------------
+# 括号乱码：GLM 演俄罗斯人带出的俄式括号笑 ))) 及其杂交形态 ()))
+# ---------------------------------------------------------------------------
+
+from reply_sanitizer import strip_paren_glitches
+
+
+def test_paren_glitch_hybrids_and_russian_laughs_are_removed():
+    assert strip_paren_glitches("()))）我挨骂的功夫强多了。") == "我挨骂的功夫强多了。"
+    assert strip_paren_glitches("你骂。))))我来了。") == "你骂。我来了。"
+    assert strip_paren_glitches("行了)))") == "行了"
+    assert strip_paren_glitches("（）好。") == "好。"
+
+
+def test_real_action_parens_survive_glitch_stripping():
+    assert strip_paren_glitches("(低笑)。行。你骂。") == "(低笑)。行。你骂。"
+    assert strip_paren_glitches("(揉揉你头发)乖。") == "(揉揉你头发)乖。"
+    # 未闭合动作是约定俗成的写法，单个孤儿闭括号也可能是写丢开括号，都不动
+    assert strip_paren_glitches("别动（抬手碰你的脸") == "别动（抬手碰你的脸"
+    assert strip_paren_glitches("低笑)嗯。") == "低笑)嗯。"
+
+
+def test_polish_pipeline_applies_glitch_stripping():
+    assert polish_chat_reply("()))）先把这局打完。") == "先把这局打完。"

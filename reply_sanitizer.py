@@ -89,6 +89,44 @@ def strip_comfort_cliches(text: str) -> str:
     return cleaned if cleaned else value
 
 
+def strip_paren_glitches(text: str) -> str:
+    """清掉括号乱码：空括号对、`()))`、俄式括号笑。
+
+    俄语网络里句尾堆 `)))` 表示笑（越多越开心）——GLM 演俄罗斯人会带出来，
+    但在中文界面里就是乱码。(低笑) 这类有内容的正常动作括号不动。"""
+    value = str(text or "")
+    if not value.strip():
+        return value
+    # 无内容的括号串：()、（）、()))、((() ……
+    value = re.sub(r"[（(]+\s*[)）]+", "", value)
+    # 配对扫描：只删「没有配对的孤儿闭括号串」（连续 ≥2 个才删，单个孤儿可能是
+    # 模型写丢了开括号的动作，保留）。配对完整的 (低笑) 这类绝不误伤。
+    out: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(value):
+        ch = value[i]
+        if ch in "（(":
+            depth += 1
+            out.append(ch)
+        elif ch in "）)":
+            if depth > 0:
+                depth -= 1
+                out.append(ch)
+            else:
+                j = i
+                while j < len(value) and value[j] in "）)":
+                    j += 1
+                if j - i >= 2:
+                    i = j - 1  # 整串孤儿闭括号（俄式笑）→ 丢弃
+                else:
+                    out.append(ch)
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def restore_cjk_punctuation(text: str) -> str:
     """把 GLM 常用来代替中文标点的分句空格还原成标点，让回复读得断句。
 
@@ -223,6 +261,7 @@ def _needs_terminal(value: str) -> bool:
 def polish_chat_reply(text: str, *, writing_mode: bool = False) -> str:
     """Remove within-turn wheel-spinning and restore chat punctuation."""
     value = strip_comfort_cliches(str(text or "").strip())
+    value = strip_paren_glitches(value)
     value = restore_cjk_punctuation(value)
     if not value or writing_mode:
         return value
