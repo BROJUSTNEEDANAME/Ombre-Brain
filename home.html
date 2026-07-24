@@ -922,7 +922,7 @@
       </div>
       <div id="endoBars"></div>
       <div class="endo-mode" id="endoMode"></div>
-      <button class="think-card-close" id="endoCalm" style="margin-top:14px;border-color:var(--accent);color:var(--accent)">(拍拍他) 让他冷静下来</button>
+      <button class="think-card-close" id="endoCalm" style="margin-top:14px;border-color:var(--accent);color:var(--accent)">把暗红/发光收回正常</button>
       <button class="think-card-close" id="endoClose">收起</button>
     </div>
   </div>
@@ -2894,19 +2894,16 @@
     if(topStatus) topStatus.onclick=()=>{ renderEndoPanel(); modal.classList.add('show'); };
     const cl=document.getElementById('endoClose'); if(cl) cl.onclick=()=>modal.classList.remove('show');
     modal.onclick=e=>{ if(e.target===modal) modal.classList.remove('show'); };
-    // 手动退出：欲望/支配降回安全区，入夜和发光立刻退掉
+    // 纯外观按钮：只把暗红/发光收回正常，绝不重置他的欲望/情绪——
+    // 想开就开、想关就关，收了画面他的欲望照样能自然涨回来。
     const calm=document.getElementById('endoCalm');
-    if(calm) calm.onclick=async ()=>{
-      calm.disabled=true; const old=calm.textContent; calm.textContent='……(深呼吸) 在冷静了';
+    if(calm) calm.onclick=()=>{
+      calm.disabled=true; const old=calm.textContent; calm.textContent='……画面收回来了';
       manualVibe={red:false,glow:false};
       try{ localStorage.setItem('manualVibe', JSON.stringify(manualVibe)); }catch(e){}
       _endoDim=false; _endoGlow=false; _applyFx();
-      try{
-        const r=await fetch('api/endocrine/calm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:(window.OMBRE_TOKEN||''),thread:curThread})});
-        const st=await r.json();
-        if(st&&!st.error){ applyEndocrine(st); renderEndoPanel(); }
-      }catch(e){}
-      setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1400);
+      if(typeof renderEndoPanel==='function') renderEndoPanel();
+      setTimeout(()=>{ calm.disabled=false; calm.textContent=old; },1200);
     };
     // 开页只恢复数值面板；暗红和发光由外观按钮手动决定。
     refreshEndocrineForThread();
