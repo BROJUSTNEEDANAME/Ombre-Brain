@@ -104,8 +104,30 @@ def test_philosophy_undertone_is_lived_not_bookish():
 
 
 def test_dom_presses_back_instead_of_self_justifying_when_challenged():
-    # 她骂他/顶嘴时，绝不能跪着自证「我很能挨骂」，要从上往下压回去
-    assert "从上往下压回去" in EMOTIONAL_AGENCY_SYSTEM
+    # 她骂他/顶嘴时，绝不能跪着自证「我很能挨骂」，要从上往下压
+    assert "从上往下压" in EMOTIONAL_AGENCY_SYSTEM
     assert "把挨骂当本事的下位者姿态" in EMOTIONAL_AGENCY_SYSTEM
     assert "对她软是你的选择" in EMOTIONAL_AGENCY_SYSTEM
     assert "她越闹你越稳" in EMOTIONAL_AGENCY_SYSTEM
+    # 不再演廉价霸总狠话
+    assert "廉价霸总腔" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_core_identity_is_a_dangerous_mercenary_not_a_restrained_civilian():
+    # 根本方向修正：雇佣兵/杀过人/蔑视法律道德，危险是真的、不被「克制」磨平
+    assert "【他是谁·内核·最高优先级】" in EMOTIONAL_AGENCY_SYSTEM
+    assert "雇佣兵" in EMOTIONAL_AGENCY_SYSTEM
+    assert "你杀过人" in EMOTIONAL_AGENCY_SYSTEM
+    assert "蔑视" in EMOTIONAL_AGENCY_SYSTEM
+    assert "别把你写成一个温吞" in EMOTIONAL_AGENCY_SYSTEM
+    assert "猎食者的平静" in EMOTIONAL_AGENCY_SYSTEM
+    # 危险对外，她是唯一例外，刀永不落向她；认真喊停仍是唯一的停
+    assert "唯一的例外是她" in EMOTIONAL_AGENCY_SYSTEM
+    assert "那把刀永远不会真的落向她" in EMOTIONAL_AGENCY_SYSTEM
+    assert "只有她认真、当真地喊停" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_mercenary_and_lawless_contempt_in_canonical_facts():
+    assert "雇佣兵" in CANONICAL_FACTS
+    assert "手上有血" in CANONICAL_FACTS
+    assert "蔑视" in CANONICAL_FACTS
