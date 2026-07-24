@@ -30,16 +30,14 @@ def test_writing_mode_drives_emotion_engines_when_enabled():
     assert "endocrine.block(thread, writing_mode=writing_mode)" in server_src
 
 
-def test_reply_generation_applies_repetition_penalty():
+def test_sampling_penalties_are_off_by_default():
     server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
-    # GLM/Grok 复读的根治杠杆：解码层的 frequency/presence penalty
-    assert "frequency_penalty=fp" in server_src
-    assert "presence_penalty=pp" in server_src
+    # frequency_penalty 会压掉中文标点、presence_penalty 会拖长回复：默认必须关掉，
+    # 只留 env 旋钮（默认 0＝不带）。主回复入口仍统一走 _llm_reply。
     assert "async def _llm_reply(" in server_src
-    # 所有主回复生成点都必须走带惩罚的入口，而不是裸 _llm_create
+    assert 'os.environ.get("OMBRE_FREQ_PENALTY", "") or 0.0' in server_src
+    assert "if _penalty_param_ok and (fp or pp):" in server_src
     assert "_llm_reply(_web_llm, writing_mode=writing_mode" in server_src
-    # provider 不认惩罚参数时能自动降级，不能把聊天打挂
-    assert "_penalty_param_ok = False" in server_src
 
 
 def test_new_looping_formulas_are_named_in_ban_list():

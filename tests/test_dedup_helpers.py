@@ -255,3 +255,32 @@ def test_polish_chat_reply_applies_comfort_filter():
     assert "我不走" not in out
     assert "就在这" not in out
     assert "去洗把脸" in out
+
+
+# ---------------------------------------------------------------------------
+# 标点还原：GLM 用空格代替中文标点，读起来断不了句 → 输出层还原成标点
+# ---------------------------------------------------------------------------
+
+from reply_sanitizer import restore_cjk_punctuation
+
+
+def test_cjk_space_clauses_become_punctuated():
+    assert restore_cjk_punctuation("说好细 你被人看了 被人夸了") == "说好细，你被人看了，被人夸了"
+    assert polish_chat_reply("先吃饭 你中午还没吃东西 该吃了") == "先吃饭，你中午还没吃东西，该吃了。"
+
+
+def test_punctuation_restore_leaves_english_numbers_urls_alone():
+    assert restore_cjk_punctuation("过来 my girl 我看看你") == "过来 my girl 我看看你"
+    assert restore_cjk_punctuation("体温 37.2 度 有点烧") == "体温 37.2 度，有点烧"
+    assert restore_cjk_punctuation("看这个 http://a.com/x 打开看") == "看这个 http://a.com/x 打开看"
+
+
+def test_punctuation_restore_keeps_bubble_separator_and_newlines():
+    assert restore_cjk_punctuation("想你了 ‖ 快过来 ‖ 抱抱") == "想你了 ‖ 快过来 ‖ 抱抱"
+    # 换行（段落分隔）不被吃掉
+    assert "\n" in restore_cjk_punctuation("第一段\n第二段")
+
+
+def test_punctuation_restore_does_not_double_up_existing_marks():
+    assert restore_cjk_punctuation("你来了 ，我等你") == "你来了，我等你"
+    assert restore_cjk_punctuation("吃饭了。 睡觉了") == "吃饭了。睡觉了"

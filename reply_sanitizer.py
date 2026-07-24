@@ -83,6 +83,36 @@ def strip_comfort_cliches(text: str) -> str:
     return cleaned if cleaned else value
 
 
+def restore_cjk_punctuation(text: str) -> str:
+    """把 GLM 常用来代替中文标点的分句空格还原成标点，让回复读得断句。
+
+    只动「中文字/中文标点」之间的空格（→ 逗号）和「空格紧贴已有标点」的情况；
+    绝不碰英文单词、数字、URL 周围的空格（girl、37.2、http://… 保持原样），
+    也不碰换行（\\n 段落分隔）和 ‖ 气泡分隔。"""
+    value = str(text or "")
+    if not value.strip():
+        return value
+    segs = re.split(r"\s*‖\s*", value)
+    out = []
+    _CJK = r"一-鿿"
+    _CLOSE = r"）】」』’”》"
+    _OPEN = r"（【「『‘“《"
+    _PUNC = r"，。！？!?；;、：…—"
+    for seg in segs:
+        s = seg
+        # 空格紧贴已有标点 → 去掉空格（别造出「 ，」这种）
+        s = re.sub(r"[ \t]+([%s%s])" % (_PUNC, _CLOSE), r"\1", s)
+        s = re.sub(r"([%s%s])[ \t]+" % (_PUNC, _OPEN), r"\1", s)
+        # 中文字/收尾标点  空格  中文字/起始标点 → 逗号（这是 GLM 的分句空格）
+        s = re.sub(
+            r"(?<=[%s%s])[ \t]+(?=[%s%s])" % (_CJK, _CLOSE, _CJK, _OPEN),
+            "，",
+            s,
+        )
+        out.append(s.strip())
+    return " ‖ ".join(x for x in out if x)
+
+
 def _needs_terminal(value: str) -> bool:
     if not value or re.fullmatch(r"https?://\S+", value):
         return False
@@ -94,6 +124,7 @@ def _needs_terminal(value: str) -> bool:
 def polish_chat_reply(text: str, *, writing_mode: bool = False) -> str:
     """Remove within-turn wheel-spinning and restore chat punctuation."""
     value = strip_comfort_cliches(str(text or "").strip())
+    value = restore_cjk_punctuation(value)
     if not value or writing_mode:
         return value
 

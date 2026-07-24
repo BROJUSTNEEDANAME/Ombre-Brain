@@ -2389,19 +2389,27 @@ _penalty_param_ok = True
 
 
 async def _llm_reply(client, *, writing_mode: bool = False, **kw):
-    """主回复/正文生成专用入口：在解码层加采样惩罚，压住 GLM/Grok「换个词把上一句
-    再说一遍」的复读老毛病（frequency_penalty 罚重复用词，presence_penalty 逼出新内容）。
-    写文是长文、复读复利最狠，惩罚给得更重。哪家 provider 不认这参数就自动去掉、以后不再带。
-    可用环境变量 OMBRE_FREQ_PENALTY / OMBRE_PRES_PENALTY 覆盖强度。"""
+    """主回复/正文生成专用入口。
+
+    ⚠️ 默认不加 frequency/presence penalty：在中文上 frequency_penalty 会把出现
+    最频繁的「。」「，」当成重复压掉 → 模型改用空格、标点消失、句子读不断气；
+    presence_penalty 又逼它不停说新内容 → 回复越拖越长。这两样对治 GLM「换词复读」
+    收效甚微，副作用却很大，所以关掉。复读改由提示词 + 输出层去重/标点还原处理。
+    仍保留 env 旋钮（OMBRE_FREQ_PENALTY / OMBRE_PRES_PENALTY），默认 0＝不带。"""
     global _penalty_param_ok
-    if _penalty_param_ok:
+    try:
+        fp = float(os.environ.get("OMBRE_FREQ_PENALTY", "") or 0.0)
+        pp = float(os.environ.get("OMBRE_PRES_PENALTY", "") or 0.0)
+    except ValueError:
+        fp, pp = 0.0, 0.0
+    if _penalty_param_ok and (fp or pp):
+        pen = {}
+        if fp:
+            pen["frequency_penalty"] = fp
+        if pp:
+            pen["presence_penalty"] = pp
         try:
-            fp = float(os.environ.get("OMBRE_FREQ_PENALTY", "") or (0.7 if writing_mode else 0.4))
-            pp = float(os.environ.get("OMBRE_PRES_PENALTY", "") or (0.5 if writing_mode else 0.3))
-        except ValueError:
-            fp, pp = (0.7 if writing_mode else 0.4), (0.5 if writing_mode else 0.3)
-        try:
-            return await _llm_create(client, frequency_penalty=fp, presence_penalty=pp, **kw)
+            return await _llm_create(client, **pen, **kw)
         except Exception as e:  # noqa: BLE001
             if "penalt" in str(e).lower():
                 _penalty_param_ok = False  # 这家不认惩罚参数：去掉重试，以后也不带
@@ -2413,7 +2421,7 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.5.5"
+OMBRE_WEB_VERSION = "v5.5.6"
 OMBRE_WEB_VERSION_NOTE = "解码层加 frequency/presence penalty 压 GLM/Grok 换词复读(可环境变量调强度)；点名禁第二回比第一回等新复读句式"
 
 
