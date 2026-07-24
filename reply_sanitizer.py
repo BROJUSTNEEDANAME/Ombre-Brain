@@ -115,9 +115,9 @@ def restore_cjk_punctuation(text: str) -> str:
     return " ‖ ".join(x for x in out if x)
 
 
-def _split_top_level_sentences(text: str) -> list[str]:
-    """按句末标点切句，但绝不在括号内部切——(动作 里的句号) 不算断句点，
-    这样成对的括号动作永远不会被拦腰劈成两条。"""
+def _split_top_level(text: str, seps: str) -> list[str]:
+    """按 seps 里的标点切，但绝不在括号内部切（成对括号动作永不被劈开）。
+    分隔符保留在前一段末尾。"""
     out: list[str] = []
     buf = ""
     depth = 0
@@ -127,7 +127,7 @@ def _split_top_level_sentences(text: str) -> list[str]:
             depth += 1
         elif ch in "）)" and depth > 0:
             depth -= 1
-        elif ch in "。！？!?…" and depth == 0:
+        elif ch in seps and depth == 0:
             out.append(buf.strip())
             buf = ""
     if buf.strip():
@@ -135,42 +135,65 @@ def _split_top_level_sentences(text: str) -> list[str]:
     return [s for s in out if s]
 
 
+def _split_top_level_sentences(text: str) -> list[str]:
+    return _split_top_level(text, "。！？!?…")
+
+
 def _is_action_only(sentence: str) -> bool:
     """整句就是一个括号动作，如「(手指在她耳侧划了一下)。」——不该单独成一条气泡。"""
     return bool(re.fullmatch(r"\s*[（(][^（(]*[）)]\s*[。！？!?…]*\s*", sentence))
 
 
-def wechatify_segments(segments: list[str], *, soft: int = 48, pair: int = 24) -> list[str]:
-    """日常聊天：把过长的气泡按句子切成微信/QQ 式一条一条。
+def _tidy_bubble(b: str) -> str:
+    """收尾：去掉气泡末尾多余的逗号/顿号，缺句末标点就补句号（末尾是括号/引号不补）。"""
+    b = b.strip()
+    b = re.sub(r"[，,、；;]+$", "", b).strip()
+    if b and not re.search(r"[。！？!?…”’」』）)]$", b):
+        b += "。"
+    return b
 
-    模型常把该分好几条发的话糊成一个大气泡（不打 ‖）。这里在不改内容的前提下，
-    按句末标点重新分条：一条一句；两句都很短时合成一条；纯括号动作贴到相邻那句上，
-    不单独成条；括号内部绝不切断。写文/长文/URL/短句不动（长段是故意的）。"""
+
+def wechatify_segments(segments: list[str], *, keep: int = 42, target: int = 30) -> list[str]:
+    """日常聊天：把过长的气泡切成微信/QQ 式一条一条短消息。
+
+    模型爱把该分几条的话糊成一个大气泡（不打 ‖），而且常是「一逗到底」的长句
+    （几乎没有句号），读起来像分析报告不像人说话。这里在不改字的前提下重新分条：
+    先按句号切句，太长的句子再按顶层逗号切成小句，然后打包成 ~target 字的短气泡；
+    纯括号动作贴到相邻那条；括号内部绝不切断。写文/长文/URL/短句不动。"""
     out: list[str] = []
     for seg in segments:
         seg = (seg or "").strip()
         if not seg:
             continue
-        # 单条已经够短、或本身是链接、或含空行的多段长文：不拆
-        if (len(seg) <= soft and "\n" not in seg) or re.fullmatch(r"https?://\S+", seg) or "\n" in seg:
+        # 整条已经够短、或是链接、或含空行的多段长文：不拆
+        if (len(seg) <= keep and "\n" not in seg) or re.fullmatch(r"https?://\S+", seg) or "\n" in seg:
             out.append(seg)
             continue
-        sentences = _split_top_level_sentences(seg)
-        if len(sentences) <= 1:
-            out.append(seg)
-            continue
-        buf = ""
-        for s in sentences:
-            if not buf:
-                buf = s
-            elif _is_action_only(s) or (len(buf) <= pair and len(s) <= pair):
-                # 纯动作小括号 或 两句都很短 → 并进当前这条，别让它孤零零单飞
-                buf += s
+        # 先分句；过长的句子再按顶层逗号拆成小句单元
+        units: list[str] = []
+        for sentence in _split_top_level_sentences(seg):
+            if len(sentence) > target:
+                units.extend(_split_top_level(sentence, "，,、；;"))
             else:
-                out.append(buf)
-                buf = s
+                units.append(sentence)
+        units = [u.strip() for u in units if u.strip()]
+        if len(units) <= 1:
+            out.append(seg)
+            continue
+        # 打包成 ~target 字的短气泡；纯动作小括号贴前一条，不单飞
+        buf = ""
+        bubbles: list[str] = []
+        for u in units:
+            if not buf:
+                buf = u
+            elif _is_action_only(u) or len(buf) + len(u) <= target:
+                buf += u
+            else:
+                bubbles.append(buf)
+                buf = u
         if buf:
-            out.append(buf)
+            bubbles.append(buf)
+        out.extend(_tidy_bubble(b) for b in bubbles)
     return out or [s for s in segments if s.strip()]
 
 

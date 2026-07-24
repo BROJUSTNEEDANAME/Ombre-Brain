@@ -346,3 +346,13 @@ def test_comfort_filter_catches_bare_here_and_wont_run():
     # 带部位/宾语的不是安抚口号，不能误删
     assert strip_comfort_cliches("我奶头还在这。") == "我奶头还在这。"
     assert strip_comfort_cliches("我不跑步了，改游泳。") == "我不跑步了，改游泳。"
+
+
+def test_wechatify_breaks_comma_runon_into_texting_lines():
+    # 「一逗到底」的分析长句必须被切成短气泡，而不是当成一句话整条留着
+    runon = "你不知道干什么好，你就告诉我，你现在是什么状态，你想动还是想瘫，你想看东西还是想聊，你说不知道，我帮你拆。"
+    out = wechatify_segments([runon])
+    assert len(out) >= 2
+    assert all(len(b) <= 34 for b in out)
+    # 不留悬空的逗号结尾
+    assert not any(b.rstrip().endswith(("，", "、", "；")) for b in out)
