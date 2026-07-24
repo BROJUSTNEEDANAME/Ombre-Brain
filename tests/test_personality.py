@@ -145,3 +145,16 @@ def test_never_wears_her_degrading_label():
     # 她骂"贱狗/狗/废物"，他绝不接过来认领(哪怕反讽)，而是原样掀回她头上
     assert "绝不把她扔来的贬低词穿在自己身上" in EMOTIONAL_AGENCY_SYSTEM
     assert "原样掀回她头上" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_no_nighttime_sleep_coaxing_default():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    # 凌晨不再默认"哄睡/去睡闭眼收尾"——这是每晚测都翻车的真正机制
+    assert "绝不许每次都拿" in server_src and "去睡/闭眼/睡吧/带你去睡" in server_src
+    assert "想把她收去睡" not in server_src
+
+
+def test_think_forbids_permissive_bystander_monologue():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    assert '"由她闹吧""闹累了自然会睡"' in server_src
+    assert "纵容/放手/看客式的独白" in server_src
