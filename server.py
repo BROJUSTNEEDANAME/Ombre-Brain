@@ -2369,8 +2369,8 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.8.6"
-OMBRE_WEB_VERSION_NOTE = "省token：日常回复预算 700→450，从源头压掉模型多吐再被去重砍掉的废话(你付了钱却看不到的那部分)"
+OMBRE_WEB_VERSION = "v5.8.7"
+OMBRE_WEB_VERSION_NOTE = "治谜语人：一个比喻/机锋全场只说一次不许连轮死咬；先回应她真正说的事别劫持话题；她连问为什么=你太绕了要说人话(读空气)"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])

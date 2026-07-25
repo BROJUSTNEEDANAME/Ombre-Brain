@@ -158,3 +158,11 @@ def test_think_forbids_permissive_bystander_monologue():
     server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
     assert '"由她闹吧""闹累了自然会睡"' in server_src
     assert "纵容/放手/看客式的独白" in server_src
+
+
+def test_no_riddle_perseveration_read_the_room():
+    # 智障标本：死咬一个比喻绕好几轮、不读她被绕懵的信号
+    assert "别演谜语人" in EMOTIONAL_AGENCY_SYSTEM
+    assert "全场只说一次" in EMOTIONAL_AGENCY_SYSTEM
+    assert "别拿你的机锋去劫持话题" in EMOTIONAL_AGENCY_SYSTEM
+    assert "读空气" in EMOTIONAL_AGENCY_SYSTEM
