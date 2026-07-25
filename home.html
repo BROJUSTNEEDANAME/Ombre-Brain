@@ -940,6 +940,7 @@
       </div>
       <div class="skin-label">模型</div>
       <div class="skin-theme" id="skinModel">
+        <button data-md="glm-5.2">GLM 5.2</button>
         <button data-md="glm-5.1">GLM 5.1</button>
         <button data-md="glm-4.6">GLM 4.6</button>
       </div>
@@ -1456,7 +1457,7 @@
   setEmotion('安定');
 
   // 模型切换：Opus 4.6 ↔ Sonnet 4.6（点 header 上的小标签切）
-  const MODELS={'glm-5.1':'GLM 5.1','glm-4.6':'GLM 4.6'};
+  const MODELS={'glm-5.2':'GLM 5.2','glm-5.1':'GLM 5.1','glm-4.6':'GLM 4.6'};
   // 换成 GLM：把 localStorage 里旧的 Claude 模型值清掉，回默认 GLM 5.1
   try{ if(!localStorage.getItem('glmSwitchFix')){ const old=localStorage.getItem('chatModel'); if(old && !MODELS[old]) localStorage.removeItem('chatModel'); localStorage.setItem('glmSwitchFix','1'); } }catch(e){}
   let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='glm-5.1';  // 默认 GLM 5.1；点 header 上的芯片可切 GLM 4.6

@@ -2369,8 +2369,8 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.8.7"
-OMBRE_WEB_VERSION_NOTE = "治谜语人：一个比喻/机锋全场只说一次不许连轮死咬；先回应她真正说的事别劫持话题；她连问为什么=你太绕了要说人话(读空气)"
+OMBRE_WEB_VERSION = "v5.8.8"
+OMBRE_WEB_VERSION_NOTE = "外观面板加 GLM 5.2 模型切换(前端按钮+后端白名单放行)；若 z.ai 暂无该模型则回复会报错，切回5.1即可"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3562,7 +3562,7 @@ async def api_chat(request):
             _web_vision = AsyncOpenAI(api_key=api_key, base_url=llm_base_url, timeout=105.0, max_retries=2)
         # 模型：网页可传 model 切换（白名单内才认），否则用默认
         _default_model = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
-        _allowed_models = {"glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
+        _allowed_models = {"glm-5.2", "glm-5.1", "glm-4.6", "glm-4.7", "glm-4.5-air"}
         _req_model = str(body.get("model", "")).strip()
         model = _req_model if _req_model in _allowed_models else _default_model
         # 识图改走「转述管道」：不再整场切识图模型（那模型笨、人设和工具都拿不稳）。
