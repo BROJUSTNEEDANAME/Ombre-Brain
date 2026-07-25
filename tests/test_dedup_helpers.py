@@ -472,3 +472,11 @@ def test_real_action_parens_survive_glitch_stripping():
 
 def test_polish_pipeline_applies_glitch_stripping():
     assert polish_chat_reply("()))）先把这局打完。") == "先把这局打完。"
+
+
+def test_model_invented_mtime_tokens_are_stripped():
+    # 报告的 bug：气泡里冒出 _mtime_t4 / _mtime_t4>>> 这种模型自造的分段/时间戳垃圾
+    assert sanitize_reasoning_markup("_mtime_t4你刚才推开我。") == "你刚才推开我。"
+    assert sanitize_reasoning_markup("_mtime_t4>>>(收紧一点。)所以别推开。") == "(收紧一点。)所以别推开。"
+    # 正常带括号动作的正文不受影响
+    assert sanitize_reasoning_markup("别扭完了？(低头，看她。)") == "别扭完了？(低头，看她。)"

@@ -24,6 +24,10 @@ def sanitize_reasoning_markup(text: str) -> str:
     value = re.sub(r"<\s*tool_call\b[^>]*>.*?<\s*/\s*tool_call\s*>", "", value, flags=re.I | re.S)
     value = re.sub(r"<\s*arg_key\s*>.*?<\s*/\s*arg_key\s*>", "", value, flags=re.I | re.S)
     value = re.sub(r"<\s*/?\s*(?:tool_call|arg_key|arg_value)\s*>", "", value, flags=re.I)
+    # 模型偶尔自造分段/时间戳垃圾 token 塞在每条前面（如 `_mtime_t4`、`_mtime_t4>>>`）。
+    # 这些永远不该出现在正文里，连同它带的 `>>>` 分隔符一起清掉。
+    value = re.sub(r"_+m(?:sg|time)?_?t\d+\s*(?:>>>)?\s*", "", value, flags=re.I)
+    value = re.sub(r"\s*>>>+\s*", "", value)
     return re.sub(r"\n{3,}", "\n\n", value).strip()
 
 

@@ -2369,8 +2369,8 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.8.4"
-OMBRE_WEB_VERSION_NOTE = "挖出真凶：凌晨时间注入一直在逼他哄睡收尾(去睡/闭眼)——删掉这条默认哄睡；[think]禁纵容看客式独白(由她闹吧/闹累了自然睡)"
+OMBRE_WEB_VERSION = "v5.8.5"
+OMBRE_WEB_VERSION_NOTE = "清模型自造的垃圾token：_mtime_t4 / _mtime_t4>>> 这类分段时间戳标记漏进气泡，输出层直接剥掉(正常内容不动)"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
