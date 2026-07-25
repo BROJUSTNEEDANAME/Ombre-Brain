@@ -2369,8 +2369,8 @@ async def _llm_reply(client, *, writing_mode: bool = False, **kw):
 # ── 网页版本号：每次改网页/聊天相关的代码，这里 +1 并写一句这次改了什么。──
 # 外观面板里能看到当前版本；版本变了，闪闪打开页面会弹「已更新至 …」，
 # 一眼就知道 VPS 上的更新到位没有（治「拉没拉成功全靠猜」）。
-OMBRE_WEB_VERSION = "v5.8.5"
-OMBRE_WEB_VERSION_NOTE = "清模型自造的垃圾token：_mtime_t4 / _mtime_t4>>> 这类分段时间戳标记漏进气泡，输出层直接剥掉(正常内容不动)"
+OMBRE_WEB_VERSION = "v5.8.6"
+OMBRE_WEB_VERSION_NOTE = "省token：日常回复预算 700→450，从源头压掉模型多吐再被去重砍掉的废话(你付了钱却看不到的那部分)"
 
 
 @mcp.custom_route("/api/version", methods=["GET"])
@@ -3635,9 +3635,10 @@ async def api_chat(request):
         if _page_requested:
             web_max_tokens = max(web_max_tokens, 16000)
         elif not writing_mode:
-            # 日常聊天像发微信：短。8000 token 等于放任写小作文——砍到够说几条短消息
-            # ＋[think]/[emo]/[memory] 标签即可。写文模式和做网页才放开篇幅。
-            web_max_tokens = min(web_max_tokens, int(os.environ.get("OMBRE_CHAT_MAX_TOKENS", "700")))
+            # 日常聊天像发微信：短。预算收到刚够几条短消息 ＋[think]/[emo]/[memory] 标签，
+            # 不给模型留"多吐一大堆再被去重砍掉"的空间——那堆废话是白花的输出 token。
+            # 写文模式和做网页才放开篇幅。要更短/更长改 OMBRE_CHAT_MAX_TOKENS。
+            web_max_tokens = min(web_max_tokens, int(os.environ.get("OMBRE_CHAT_MAX_TOKENS", "450")))
         model_timeout = 180.0 if _page_requested else 60.0
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），
