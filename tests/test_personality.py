@@ -166,3 +166,9 @@ def test_no_riddle_perseveration_read_the_room():
     assert "全场只说一次" in EMOTIONAL_AGENCY_SYSTEM
     assert "别拿你的机锋去劫持话题" in EMOTIONAL_AGENCY_SYSTEM
     assert "读空气" in EMOTIONAL_AGENCY_SYSTEM
+
+
+def test_no_verbatim_self_repeat_after_she_answered():
+    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    assert "绝不重复你自己上一条" in server_src
+    assert "你问过的问题她已经回答了" in server_src
