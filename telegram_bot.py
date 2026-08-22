@@ -22,7 +22,7 @@ LLM 用 OpenAI 兼容接口，默认接 z.ai（智谱 GLM），换任意兼容 A
 
 可选：
     LLM_BASE_URL         接口地址，默认 z.ai：https://api.z.ai/api/paas/v4/
-    OMBRE_BOT_MODEL      模型名，默认 glm-4.6（要 GLM 5.1 就设成 glm-5.1）
+    OMBRE_BOT_MODEL      模型名，默认 glm-5.3（要旧版就设成 glm-5.2 / glm-5.1 / glm-4.6）
     OMBRE_MCP_URL        大脑地址，默认 https://ombre-brain-6e05.onrender.com/mcp
 
 本地跑：
@@ -83,7 +83,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_API_BOT_TOKEN") or os.environ["TEL
 # 换 OpenRouter / DeepSeek / 别家只需改这三个环境变量，代码不用动。
 #   LLM_API_KEY    provider 的 API key（必填）
 #   LLM_BASE_URL   接口地址，默认 z.ai：https://api.z.ai/api/paas/v4/
-#   OMBRE_BOT_MODEL 模型名，默认 glm-4.6（要 GLM 5.1 就设成 glm-5.1）
+#   OMBRE_BOT_MODEL 模型名，默认 glm-5.3（要旧版就设成 glm-5.2 / glm-5.1 / glm-4.6）
 LLM_API_KEY = (
     os.environ.get("LLM_API_KEY")
     or os.environ.get("ZAI_API_KEY")
@@ -93,8 +93,8 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/").s
 OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
-MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-4.6")
-# 识图模型：她发图片时这一轮自动切到能看图的模型（GLM 5.1 纯文本看不了图）。
+MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
+# 识图模型：她发图片时这一轮自动切到能看图的模型（GLM 5.3 纯文本看不了图）。
 # GLM 的识图模型带 V：glm-4.6v。换别家自行改 OMBRE_VISION_MODEL。
 VISION_MODEL = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
 
@@ -486,7 +486,7 @@ async def _ask_claude(history: list[dict]) -> str:
         + "\n【闪闪或系统本轮输入从下面开始】"
     )
     messages = inject_volatile_context(messages, dynamic_context)
-    # 这一轮有图片就自动切到识图模型（glm-4.6v），纯文字仍用默认（glm-5.1 等）
+    # 这一轮有图片就自动切到识图模型（glm-4.6v），纯文字仍用默认（glm-5.3 等）
     def _has_img(msgs):
         for m in msgs:
             c = m.get("content")
