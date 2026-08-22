@@ -940,6 +940,7 @@
       </div>
       <div class="skin-label">模型</div>
       <div class="skin-theme" id="skinModel">
+        <button data-md="glm-5.3">GLM 5.3</button>
         <button data-md="glm-5.2">GLM 5.2</button>
         <button data-md="glm-5.1">GLM 5.1</button>
         <button data-md="glm-4.6">GLM 4.6</button>
@@ -1456,11 +1457,13 @@
   const pick = arr => arr[Math.floor(Math.random()*arr.length)];
   setEmotion('安定');
 
-  // 模型切换：Opus 4.6 ↔ Sonnet 4.6（点 header 上的小标签切）
-  const MODELS={'glm-5.2':'GLM 5.2','glm-5.1':'GLM 5.1','glm-4.6':'GLM 4.6'};
+  // 模型切换：GLM 5.3 / 5.2 / 5.1 / 4.6（在「外观」面板里切）
+  const MODELS={'glm-5.3':'GLM 5.3','glm-5.2':'GLM 5.2','glm-5.1':'GLM 5.1','glm-4.6':'GLM 4.6'};
   // 换成 GLM：把 localStorage 里旧的 Claude 模型值清掉，回默认 GLM 5.1
   try{ if(!localStorage.getItem('glmSwitchFix')){ const old=localStorage.getItem('chatModel'); if(old && !MODELS[old]) localStorage.removeItem('chatModel'); localStorage.setItem('glmSwitchFix','1'); } }catch(e){}
-  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='glm-5.1';  // 默认 GLM 5.1；点 header 上的芯片可切 GLM 4.6
+  // 升级到 GLM 5.3：把旧的默认值（5.1/5.2）迁移一次，之后用户手动选的照旧保留
+  try{ if(!localStorage.getItem('glm53Fix')){ const old=localStorage.getItem('chatModel'); if(old==='glm-5.1'||old==='glm-5.2') localStorage.removeItem('chatModel'); localStorage.setItem('glm53Fix','1'); } }catch(e){}
+  let chatModel=localStorage.getItem('chatModel'); if(!MODELS[chatModel]) chatModel='glm-5.3';  // 默认 GLM 5.3；在「外观」面板里可切旧版
   // 模型切换挪进「外观」面板（顶栏不再放，省地方）
   function paintModel(){ const box=document.getElementById('skinModel'); if(box) box.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.md===chatModel)); }
   paintModel();

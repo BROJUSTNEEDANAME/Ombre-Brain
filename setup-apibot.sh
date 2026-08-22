@@ -32,8 +32,8 @@ ALLOWED_CHAT_IDS=在这里填你的chat id
 # 大脑地址：指向本机的 brain server
 OMBRE_MCP_URL=http://127.0.0.1:8000/mcp
 
-# 保留现有 GLM 模型
-OMBRE_BOT_MODEL=glm-5.1
+# GLM 模型
+OMBRE_BOT_MODEL=glm-5.3
 
 # 时区
 OMBRE_BOT_TZ=America/Los_Angeles
