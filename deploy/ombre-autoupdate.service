@@ -1,0 +1,7 @@
+[Unit]
+Description=Ombre Brain auto-update (pull + restart on new commits)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ombre-auto-update
