@@ -63,6 +63,7 @@ from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
 from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
+from utils import classify_chat_error
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -354,6 +355,15 @@ async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bo
         if i:
             await asyncio.sleep(0.2)
         await _send_reply(context, chat_id, s)
+
+
+# 快线串行化：同一个 chat 的消息排队处理，绝不并发调模型。
+# 她等急了连发两条时：旧请求还在跑，新消息先进 history 排队；轮到旧票据时发现
+# 自己已经不是最新，直接让位——由最新那条带着全部上下文统一回。
+# 治两个病：z.ai 并发限制 429（两条同时打就撞）、以及"回复明明发出来了，
+# 之前那条失败的请求又跟一句『没有生成出来』"的精神分裂现场。
+_chat_locks: dict[int, asyncio.Lock] = {}
+_latest_ticket: dict[int, int] = {}
 
 
 # TG 快线：默认开。TG 直连 GLM（短人设 + 记忆工具，秒回），聊天异步同步进主线
@@ -990,23 +1000,33 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if OMBRE_TG_DIRECT:
         mid = f"telegram:{chat_id}:{update.message.message_id}"
         asyncio.create_task(_sync_main_line("me", user_text, mid))
-        try:
-            reply = await _ask_claude(history)
-        except Exception:  # noqa: BLE001
-            logger.exception("快线调用失败")
-            if history and history[-1]["role"] == "user":
-                history.pop()
-            await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
-            return
-        segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
-        segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
-        if not segs:
-            await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
-            return
-        history.append({"role": "assistant", "content": "\n".join(segs)})
-        _save_state()
-        await _send_segments(context, chat_id, segs)
-        asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
+        _latest_ticket[chat_id] = update.message.message_id
+        lock = _chat_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            if _latest_ticket[chat_id] != update.message.message_id:
+                return  # 排队期间她又发了新消息：本条已进 history，由最新那条统一回
+            t0 = time.time()
+            try:
+                reply = await _ask_claude(history)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("快线调用失败（%.1fs）", time.time() - t0)
+                if _latest_ticket[chat_id] != update.message.message_id:
+                    return  # 已有新消息接手，这条的失败不必出声
+                info = classify_chat_error(e)
+                await update.message.reply_text(
+                    "这次回复没有生成出来：" + info["message"] + " 你的消息我记下了，再戳我一下。")
+                return
+            logger.info("快线回复完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+            segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
+            segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
+            if not segs:
+                if _latest_ticket[chat_id] == update.message.message_id:
+                    await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
+                return
+            history.append({"role": "assistant", "content": "\n".join(segs)})
+            _save_state()
+            await _send_segments(context, chat_id, segs)
+            asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
         return
 
     # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全（情绪/日记/服务端记忆） ──

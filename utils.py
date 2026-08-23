@@ -316,7 +316,8 @@ def classify_chat_error(exc) -> dict:
     status = getattr(exc, "status_code", None)
     detail = str(exc or "").lower()
     if status in (402, 429) or any(word in detail for word in (
-            "insufficient_quota", "quota", "credit", "balance", "余额", "额度")):
+            "insufficient_quota", "quota", "credit", "balance", "余额", "额度",
+            "too many requests", "concurren", "1302")):
         return {"code": "api_quota", "message": "模型 API 额度不足或已触发限流，请充值或稍后再试。"}
     if status in (401, 403) or any(word in detail for word in (
             "invalid api key", "invalid_api_key", "authentication", "unauthorized")):
