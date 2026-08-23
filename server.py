@@ -3648,6 +3648,10 @@ async def api_chat(request):
             # 不给模型留"多吐一大堆再被去重砍掉"的空间——那堆废话是白花的输出 token。
             # 写文模式和做网页才放开篇幅。要更短/更长改 OMBRE_CHAT_MAX_TOKENS。
             web_max_tokens = min(web_max_tokens, int(os.environ.get("OMBRE_CHAT_MAX_TOKENS", "450")))
+            # GLM-5.3 思考关不掉（最低 low 档），reasoning 也计入 max_tokens——
+            # 450 全预算会被思考挤空，正文空 → model_empty。给思考单独加份额。
+            if str(model).startswith("glm-5.3"):
+                web_max_tokens += int(os.environ.get("OMBRE_THINKING_TOKENS", "800"))
         model_timeout = 180.0 if _page_requested else 60.0
         # 缓存友好：system 只放永不变的静态人设 → 每轮请求前缀一致，命中 GLM 上下文缓存。
         # 时间/情绪/便签/记忆这些每轮都变的动态内容，一律注入到最后一条 user 消息里（见下），

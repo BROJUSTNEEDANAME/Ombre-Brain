@@ -356,6 +356,35 @@ async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bo
         await _send_reply(context, chat_id, s)
 
 
+# TG 快线：默认开。TG 直连 GLM（短人设 + 记忆工具，秒回），聊天异步同步进主线
+# 记录——网页照样全都看得到、可接续，但不再挡在 TG 的送达路径上。
+# 设 OMBRE_TG_DIRECT=0 切回大脑线（网页同一入口生成，功能全但慢）。
+OMBRE_TG_DIRECT = os.environ.get("OMBRE_TG_DIRECT", "1").strip().lower() not in (
+    "0", "off", "false", "no")
+
+
+async def _sync_main_line(side: str, text: str, message_id: str) -> None:
+    """把一条消息（side="me"＝她 / "you"＝他）异步落进主线记录，不做记忆抽取。
+    快线专用：发送已经完成，这里失败只损失网页可见性，绝不打断聊天。"""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        local = now_utc.astimezone(USER_TZ)
+        entry = {
+            "id": message_id,
+            "side": side,
+            "text": text,
+            "source": "telegram",
+            "ts": now_utc.isoformat(),
+            "t": f"{local:%H:%M}",
+            "dk": f"{local.year}-{local.month}-{local.day}",
+        }
+        async with httpx.AsyncClient(timeout=10) as cli:
+            await cli.post(BRAIN_BASE + "/api/chat/state",
+                           json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []})
+    except Exception:  # noqa: BLE001
+        logger.warning("快线主线同步失败 side=%s id=%s", side, message_id)
+
+
 async def _sync_you_line(text: str, message_id: str) -> None:
     """把 TG 里他主动说的一句话（预设找她文案等）同步进主线记录——网页那边也看得到。"""
     try:
@@ -956,6 +985,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    # ── TG 快线（默认）：直连 GLM，不过大脑生成管线。短人设、模型自己按需
+    # breath/hold，MAX_TOKENS 充裕不会被思考挤空。聊天异步同步进主线记录。 ──
+    if OMBRE_TG_DIRECT:
+        mid = f"telegram:{chat_id}:{update.message.message_id}"
+        asyncio.create_task(_sync_main_line("me", user_text, mid))
+        try:
+            reply = await _ask_claude(history)
+        except Exception:  # noqa: BLE001
+            logger.exception("快线调用失败")
+            if history and history[-1]["role"] == "user":
+                history.pop()
+            await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
+            return
+        segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
+        segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
+        if not segs:
+            await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
+            return
+        history.append({"role": "assistant", "content": "\n".join(segs)})
+        _save_state()
+        await _send_segments(context, chat_id, segs)
+        asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
+        return
+
+    # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全（情绪/日记/服务端记忆） ──
     # 文字聊天走流式：每攒满一个气泡立刻发——她等的是第一句，不是整场生成。
     # 语音回复模式要合成整条语音，不适合逐段首发，保持一次拿全。
     _streamed: list[str] = []
