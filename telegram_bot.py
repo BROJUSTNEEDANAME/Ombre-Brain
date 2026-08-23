@@ -38,6 +38,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, time as dtime, timezone
@@ -207,23 +208,48 @@ BRAIN_BASE = OMBRE_MCP_URL.replace("/mcp", "")
 _WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
 
 
-async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
-                     timestamp: str = "") -> list[str]:
-    """把消息交给大脑主线（网页同一入口），拿回一组气泡（segments）。
-    ghost=True＝这条是系统指令（早安/纪念日等他主动开口）：生成照常，
-    但大脑落盘时只存他的回复，绝不把指令伪造成她说的话。"""
-    request_id = message_id or f"telegram:system:{uuid.uuid4()}"
+def _brain_body(user_content, ghost: bool, message_id: str, timestamp: str) -> dict:
     body = {
         "messages": [{"role": "user", "content": user_content}],
         "token": _WEB_TOKEN,
         "thread": "main",
         "source": "telegram",
-        "message_id": request_id,
+        "message_id": message_id or f"telegram:system:{uuid.uuid4()}",
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
         "server_history": True,
     }
     if ghost:
         body["ghost_user"] = True
+    return body
+
+
+def _clean_segs(raw) -> list[str]:
+    segs = [s for s in (raw or []) if isinstance(s, str) and s.strip()]
+    segs = [s for s in segs if s.strip() not in {"（……）", "（...）", "(...)", "..."}]
+    return segs
+
+
+def _seg_norm(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.lower())
+
+
+async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
+                     timestamp: str = "", on_segment=None) -> list[str]:
+    """把消息交给大脑主线（网页同一入口），拿回一组气泡（segments）。
+    ghost=True＝这条是系统指令（早安/纪念日等他主动开口）：生成照常，
+    但大脑落盘时只存他的回复，绝不把指令伪造成她说的话。
+
+    on_segment（async 回调）＝流式模式：走大脑的 SSE 口，正文每攒满一个气泡
+    （‖ 分隔）就立刻回调发出去——她等的是第一句话，不是整场生成。以前这里
+    是普通 POST：模型全部生成完（包括工具轮、补轮）才返回，TG 上就是干等
+    几十秒——网页有逐字直播掩护，TG 什么都看不见。返回值仍是完整 segments，
+    已经流式发过的段不重复包含。SSE 不可用时自动回落非流式。"""
+    body = _brain_body(user_content, ghost, message_id, timestamp)
+    if on_segment is not None:
+        try:
+            return await _ask_brain_stream(body, on_segment)
+        except Exception:  # noqa: BLE001
+            logger.exception("流式通道失败，回落非流式")
     async with httpx.AsyncClient(timeout=240) as cli:
         r = await cli.post(BRAIN_BASE + "/api/chat", json=body)
         d = r.json() if r.status_code == 200 else {}
@@ -233,13 +259,60 @@ async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
             + ": "
             + str(d.get("error_message") or d.get("error") or "no response")
         )
-    segs = [s for s in (d.get("segments") or []) if isinstance(s, str) and s.strip()]
+    segs = _clean_segs(d.get("segments"))
     if not segs and (d.get("reply") or "").strip():
         segs = [d["reply"].strip()]
-    segs = [s for s in segs if s.strip() not in {"（……）", "（...）", "(...)", "..."}]
     if not segs:
         raise RuntimeError("brain_empty_reply")
     return segs
+
+
+async def _ask_brain_stream(body: dict, on_segment) -> list[str]:
+    """SSE 流式：t=d 是正文增量，攒到 ‖ 边界立刻发；t=done 带最终清洗后的
+    segments——把其中已经发过的（按归一化文本比对）剔掉，剩下的交回调用方补发。"""
+    sent: list[str] = []
+    buf = ""
+
+    async def _flush(seg: str) -> None:
+        seg = seg.strip()
+        if seg and seg not in {"（……）", "（...）", "(...)", "..."}:
+            sent.append(seg)
+            await on_segment(seg)
+
+    done: dict = {}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(240, connect=15)) as cli:
+        async with cli.stream("POST", BRAIN_BASE + "/api/chat",
+                              json={**body, "stream": True}) as r:
+            if r.status_code != 200:
+                raise RuntimeError(f"brain_http_{r.status_code}")
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                try:
+                    ev = json.loads(line[6:])
+                except Exception:  # noqa: BLE001
+                    continue
+                t = ev.get("t")
+                if t == "d":
+                    buf += str(ev.get("x") or "")
+                    while "‖" in buf:
+                        seg, buf = buf.split("‖", 1)
+                        await _flush(seg)
+                elif t == "done":
+                    done = ev
+    if done.get("error_code"):
+        if sent:  # 正文已经发出去几段了就别再报错吓她，有多少算多少
+            return []
+        raise RuntimeError(str(done["error_code"]) + ": " + str(done.get("error_message") or ""))
+    final = _clean_segs(done.get("segments"))
+    if not final and (done.get("reply") or "").strip():
+        final = [done["reply"].strip()]
+    if not final and not sent:
+        raise RuntimeError("brain_empty_reply")
+    # 尾段（‖ 后面没有分隔符的最后一截）不在流里发——它可能还带着 [emo]/[memory]
+    # 标签，等 done 里清洗好的版本。已发段从 final 里剔除，剩下的让调用方补发。
+    sent_norm = {_seg_norm(s) for s in sent}
+    return [s for s in final if _seg_norm(s) not in sent_norm]
 
 
 async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bool = False) -> None:
@@ -855,22 +928,34 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    # 文字聊天走流式：每攒满一个气泡立刻发——她等的是第一句，不是整场生成。
+    # 语音回复模式要合成整条语音，不适合逐段首发，保持一次拿全。
+    _streamed: list[str] = []
+
+    async def _early_send(seg: str) -> None:
+        _streamed.append(seg)
+        await _send_reply(context, chat_id, seg)
+
+    _want_stream = not (openai_client is not None and voice_mode.get(chat_id))
     try:
         segs = await _ask_brain(
             user_text,
             message_id=f"telegram:{chat_id}:{update.message.message_id}",
             timestamp=update.message.date.astimezone(timezone.utc).isoformat(),
+            on_segment=_early_send if _want_stream else None,
         )
     except Exception:  # noqa: BLE001
         logger.exception("大脑调用失败")
+        if _streamed:
+            return  # 正文已经发出去几段了，别再跟一句报错吓她
         if history and history[-1]["role"] == "user":
             history.pop()
         await update.message.reply_text("这次回复没有生成出来，但你的消息已经保存在大脑里了。")
         return
 
-    history.append({"role": "assistant", "content": "\n".join(segs)})
+    history.append({"role": "assistant", "content": "\n".join(_streamed + segs)})
     _save_state()
-    await _send_segments(context, chat_id, segs)
+    await _send_segments(context, chat_id, segs)  # segs 只剩没在流里发过的段
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
