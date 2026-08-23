@@ -269,37 +269,57 @@ async def _ask_brain(user_content, ghost: bool = False, *, message_id: str = "",
 
 async def _ask_brain_stream(body: dict, on_segment) -> list[str]:
     """SSE 流式：t=d 是正文增量，攒到 ‖ 边界立刻发；t=done 带最终清洗后的
-    segments——把其中已经发过的（按归一化文本比对）剔掉，剩下的交回调用方补发。"""
+    segments——把其中已经发过的（按归一化文本比对）剔掉，剩下的交回调用方补发。
+
+    可靠性铁律：只要有一段已经真正发到她手机上，这条链路就绝不回落重新生成
+    ——重新生成 = 同样的话换个说法再轰她一遍。宁可这轮少说，不可说两遍。"""
     sent: list[str] = []
+    send_ok = True
     buf = ""
 
     async def _flush(seg: str) -> None:
+        nonlocal send_ok
         seg = seg.strip()
-        if seg and seg not in {"（……）", "（...）", "(...)", "..."}:
-            sent.append(seg)
+        if not seg or seg in {"（……）", "（...）", "(...)", "..."}:
+            return
+        if not send_ok:
+            return  # 发送通道坏了：剩余段留给收尾的 _send_segments 统一发
+        try:
             await on_segment(seg)
+        except Exception:  # noqa: BLE001
+            logger.exception("流式段发送失败，本轮剩余段改为收尾统一发")
+            send_ok = False
+            return  # 这段没送达，不记入 sent → 收尾补发时不会被剔掉
+        sent.append(seg)
 
     done: dict = {}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(240, connect=15)) as cli:
-        async with cli.stream("POST", BRAIN_BASE + "/api/chat",
-                              json={**body, "stream": True}) as r:
-            if r.status_code != 200:
-                raise RuntimeError(f"brain_http_{r.status_code}")
-            async for line in r.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                try:
-                    ev = json.loads(line[6:])
-                except Exception:  # noqa: BLE001
-                    continue
-                t = ev.get("t")
-                if t == "d":
-                    buf += str(ev.get("x") or "")
-                    while "‖" in buf:
-                        seg, buf = buf.split("‖", 1)
-                        await _flush(seg)
-                elif t == "done":
-                    done = ev
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(240, connect=15)) as cli:
+            async with cli.stream("POST", BRAIN_BASE + "/api/chat",
+                                  json={**body, "stream": True}) as r:
+                if r.status_code != 200:
+                    raise RuntimeError(f"brain_http_{r.status_code}")
+                async for line in r.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except Exception:  # noqa: BLE001
+                        continue
+                    t = ev.get("t")
+                    if t == "d":
+                        buf += str(ev.get("x") or "")
+                        while "‖" in buf:
+                            seg, buf = buf.split("‖", 1)
+                            await _flush(seg)
+                    elif t == "done":
+                        done = ev
+                        break
+    except Exception:  # noqa: BLE001
+        if sent:
+            logger.exception("流式中断，正文已发 %d 段；不回落重新生成", len(sent))
+            return []
+        raise  # 一段都没发出去 → 交给上层回落非流式，安全
     if done.get("error_code"):
         if sent:  # 正文已经发出去几段了就别再报错吓她，有多少算多少
             return []
@@ -311,8 +331,16 @@ async def _ask_brain_stream(body: dict, on_segment) -> list[str]:
         raise RuntimeError("brain_empty_reply")
     # 尾段（‖ 后面没有分隔符的最后一截）不在流里发——它可能还带着 [emo]/[memory]
     # 标签，等 done 里清洗好的版本。已发段从 final 里剔除，剩下的让调用方补发。
-    sent_norm = {_seg_norm(s) for s in sent}
-    return [s for s in final if _seg_norm(s) not in sent_norm]
+    # 比对放宽到「一方包含另一方」：final 是清洗后的版本，可能比流里的原文少几个字
+    # （砍掉口号子句/复读），完全相等剔不干净，同一段会以两个相近版本发两遍。
+    sent_norm = [_seg_norm(x) for x in sent]
+
+    def _already_sent(seg: str) -> bool:
+        nf = _seg_norm(seg)
+        return any(nf == ns or (min(len(nf), len(ns)) >= 8 and (nf in ns or ns in nf))
+                   for ns in sent_norm)
+
+    return [s for s in final if not _already_sent(s)]
 
 
 async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bool = False) -> None:
@@ -933,8 +961,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     _streamed: list[str] = []
 
     async def _early_send(seg: str) -> None:
+        await _send_reply(context, chat_id, seg)  # 先送达再记账：失败的段留给收尾补发
         _streamed.append(seg)
-        await _send_reply(context, chat_id, seg)
 
     _want_stream = not (openai_client is not None and voice_mode.get(chat_id))
     try:
