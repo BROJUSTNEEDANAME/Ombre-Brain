@@ -33,6 +33,46 @@ def is_zai_endpoint(base_url: str | None = None) -> bool:
     return "api.z.ai" in url or "open.bigmodel.cn" in url
 
 
+# GLM 的「深度思考」档位。GLM-4.5~5.2 支持 thinking={"type":"disabled"} 直接关掉；
+# GLM-5.3 起强制思考，传 disabled 会报 1210（cannot be disabled; please use low,
+# high, or max）。旧逻辑一遇到 thinking 报错就把参数整个丢掉，结果思考不受限、
+# 把 max_tokens 全烧在隐藏推理上，正文返回空字符串 → 上层判成 model_empty。
+# 现在改成：被拒绝就自动降到最低档 low，并按模型记住，不再每轮白试。
+_THINKING_MIN_LEVEL = "low"
+_THINKING_LEVELS = ("disabled", "low", "high", "max")
+_thinking_mode: dict[str, str] = {}
+
+
+def thinking_request(model: str | None, want_off: bool = True) -> dict[str, Any] | None:
+    """这次调用该带的 thinking 字段；None 表示不带（用模型自己的默认）。"""
+    if not want_off:
+        return None
+    mode = _thinking_mode.get(model or "", "disabled")
+    if mode == "none":
+        return None
+    return {"thinking": {"type": mode}}
+
+
+def note_thinking_error(model: str | None, error: object) -> bool:
+    """记下某模型对 thinking 的反应。返回 True＝已换档位，值得重试一次。"""
+    text = str(error).lower()
+    if "thinking" not in text:
+        return False  # 不是这个参数的锅，交给调用方原样抛出
+    key = model or ""
+    cannot_disable = "cannot be disabled" in text or "low, high, or max" in text
+    if cannot_disable and _thinking_mode.get(key) != _THINKING_MIN_LEVEL:
+        _thinking_mode[key] = _THINKING_MIN_LEVEL  # 5.3 这类：关不掉就开最低档
+    else:
+        _thinking_mode[key] = "none"  # 压根不认这个字段：以后都不带
+    return True
+
+
+def preset_thinking_level(model: str | None, level: str) -> None:
+    """让 env 直接指定档位（OMBRE_GLM_THINKING=low/high/max）。"""
+    if level in _THINKING_LEVELS:
+        _thinking_mode[model or ""] = level
+
+
 def request_extra_body(
     existing: dict[str, Any] | None = None,
     *,

@@ -61,6 +61,7 @@ from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
 from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
+from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -465,15 +466,30 @@ def _authorized(chat_id: int) -> bool:
 
 
 async def _telegram_llm_create(**kwargs):
-    """Direct/background GLM calls with the same stable cache routing as Home."""
-    extra = prompt_cache_extra_body(base_url=LLM_BASE_URL)
-    response = (
-        await llm.chat.completions.create(extra_body=extra, **kwargs)
-        if extra else await llm.chat.completions.create(**kwargs)
-    )
-    if not kwargs.get("stream"):
-        record_prompt_cache_usage(getattr(response, "usage", None), "telegram-background")
-    return response
+    """Direct/background GLM calls with the same stable cache routing as Home.
+
+    思考档位和网页端同一套：默认压到关（GLM-5.3 这类关不掉的自动降到 low），
+    否则隐藏推理会吃光 max_tokens，正文回空 → 上层报 model_empty。"""
+    want_off = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in ("on", "1", "true", "enabled")
+    level = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower()
+    model = kwargs.get("model") or ""
+    if level in ("low", "high", "max"):
+        preset_thinking_level(model, level)
+    for _attempt in range(3):
+        thinking = thinking_request(model, want_off)
+        extra = prompt_cache_extra_body(base_url=LLM_BASE_URL, thinking=thinking)
+        try:
+            response = (
+                await llm.chat.completions.create(extra_body=extra, **kwargs)
+                if extra else await llm.chat.completions.create(**kwargs)
+            )
+            if not kwargs.get("stream"):
+                record_prompt_cache_usage(getattr(response, "usage", None), "telegram-background")
+            return response
+        except Exception as e:  # noqa: BLE001
+            if not thinking or not note_thinking_error(model, e):
+                raise
+    raise RuntimeError("thinking 档位协商失败")
 
 
 async def _ask_claude(history: list[dict]) -> str:

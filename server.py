@@ -79,6 +79,7 @@ from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
 from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
+from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
 from public_site import resolve_public_site_url
 from writing_style import INTIMATE_WRITING_ENGINE
 
@@ -2303,35 +2304,42 @@ def _mem_dup_check(content: str) -> bool:
 
 # GLM-4.5 起是混合推理模型：不传参数时"深度思考"默认开着——每条回复都先在后台
 # 憋一大段看不见的推理再开口，这是"他半天不说话"的最大来源。聊天陪伴不需要解题式
-# 推理，默认关掉；要重新打开设 OMBRE_GLM_THINKING=on。
-_GLM_THINKING_OFF = {"thinking": {"type": "disabled"}}
-_thinking_param_ok = True  # 万一某个模型不认这个参数，自动降级并且以后不再白试
+# 推理，默认关掉；要重新打开设 OMBRE_GLM_THINKING=on，也可以直接指定档位
+# （OMBRE_GLM_THINKING=low/high/max）。GLM-5.3 起关不掉，只能降到最低档，
+# 档位协商交给 prompt_cache.thinking_request / note_thinking_error 按模型记住。
+
+
+def _thinking_wanted_off() -> bool:
+    _raw = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower()
+    if _raw in ("on", "1", "true", "enabled"):
+        return False
+    return True
 
 
 async def _llm_create(client, **kw):
-    """所有 GLM 调用的统一入口：稳定路由、关思考并记录非流式缓存命中。"""
-    global _thinking_param_ok
-    _want_off = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in ("on", "1", "true", "enabled")
+    """所有 GLM 调用的统一入口：稳定路由、压思考并记录非流式缓存命中。"""
+    _want_off = _thinking_wanted_off()
+    _level = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower()
     _extra = kw.pop("extra_body", None)
     _base_url = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
-    _thinking = _GLM_THINKING_OFF if _want_off and _thinking_param_ok else None
-    _body = prompt_cache_extra_body(_extra, base_url=_base_url, thinking=_thinking)
-    if _want_off and _thinking_param_ok:
+    _model = kw.get("model") or ""
+    if _level in ("low", "high", "max"):
+        preset_thinking_level(_model, _level)
+    for _attempt in range(3):  # disabled → low → 不带，最多协商两次
+        _thinking = thinking_request(_model, _want_off)
+        _body = prompt_cache_extra_body(_extra, base_url=_base_url, thinking=_thinking)
         try:
-            _response = await client.chat.completions.create(extra_body=_body, **kw)
+            _response = (
+                await client.chat.completions.create(extra_body=_body, **kw)
+                if _body else await client.chat.completions.create(**kw)
+            )
             if not kw.get("stream"):
                 record_prompt_cache_usage(getattr(_response, "usage", None), "brain")
             return _response
         except Exception as e:  # noqa: BLE001
-            if "thinking" in str(e).lower():
-                _thinking_param_ok = False  # 这家模型不认这参数：这次和以后都不带了
-            else:
+            if not _thinking or not note_thinking_error(_model, e):
                 raise
-    _body = prompt_cache_extra_body(_extra, base_url=_base_url)
-    _response = await client.chat.completions.create(extra_body=_body, **kw) if _body else await client.chat.completions.create(**kw)
-    if not kw.get("stream"):
-        record_prompt_cache_usage(getattr(_response, "usage", None), "brain")
-    return _response
+    raise RuntimeError("thinking 档位协商失败")
 
 
 _penalty_param_ok = True
