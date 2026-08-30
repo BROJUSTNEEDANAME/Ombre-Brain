@@ -626,7 +626,7 @@ async def _telegram_llm_create(**kwargs):
     raise RuntimeError("thinking 档位协商失败")
 
 
-async def _ask_claude(history: list[dict]) -> str:
+async def _ask_claude(history: list[dict], on_segment=None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history)
@@ -645,27 +645,75 @@ async def _ask_claude(history: list[dict]) -> str:
         return False
     use_model = VISION_MODEL if _has_img(history) else MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
+    said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
+
+    async def _emit(text: str) -> None:
+        """一段话说完就发，不等整场生成结束。"""
+        t = (text or "").strip()
+        if t and t not in {"（……）", "（...）", "(...)", "..."} and on_segment is not None:
+            await on_segment(t)
+            said.append(t)
+
     for _ in range(12):  # 最多 12 轮工具循环
-        resp = await _telegram_llm_create(
-            model=use_model,
-            max_tokens=MAX_TOKENS,
-            tools=BRAIN_TOOLS,
-            messages=messages,
-        )
-        msg = resp.choices[0].message
-        tool_calls = msg.tool_calls or []
+        if on_segment is None:
+            resp = await _telegram_llm_create(
+                model=use_model, max_tokens=MAX_TOKENS, tools=BRAIN_TOOLS, messages=messages,
+            )
+            msg = resp.choices[0].message
+            content, tool_calls = msg.content or "", list(msg.tool_calls or [])
+        else:
+            # 流式：正文攒到一个气泡边界（‖）就立刻发；工具轮结束时把这轮说的话
+            # 也立刻发出去——「回来了就好」这种工具前的正经话，她当场就该收到。
+            st = await _telegram_llm_create(
+                model=use_model, max_tokens=MAX_TOKENS, tools=BRAIN_TOOLS,
+                messages=messages, stream=True,
+            )
+            buf, pending, tc_acc = "", "", {}
+            async for ch in st:
+                if not ch.choices:
+                    continue
+                d = ch.choices[0].delta
+                if d is None:
+                    continue
+                for tc in (getattr(d, "tool_calls", None) or []):
+                    slot = tc_acc.setdefault(tc.index or 0, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function is not None:
+                        if tc.function.name:
+                            slot["name"] = tc.function.name
+                        if tc.function.arguments:
+                            slot["args"] += tc.function.arguments
+                c = getattr(d, "content", None)
+                if c:
+                    buf += c
+                    pending += c
+                    while "‖" in pending:
+                        seg, pending = pending.split("‖", 1)
+                        await _emit(seg)
+            if pending.strip():  # 本轮剩下的尾巴：不管是不是工具轮，都当场发
+                await _emit(pending)
+                pending = ""
+            content = buf
+            tool_calls = [
+                type("TC", (), {"id": v["id"] or f"call_{k}",
+                                "function": type("F", (), {"name": v["name"], "arguments": v["args"]})()})()
+                for k, v in sorted(tc_acc.items())
+            ]
 
         if not tool_calls:
-            reply = (msg.content or "").strip()
+            reply = (content or "").strip()
             # 做了网页但话里没带上链接 → 补上，绝不让她收到空手
             if page_url and page_url not in reply:
                 reply = (reply + "\n" + page_url).strip() if reply else page_url
-            return reply or "（……）"
+                if on_segment is not None and page_url not in "".join(said):
+                    await _emit(page_url)
+            return "‖".join(said) if said else (reply or "（……）")
 
         # 回填 assistant 的工具调用，再把每个工具结果喂回去
         messages.append({
             "role": "assistant",
-            "content": msg.content or "",
+            "content": content or "",
             "tool_calls": [
                 {"id": tc.id, "type": "function",
                  "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
@@ -689,7 +737,9 @@ async def _ask_claude(history: list[dict]) -> str:
                 "content": str(result)[:8000],
             })
 
-    # 12 轮还没收口：至少把已做好的网页链接给她
+    # 12 轮还没收口：已经说过的话算数；否则至少把网页链接给她
+    if said:
+        return "‖".join(said)
     return page_url or "（我想得太久了，等下再说。）"
 
 
@@ -994,23 +1044,37 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         mid = f"telegram:{chat_id}:{update.message.message_id}"
         asyncio.create_task(_sync_main_line("me", user_text, mid))
         t0 = time.time()
+        _sent: list[str] = []
+
+        async def _emit(seg: str) -> None:
+            await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
+            _sent.append(seg)
+            if len(_sent) == 1:
+                logger.info("TG 首句送达 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+
+        # 语音模式要合成整条语音，不能逐段发；其余一律流式
+        _stream = not (openai_client is not None and voice_mode.get(chat_id))
         try:
-            reply = await _ask_claude(history)
+            reply = await _ask_claude(history, on_segment=_emit if _stream else None)
         except Exception:  # noqa: BLE001
             logger.exception("直连调用失败（%.1fs）", time.time() - t0)
+            if _sent:
+                return  # 已经发出去几段了，别再跟一句报错吓她
             if history and history[-1]["role"] == "user":
                 history.pop()
             await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
             return
-        logger.info("TG 直连回复完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+        logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
         segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
         segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
-        if not segs:
+        if not segs and not _sent:
             await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
             return
         history.append({"role": "assistant", "content": "\n".join(segs)})
         _save_state()
-        await _send_segments(context, chat_id, segs)
+        if not _sent:                       # 非流式（语音模式）才在这里统一发
+            await _send_segments(context, chat_id, segs)
+        _save_state()
         asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
         return
 
