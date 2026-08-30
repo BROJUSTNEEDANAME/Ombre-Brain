@@ -63,7 +63,6 @@ from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
 from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
-from utils import classify_chat_error
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -357,44 +356,6 @@ async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bo
         await _send_reply(context, chat_id, s)
 
 
-# 快线串行化：同一个 chat 的消息排队处理，绝不并发调模型。
-# 她等急了连发两条时：旧请求还在跑，新消息先进 history 排队；轮到旧票据时发现
-# 自己已经不是最新，直接让位——由最新那条带着全部上下文统一回。
-# 治两个病：z.ai 并发限制 429（两条同时打就撞）、以及"回复明明发出来了，
-# 之前那条失败的请求又跟一句『没有生成出来』"的精神分裂现场。
-_chat_locks: dict[int, asyncio.Lock] = {}
-_latest_ticket: dict[int, int] = {}
-
-
-# TG 快线：默认开。TG 直连 GLM（短人设 + 记忆工具，秒回），聊天异步同步进主线
-# 记录——网页照样全都看得到、可接续，但不再挡在 TG 的送达路径上。
-# 设 OMBRE_TG_DIRECT=0 切回大脑线（网页同一入口生成，功能全但慢）。
-OMBRE_TG_DIRECT = os.environ.get("OMBRE_TG_DIRECT", "1").strip().lower() not in (
-    "0", "off", "false", "no")
-
-
-async def _sync_main_line(side: str, text: str, message_id: str) -> None:
-    """把一条消息（side="me"＝她 / "you"＝他）异步落进主线记录，不做记忆抽取。
-    快线专用：发送已经完成，这里失败只损失网页可见性，绝不打断聊天。"""
-    try:
-        now_utc = datetime.now(timezone.utc)
-        local = now_utc.astimezone(USER_TZ)
-        entry = {
-            "id": message_id,
-            "side": side,
-            "text": text,
-            "source": "telegram",
-            "ts": now_utc.isoformat(),
-            "t": f"{local:%H:%M}",
-            "dk": f"{local.year}-{local.month}-{local.day}",
-        }
-        async with httpx.AsyncClient(timeout=10) as cli:
-            await cli.post(BRAIN_BASE + "/api/chat/state",
-                           json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []})
-    except Exception:  # noqa: BLE001
-        logger.warning("快线主线同步失败 side=%s id=%s", side, message_id)
-
-
 async def _sync_you_line(text: str, message_id: str) -> None:
     """把 TG 里他主动说的一句话（预设找她文案等）同步进主线记录——网页那边也看得到。"""
     try:
@@ -498,7 +459,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ombre-telegram")
 
-llm = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+# 超时和大脑侧保持一致（60s，不自动重试）。SDK 默认 600s + 重试 2 次，
+# 一次卡住能吊住后台任务半小时，绝不能用默认值。
+llm = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
+                  timeout=float(os.environ.get("OMBRE_LLM_TIMEOUT", "60")), max_retries=0)
 
 # chat_id -> [{"role": ..., "content": ...}, ...]
 histories: dict[int, list[dict]] = {}
@@ -995,41 +959,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # ── TG 快线（默认）：直连 GLM，不过大脑生成管线。短人设、模型自己按需
-    # breath/hold，MAX_TOKENS 充裕不会被思考挤空。聊天异步同步进主线记录。 ──
-    if OMBRE_TG_DIRECT:
-        mid = f"telegram:{chat_id}:{update.message.message_id}"
-        asyncio.create_task(_sync_main_line("me", user_text, mid))
-        _latest_ticket[chat_id] = update.message.message_id
-        lock = _chat_locks.setdefault(chat_id, asyncio.Lock())
-        async with lock:
-            if _latest_ticket[chat_id] != update.message.message_id:
-                return  # 排队期间她又发了新消息：本条已进 history，由最新那条统一回
-            t0 = time.time()
-            try:
-                reply = await _ask_claude(history)
-            except Exception as e:  # noqa: BLE001
-                logger.exception("快线调用失败（%.1fs）", time.time() - t0)
-                if _latest_ticket[chat_id] != update.message.message_id:
-                    return  # 已有新消息接手，这条的失败不必出声
-                info = classify_chat_error(e)
-                await update.message.reply_text(
-                    "这次回复没有生成出来：" + info["message"] + " 你的消息我记下了，再戳我一下。")
-                return
-            logger.info("快线回复完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
-            segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
-            segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
-            if not segs:
-                if _latest_ticket[chat_id] == update.message.message_id:
-                    await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
-                return
-            history.append({"role": "assistant", "content": "\n".join(segs)})
-            _save_state()
-            await _send_segments(context, chat_id, segs)
-            asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
-        return
-
-    # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全（情绪/日记/服务端记忆） ──
     # 文字聊天走流式：每攒满一个气泡立刻发——她等的是第一句，不是整场生成。
     # 语音回复模式要合成整条语音，不适合逐段首发，保持一次拿全。
     _streamed: list[str] = []
