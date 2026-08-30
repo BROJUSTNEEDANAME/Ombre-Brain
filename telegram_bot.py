@@ -630,9 +630,22 @@ async def _ask_claude(history: list[dict], on_segment=None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history)
+    # 记忆预浮现：先替他把相关记忆捞好塞进上下文，省掉「他先调 breath、拿到结果
+    # 再开口」那一整轮模型调用（5.3 每轮都要强制思考，省一轮就是省几十秒）。
+    # 捞不到就算了，绝不因为记忆拖住说话。
+    _mem_block = ""
+    try:
+        _last = history[-1].get("content") if history else ""
+        _q = _last[:200] if isinstance(_last, str) else ""
+        _mem_block = await asyncio.wait_for(
+            _call_brain_tool("breath", {"query": _q, "max_tokens": 2500}), timeout=8)
+    except Exception:  # noqa: BLE001
+        logger.warning("记忆预浮现失败，这轮先不带记忆说话")
     dynamic_context = (
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
+        + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
+            + str(_mem_block)[:4000]) if _mem_block else "")
         + "\n【闪闪或系统本轮输入从下面开始】"
     )
     messages = inject_volatile_context(messages, dynamic_context)
