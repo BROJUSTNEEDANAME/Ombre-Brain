@@ -2342,6 +2342,12 @@ async def _llm_create(client, **kw):
     raise RuntimeError("thinking 档位协商失败")
 
 
+def _norm_seen(value: str) -> str:
+    """比对「说过的话」用的归一化：只留字母数字汉字，标点/空白差异不算不同。"""
+    import re as _re
+    return _re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (value or "").lower())
+
+
 _penalty_param_ok = True
 
 
@@ -3953,6 +3959,7 @@ async def api_chat(request):
                 nonlocal recorded
                 recorded = []
                 rt = ""
+                shown = ""     # 已推给她看过的字：落定时必须还在，否则就是"吞消息"
                 fallback = ""  # 工具轮正文不与最终轮拼接；只在最终轮为空时兜底
                 try:
                     if _page_requested:
@@ -3996,13 +4003,17 @@ async def api_chat(request):
                                 if not saw_tc and (flushed or len(buf) >= 8):
                                     vis = visible_cut(buf)
                                     if vis > flushed:
-                                        await _q.put({"t": "d", "x": buf[flushed:vis]})
+                                        _chunk = buf[flushed:vis]
+                                        await _q.put({"t": "d", "x": _chunk})
+                                        shown += _chunk
                                         flushed = vis
                         record_prompt_cache_usage(stream_usage, "brain-stream")
                         if not tc_acc:
                             _vis = visible_cut(buf)
                             if not saw_tc and _vis > flushed:
-                                await _q.put({"t": "d", "x": buf[flushed:_vis]})
+                                _chunk = buf[flushed:_vis]
+                                await _q.put({"t": "d", "x": _chunk})
+                                shown += _chunk
                             rt = buf or fallback
                             break
                         if buf:
@@ -4036,6 +4047,13 @@ async def api_chat(request):
                     if not rt:
                         raise RuntimeError("model returned an empty reply")
                     joined, segments, emotion, diary, think, memory_note = _parse_reply(rt)
+                    # ★她已经看见的话，绝不允许在落定时被前端 sink.destroy() 抹掉。
+                    # 工具轮前的正文会被流出去却不进最终 segments（rt 只取最终轮），
+                    # 前端销毁直播气泡后它就凭空消失——"回来了就好"就是这么丢的。
+                    _shown = sanitize_reasoning_markup(shown or "").strip()
+                    if _shown and _norm_seen(_shown) not in _norm_seen(joined):
+                        segments = [_shown] + list(segments or [])
+                        joined = (_shown + "\n" + joined).strip()
                     if not joined.strip():
                         # 全是标签没正文 → 逼他开口补一轮，别直接报错吞掉这一回合
                         more = await _force_visible(rt)

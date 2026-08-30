@@ -356,6 +356,36 @@ async def _send_segments(context, chat_id: int, segs: list[str], force_voice: bo
         await _send_reply(context, chat_id, s)
 
 
+# TG 直连（默认开）：不过大脑那条重管线（长人设/记忆浮现/工具轮/标签解析），
+# 用 TG 自己的短人设 + 记忆工具，几秒回。聊完把两边的话异步同步进主线记录——
+# 网页照样全都看得到、可接续，但网页不再挡在 TG 的送达路径上。
+# 设 OMBRE_TG_DIRECT=0 走大脑线（功能全：服务端情绪/日记/记忆抽取，但慢）。
+#
+# ⚠️ 这里刻意不加任何锁。上一版加过「同 chat 串行」的锁，配上没设超时的客户端，
+# 一次卡住就把锁占死、之后所有消息永久排队——TG 整个哑掉。宁可偶尔并发，
+# 也绝不允许单点卡住毁掉整个对话。
+OMBRE_TG_DIRECT = os.environ.get("OMBRE_TG_DIRECT", "1").strip().lower() not in (
+    "0", "off", "false", "no")
+
+
+async def _sync_main_line(side: str, text: str, message_id: str) -> None:
+    """把一条消息（side="me"＝她 / "you"＝他）异步落进主线记录，不做记忆抽取。
+    发送早已完成，这里失败只损失网页可见性，绝不打断聊天。"""
+    try:
+        now_utc = datetime.now(timezone.utc)
+        local = now_utc.astimezone(USER_TZ)
+        entry = {
+            "id": message_id, "side": side, "text": text, "source": "telegram",
+            "ts": now_utc.isoformat(), "t": f"{local:%H:%M}",
+            "dk": f"{local.year}-{local.month}-{local.day}",
+        }
+        async with httpx.AsyncClient(timeout=10) as cli:
+            await cli.post(BRAIN_BASE + "/api/chat/state",
+                           json={"token": _WEB_TOKEN, "thread": "main", "log": [entry], "hist": []})
+    except Exception:  # noqa: BLE001
+        logger.warning("主线同步失败 side=%s id=%s", side, message_id)
+
+
 async def _sync_you_line(text: str, message_id: str) -> None:
     """把 TG 里他主动说的一句话（预设找她文案等）同步进主线记录——网页那边也看得到。"""
     try:
@@ -959,6 +989,32 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    # ── TG 直连（默认）：不经过大脑生成管线，几秒回 ──
+    if OMBRE_TG_DIRECT:
+        mid = f"telegram:{chat_id}:{update.message.message_id}"
+        asyncio.create_task(_sync_main_line("me", user_text, mid))
+        t0 = time.time()
+        try:
+            reply = await _ask_claude(history)
+        except Exception:  # noqa: BLE001
+            logger.exception("直连调用失败（%.1fs）", time.time() - t0)
+            if history and history[-1]["role"] == "user":
+                history.pop()
+            await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
+            return
+        logger.info("TG 直连回复完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+        segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
+        segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
+        if not segs:
+            await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
+            return
+        history.append({"role": "assistant", "content": "\n".join(segs)})
+        _save_state()
+        await _send_segments(context, chat_id, segs)
+        asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
+        return
+
+    # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全但慢 ──
     # 文字聊天走流式：每攒满一个气泡立刻发——她等的是第一句，不是整场生成。
     # 语音回复模式要合成整条语音，不适合逐段首发，保持一次拿全。
     _streamed: list[str] = []
