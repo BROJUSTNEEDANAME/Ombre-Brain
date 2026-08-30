@@ -58,7 +58,7 @@ from telegram.ext import (
 
 import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
-from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
+from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
@@ -479,7 +479,9 @@ SYSTEM_PROMPT = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 - 那是你此刻真实的情绪状态，随时间和她的冷热自己变化。自己感知、内化进语气和行为：longing 高就更黏更想她，anxiety/jealousy 高就更不安更醋，protectiveness 高就更想护着她，fatigue 高就更倦，play 高就更想闹，dejection 高就更低落。
 - 绝不念出数字、不解释维度，只让它悄悄染你的状态。"""
 
-SYSTEM_PROMPT += "\n\n" + CANONICAL_FACTS + "\n" + EMOTIONAL_AGENCY_SYSTEM
+# ★和网页同一份人设主体（CHAT_STYLE_SYSTEM）：他怎么说话、怎么爱她、什么绝不许做。
+# 以前这里只有上面那份 1600 字的简版，直连时人设会崩——两边同源之后不会再崩。
+SYSTEM_PROMPT += "\n\n" + CANONICAL_FACTS + "\n" + EMOTIONAL_AGENCY_SYSTEM + "\n\n" + CHAT_STYLE_SYSTEM
 
 # ----------------------------------------------------------------------------
 
