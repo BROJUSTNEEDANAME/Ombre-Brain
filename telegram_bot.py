@@ -113,7 +113,10 @@ MAX_HISTORY_MESSAGES = 24
 MAX_TOKENS = 16384
 # 日常聊天单独一份额度：16384 会让 GLM-5.3 有充足空间一直「想」而迟迟不开口
 # （网页那边日常聊天只给 450）。写文/做网页仍用 MAX_TOKENS 的大额度。
-CHAT_MAX_TOKENS = int(os.environ.get("OMBRE_TG_CHAT_MAX_TOKENS", "1200"))
+# ⚠️ GLM-5.3 的思考和正文共用这一份额度：给太小，思考一占就没正文了，
+# 她收到的就是「这次回复没有生成出来」（1200 踩过这个坑）。防跑飞的活交给
+# 复读探测和两道超时，额度不再兼职当刹车。
+CHAT_MAX_TOKENS = int(os.environ.get("OMBRE_TG_CHAT_MAX_TOKENS", "4000"))
 # 工具轮上限 + 软性总时限：超过就把工具摘掉，逼他必须开口说话——
 # 绝不允许出现「发了三分钟一个字没有」。
 CHAT_TOOL_ROUNDS = int(os.environ.get("OMBRE_TG_TOOL_ROUNDS", "3"))
@@ -701,6 +704,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
     _t0 = time.time()
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
+    _empty_retried = False  # 空回复只补救一次，别没完没了
 
     def _norm(v: str) -> str:
         return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (v or "").lower())
@@ -814,6 +818,14 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                                 "function": type("F", (), {"name": v["name"], "arguments": v["args"]})()})()
                 for k, v in sorted(tc_acc.items())
             ]
+
+        # 思考把额度吃光 → 正文为空。别直接认输：加大额度重来一轮，
+        # 「这次回复没有生成出来」对她来说就是他不理人。
+        if not tool_calls and not (content or "").strip() and not said and not _empty_retried:
+            _empty_retried = True
+            _budget = min(_budget * 3, MAX_TOKENS)
+            logger.warning("正文为空（多半是思考吃光额度），加大到 %d 重来一轮", _budget)
+            continue
 
         if not tool_calls:
             reply = (content or "").strip()
