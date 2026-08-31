@@ -351,3 +351,25 @@ def test_writing_mode_punctuation_untouched(monkeypatch):
     asyncio.run(tb._ask_claude([{"role": "user", "content": "写"}],
                                on_segment=on_seg, writing=True))
     assert sent == ["白的 薄的 紧到能看见骨头"], sent
+
+
+def test_punctuation_switch_can_be_turned_off(monkeypatch):
+    """OMBRE_TG_PUNCT=0 时完全不补标点。
+
+    她 8/31 凌晨明确说喜欢无标点那版（liked/0831-early），后来抱怨的其实是
+    「一大坨无标点」而不是无标点本身。留个开关，随时翻回去。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", False)
+    assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么 声音留给枕头"
+    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)
+    assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么，声音留给枕头。"
+
+
+def test_liveness_rules_present_in_persona():
+    """活人感四条必须真的在共用人设里（网页和 TG 同源）。"""
+    from personality import CHAT_STYLE_SYSTEM as C
+    assert "允许极短的一回合" in C
+    assert "长度必须参差" in C
+    assert "被戳到要真的破防" in C
+    assert "禁止把一个梗系统化经营" in C

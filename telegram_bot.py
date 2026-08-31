@@ -700,6 +700,10 @@ _HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
 _CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
 
 
+OMBRE_TG_PUNCT = os.environ.get("OMBRE_TG_PUNCT", "1").strip().lower() not in (
+    "0", "off", "false", "no")
+
+
 def restore_punctuation(text: str) -> str:
     """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
     这里兜一道：整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」
@@ -707,6 +711,8 @@ def restore_punctuation(text: str) -> str:
 
     只在两个中文字之间动手：「girl 过来」「铁剂 65mg」这类不受影响；
     本来就有标点的、写文模式的，一律原样返回。"""
+    if not OMBRE_TG_PUNCT:
+        return text          # 关掉就完全不管，回到她喜欢的那版无标点写法
     t = (text or "").strip()
     if not t or _HAS_PUNCT_RE.search(t):
         return text
