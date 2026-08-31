@@ -702,12 +702,24 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
 
+    def _norm(v: str) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (v or "").lower())
+
     async def _emit(text: str) -> None:
-        """一段话说完就发，不等整场生成结束。"""
+        """一段话说完就发，不等整场生成结束。
+
+        ⚠️ 必须去重：他常在工具轮里先说一句、调完记忆工具后在下一轮把同样的话
+        再说一遍（真实事故：「嗯。凶你的这个 也一样。」原样发了两遍）。"""
         t = (text or "").strip()
-        if t and t not in {"（……）", "（...）", "(...)", "..."} and on_segment is not None:
-            await on_segment(t)
-            said.append(t)
+        if not t or t in {"（……）", "（...）", "(...)", "..."} or on_segment is None:
+            return
+        n = _norm(t)
+        if n and any(n == m or (min(len(n), len(m)) >= 6 and (n in m or m in n))
+                     for m in (_norm(x) for x in said)):
+            logger.info("这段刚说过，不重复发：%s", t[:24])
+            return
+        await on_segment(t)
+        said.append(t)
 
     for _round in range(12):  # 最多 12 轮工具循环
         # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
@@ -774,8 +786,16 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 if c:
                     buf += c
                     pending += c
-                    while "‖" in pending:
-                        seg, pending = pending.split("‖", 1)
+                    # 边界：‖ 或空行。他实际上常用空行分段而不是 ‖，
+                    # 只认 ‖ 的话整段会挤成一个气泡，她要的「连发好几条」就没了。
+                    while True:
+                        _i1 = pending.find("‖")
+                        _i2 = -1 if writing else pending.find("\n\n")
+                        _c = [(i, ln) for i, ln in ((_i1, 1), (_i2, 2)) if i >= 0]
+                        if not _c:
+                            break
+                        _i, _ln = min(_c)
+                        seg, pending = pending[:_i], pending[_i + _ln:]
                         await _emit(seg)
             if _broke:
                 try:
