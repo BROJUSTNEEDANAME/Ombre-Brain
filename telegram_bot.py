@@ -111,6 +111,13 @@ MAX_HISTORY_MESSAGES = 24
 # 2000 远不够会被截断（截断→html 参数残缺→make_page 收到空内容→做不出）。
 # 设大给足余量当上限用，正常聊天不受影响、也不多花钱（按实际输出计费）。
 MAX_TOKENS = 16384
+# 日常聊天单独一份额度：16384 会让 GLM-5.3 有充足空间一直「想」而迟迟不开口
+# （网页那边日常聊天只给 450）。写文/做网页仍用 MAX_TOKENS 的大额度。
+CHAT_MAX_TOKENS = int(os.environ.get("OMBRE_TG_CHAT_MAX_TOKENS", "1200"))
+# 工具轮上限 + 软性总时限：超过就把工具摘掉，逼他必须开口说话——
+# 绝不允许出现「发了三分钟一个字没有」。
+CHAT_TOOL_ROUNDS = int(os.environ.get("OMBRE_TG_TOOL_ROUNDS", "3"))
+SOFT_DEADLINE = float(os.environ.get("OMBRE_TG_SOFT_DEADLINE", "40"))
 TELEGRAM_MSG_LIMIT = 4096
 
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
@@ -678,6 +685,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     use_model = VISION_MODEL if _has_img(history) else MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
+    _t0 = time.time()
+    _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
 
     async def _emit(text: str) -> None:
         """一段话说完就发，不等整场生成结束。"""
@@ -686,20 +695,24 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             await on_segment(t)
             said.append(t)
 
-    for _ in range(12):  # 最多 12 轮工具循环
+    for _round in range(12):  # 最多 12 轮工具循环
+        # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
+        _force_speak = _round >= CHAT_TOOL_ROUNDS or (
+            not said and time.time() - _t0 > SOFT_DEADLINE)
+        _tools = None if _force_speak else BRAIN_TOOLS
+        if _force_speak:
+            logger.info("摘掉工具逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
+        _kw = {"model": use_model, "max_tokens": _budget, "messages": messages}
+        if _tools:
+            _kw["tools"] = _tools
         if on_segment is None:
-            resp = await _telegram_llm_create(
-                model=use_model, max_tokens=MAX_TOKENS, tools=BRAIN_TOOLS, messages=messages,
-            )
+            resp = await _telegram_llm_create(**_kw)
             msg = resp.choices[0].message
             content, tool_calls = msg.content or "", list(msg.tool_calls or [])
         else:
             # 流式：正文攒到一个气泡边界（‖）就立刻发；工具轮结束时把这轮说的话
             # 也立刻发出去——「回来了就好」这种工具前的正经话，她当场就该收到。
-            st = await _telegram_llm_create(
-                model=use_model, max_tokens=MAX_TOKENS, tools=BRAIN_TOOLS,
-                messages=messages, stream=True,
-            )
+            st = await _telegram_llm_create(stream=True, **_kw)
             buf, pending, tc_acc = "", "", {}
             async for ch in st:
                 if not ch.choices:
@@ -1071,14 +1084,28 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
+    async def _keep_typing() -> None:
+        """一直显示「正在输入」，直到回复发出——TG 的输入提示 5 秒就过期，
+        只发一次等于没发，她那边看着就是「发了三分钟没人理」。"""
+        try:
+            while True:
+                await asyncio.sleep(4)
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+
     # ── TG 直连（默认）：不经过大脑生成管线，几秒回 ──
     if OMBRE_TG_DIRECT:
         mid = f"telegram:{chat_id}:{update.message.message_id}"
         asyncio.create_task(_sync_main_line("me", user_text, mid))
         t0 = time.time()
+        _typing = asyncio.create_task(_keep_typing())
         _sent: list[str] = []
 
         async def _emit(seg: str) -> None:
+            _typing.cancel()                           # 第一句已经发出，不再显示输入中
             await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
             _sent.append(seg)
             if len(_sent) == 1:
@@ -1090,6 +1117,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             reply = await _ask_claude(history, on_segment=_emit if _stream else None,
                                       writing=bool(writing_mode.get(chat_id)))
         except Exception:  # noqa: BLE001
+            _typing.cancel()
             logger.exception("直连调用失败（%.1fs）", time.time() - t0)
             if _sent:
                 return  # 已经发出去几段了，别再跟一句报错吓她
@@ -1097,6 +1125,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 history.pop()
             await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
             return
+        _typing.cancel()
         logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
         segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
         segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
