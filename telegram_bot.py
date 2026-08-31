@@ -1232,6 +1232,18 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     图片以前只能走网页大脑那条线，而那条线有 60 秒超时，GLM-5.3 在上面动辄
     一两分钟——于是每张图都必然超时报「识图或回复失败」。挪到这里之后，图片
     和文字一样享受流式、去重、记忆后台写入这一整套。"""
+    async def _keep_typing() -> None:
+        """一直显示「正在输入」，直到回复发出——TG 的输入提示 5 秒就过期，
+        只发一次等于没发，她那边看着就是「发了三分钟没人理」。"""
+        try:
+            while True:
+                await asyncio.sleep(4)
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+
     asyncio.create_task(_sync_main_line("me", sync_text, mid))
     t0 = time.time()
     _typing = asyncio.create_task(_keep_typing())
@@ -1327,18 +1339,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         del history[: len(history) - MAX_HISTORY_MESSAGES]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    async def _keep_typing() -> None:
-        """一直显示「正在输入」，直到回复发出——TG 的输入提示 5 秒就过期，
-        只发一次等于没发，她那边看着就是「发了三分钟没人理」。"""
-        try:
-            while True:
-                await asyncio.sleep(4)
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001
-            pass
 
     # ── TG 直连（默认）：不经过大脑生成管线，几秒回 ──
     if OMBRE_TG_DIRECT:

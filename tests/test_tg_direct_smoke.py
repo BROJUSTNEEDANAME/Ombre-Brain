@@ -200,3 +200,44 @@ def _async_val(v):
     async def _c():
         return v
     return _c()
+
+
+class _FakeBot:
+    def __init__(self): self.sent = []
+    async def send_chat_action(self, **kw): return None
+    async def send_message(self, chat_id=None, text=None, **kw): self.sent.append(text)
+
+
+class _FakeMsg:
+    def __init__(self): self.replies = []
+    async def reply_text(self, text, **kw): self.replies.append(text)
+
+
+def test_direct_reply_end_to_end(monkeypatch):
+    """真的把 _direct_reply 跑一遍。
+
+    真实事故：把直连流程抽成模块级函数时，漏了它依赖的 _keep_typing —— 那个函数
+    原本嵌在 on_message 里，搬出去就成了未定义名，每条消息一进去就 NameError，
+    她发什么都没反应。上一版冒烟测试只测到 _ask_claude，正好漏过这一层。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["醒着呢", "\n\n你说"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    update = types.SimpleNamespace(message=msg)
+    context = types.SimpleNamespace(bot=bot)
+    history = [{"role": "user", "content": "helloworld"}]
+
+    asyncio.run(tb._direct_reply(update, context, 1, history, "mid:1", "helloworld"))
+
+    assert bot.sent == ["醒着呢", "你说"], bot.sent
+    assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
+    assert history[-1]["role"] == "assistant", history[-1]
+    assert tb.LAST_TURN.get("first_bubble_s") is not None
