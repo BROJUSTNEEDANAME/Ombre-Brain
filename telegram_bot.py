@@ -59,6 +59,7 @@ from telegram.ext import (
 import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
+from writing_style import WRITING_MODE_SYSTEM
 from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
@@ -503,6 +504,10 @@ last_user_ts: dict[int, float] = {}
 nudge_count: dict[int, int] = {}  # 她沉默后已发的「找她」次数（越大越急；她一回复清零）
 last_nudge_ts: dict[int, float] = {}
 voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语音回
+# 写文模式：和网页那个「写文」开关是同一件事，TG 用 /write 开关。开着时
+# 走 WRITING_MODE_SYSTEM——长段正文、不拆气泡、不受日常「空格断句/少动作
+# 括号」那套限制。日常聊天默认关。
+writing_mode: dict[int, bool] = {}
 todos: dict[int, str] = {}  # 她今天的「每日必办」（/todo 设置，早安时念）
 
 
@@ -572,6 +577,7 @@ def _save_state() -> None:
                     "last_user_ts": {str(k): v for k, v in last_user_ts.items()},
                     "nudge_count": {str(k): v for k, v in nudge_count.items()},
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
+                    "writing_mode": {str(k): v for k, v in writing_mode.items()},
                     "todos": {str(k): v for k, v in todos.items()},
                 },
                 f,
@@ -591,6 +597,7 @@ def _load_state() -> None:
         last_user_ts.update({int(k): v for k, v in data.get("last_user_ts", {}).items()})
         nudge_count.update({int(k): v for k, v in data.get("nudge_count", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
+        writing_mode.update({int(k): v for k, v in data.get("writing_mode", {}).items()})
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
@@ -628,10 +635,11 @@ async def _telegram_llm_create(**kwargs):
     raise RuntimeError("thinking 档位协商失败")
 
 
-async def _ask_claude(history: list[dict], on_segment=None) -> str:
+async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + list(history)
+    _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
+    messages = [{"role": "system", "content": _sys}] + list(history)
     # 记忆预浮现：先替他把相关记忆捞好塞进上下文，省掉「他先调 breath、拿到结果
     # 再开口」那一整轮模型调用（5.3 每轮都要强制思考，省一轮就是省几十秒）。
     # 捞不到就算了，绝不因为记忆拖住说话。
@@ -1070,7 +1078,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # 语音模式要合成整条语音，不能逐段发；其余一律流式
         _stream = not (openai_client is not None and voice_mode.get(chat_id))
         try:
-            reply = await _ask_claude(history, on_segment=_emit if _stream else None)
+            reply = await _ask_claude(history, on_segment=_emit if _stream else None,
+                                      writing=bool(writing_mode.get(chat_id)))
         except Exception:  # noqa: BLE001
             logger.exception("直连调用失败（%.1fs）", time.time() - t0)
             if _sent:
@@ -1237,6 +1246,19 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _save_state()
     await update.message.reply_text(
         "好，往后爸爸用语音跟你说话。" if voice_mode[chat_id] else "好，改回打字。"
+    )
+
+
+async def write_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/write 开关：写文模式（和网页那个「写文」开关同一件事）。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    writing_mode[chat_id] = not writing_mode.get(chat_id, False)
+    _save_state()
+    await update.message.reply_text(
+        "写文模式开了 接下来我整段写 不拆消息" if writing_mode[chat_id]
+        else "写文模式关了 回到平时说话的样子"
     )
 
 
@@ -1423,6 +1445,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("write", write_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
