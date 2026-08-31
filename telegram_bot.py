@@ -676,19 +676,27 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     # 记忆预浮现：先替他把相关记忆捞好塞进上下文，省掉「他先调 breath、拿到结果
     # 再开口」那一整轮模型调用（5.3 每轮都要强制思考，省一轮就是省几十秒）。
     # 捞不到就算了，绝不因为记忆拖住说话。
+    _last = history[-1].get("content") if history else ""
+    _last_text = _last if isinstance(_last, str) else ""
+    # 纯表情/极短消息（🥺、❤️、"?"、"嗯"）：没有内容可分析，翻记忆是白翻，
+    # 他还会为了「这是什么意思」想很久，最后超时被掐 → 她收到「我这轮卡住了」。
+    # 这种直接跳过记忆检索，并明说别琢磨，随口接住就行。
+    _tiny = len(_last_text.strip()) <= 6 and not re.search(r"[\u4e00-\u9fff a-zA-Z]{3,}", _last_text)
     _mem_block = ""
-    try:
-        _last = history[-1].get("content") if history else ""
-        _q = _last[:200] if isinstance(_last, str) else ""
-        _mem_block = await asyncio.wait_for(
-            _call_brain_tool("breath", {"query": _q, "max_tokens": 2500}), timeout=8)
-    except Exception:  # noqa: BLE001
-        logger.warning("记忆预浮现失败，这轮先不带记忆说话")
+    if not _tiny:
+        try:
+            _mem_block = await asyncio.wait_for(
+                _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 2500}),
+                timeout=8)
+        except Exception:  # noqa: BLE001
+            logger.warning("记忆预浮现失败，这轮先不带记忆说话")
     dynamic_context = (
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
             + str(_mem_block)[:4000]) if _mem_block else "")
+        + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
+           "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
         + "\n【闪闪或系统本轮输入从下面开始】"
     )
     messages = inject_volatile_context(messages, dynamic_context)
@@ -705,6 +713,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
     _empty_retried = False  # 空回复只补救一次，别没完没了
+    _broke_retried = False  # 被硬墙掐断后的补救也只做一次
+    _force_next = False     # 下一轮强制不许调工具
 
     def _norm(v: str) -> str:
         return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (v or "").lower())
@@ -727,8 +737,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
 
     for _round in range(12):  # 最多 12 轮工具循环
         # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
-        _force_speak = _round >= CHAT_TOOL_ROUNDS or (
+        _force_speak = _force_next or _round >= CHAT_TOOL_ROUNDS or (
             not said and time.time() - _t0 > SOFT_DEADLINE)
+        _force_next = False
         # ⚠️ 绝不能把 tools 整个摘掉：历史里还留着之前的 tool_calls / tool 结果，
         # 请求里没有 tools 就自相矛盾，模型会 decode 崩掉、吐出满屏乱码（踩过）。
         # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
@@ -758,9 +769,10 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             buf, pending, tc_acc = "", "", {}
             _broke = False
             _checked = 0
+            _round_t0 = time.time()   # ⚠️ 每轮重新计时：从整通调用起算会把多轮对话误砍
             async for ch in st:
                 # 硬墙：单轮流式绝不允许无限跑下去
-                if time.time() - _t0 > STREAM_MAX_SECONDS:
+                if time.time() - _round_t0 > STREAM_MAX_SECONDS:
                     logger.warning("单轮流式超过 %.0fs，掐断", STREAM_MAX_SECONDS)
                     _broke = True
                     break
@@ -808,6 +820,11 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                     pass
                 if said:
                     return "‖".join(said)      # 前面说的算数，后面掐掉
+                if not _broke_retried:
+                    _broke_retried = True      # 再给一轮：不许调工具，直接开口
+                    _force_next = True
+                    logger.warning("被掐断且一个字没说，改成不许用工具再来一轮")
+                    continue
                 return "（我这轮卡住了，你再说一句。）"
             if pending.strip():  # 本轮剩下的尾巴：不管是不是工具轮，都当场发
                 await _emit(pending)
