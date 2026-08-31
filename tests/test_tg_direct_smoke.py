@@ -168,3 +168,35 @@ def test_chat_tool_list_excludes_memory_writes():
     names = {t["function"]["name"] for t in tb.CHAT_TOOLS}
     assert not (names & {"hold", "grow", "trace"}), names
     assert "breath" in names and "make_page" in names, names
+
+
+def test_image_is_transcribed_then_answered_on_fast_lane(monkeypatch):
+    """图片先转述成文字，再走和文字消息完全相同的直连路径。
+
+    真实事故：图片一直留在网页大脑那条线上，而那条线 60 秒超时，GLM-5.3 在
+    上面动辄一两分钟 —— 每张图都必然「识图或回复失败」。
+    """
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        if kw.get("model") == tb.VISION_MODEL:
+            seen["vision"] = True
+            # 识图这一轮是普通（非流式）调用
+            msg = types.SimpleNamespace(content="截图里写着：你已被移出群聊", tool_calls=None)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+        seen["chat_prompt"] = kw["messages"][-1]["content"]
+        return _fake_stream(["谁把你踢了"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    text = asyncio.run(tb._transcribe_image("ZmFrZQ=="))
+    assert seen.get("vision"), "没有调用识图模型"
+    assert "你已被移出群聊" in text, text
+
+
+def _async_val(v):
+    async def _c():
+        return v
+    return _c()

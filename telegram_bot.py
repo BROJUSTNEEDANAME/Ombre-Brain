@@ -1225,6 +1225,83 @@ async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
 
 
+async def _direct_reply(update, context, chat_id: int, history: list[dict],
+                        mid: str, sync_text: str) -> None:
+    """直连快线：说一句发一句。文字消息和图片消息共用同一条路。
+
+    图片以前只能走网页大脑那条线，而那条线有 60 秒超时，GLM-5.3 在上面动辄
+    一两分钟——于是每张图都必然超时报「识图或回复失败」。挪到这里之后，图片
+    和文字一样享受流式、去重、记忆后台写入这一整套。"""
+    asyncio.create_task(_sync_main_line("me", sync_text, mid))
+    t0 = time.time()
+    _typing = asyncio.create_task(_keep_typing())
+    _sent: list[str] = []
+
+    async def _emit(seg: str) -> None:
+        _typing.cancel()                           # 第一句已经发出，不再显示输入中
+        await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
+        _sent.append(seg)
+        if len(_sent) == 1:
+            LAST_TURN["first_bubble_s"] = round(time.time() - t0, 1)
+            logger.info("TG 首句送达 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+
+    # 语音模式要合成整条语音，不能逐段发；其余一律流式
+    _stream = not (openai_client is not None and voice_mode.get(chat_id))
+    try:
+        reply = await asyncio.wait_for(
+            _ask_claude(history, on_segment=_emit if _stream else None,
+                        writing=bool(writing_mode.get(chat_id))),
+            timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
+    except asyncio.TimeoutError:
+        _typing.cancel()
+        LAST_TURN["total_s"] = round(time.time() - t0, 1)
+        LAST_TURN["result"] = "硬超时"
+        logger.warning("整轮硬超时（%.1fs），已发 %d 段", time.time() - t0, len(_sent))
+        if not _sent:
+            await update.message.reply_text("我这轮卡住了 你再说一句")
+        return
+    except Exception:  # noqa: BLE001
+        _typing.cancel()
+        logger.exception("直连调用失败（%.1fs）", time.time() - t0)
+        if _sent:
+            return  # 已经发出去几段了，别再跟一句报错吓她
+        if history and history[-1]["role"] == "user":
+            history.pop()
+        await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
+        return
+    _typing.cancel()
+    LAST_TURN["total_s"] = round(time.time() - t0, 1)
+    logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
+    segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
+    segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
+    if not segs and not _sent:
+        await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
+        return
+    history.append({"role": "assistant", "content": "\n".join(segs)})
+    if not _sent:                       # 非流式（语音模式）才在这里统一发
+        await _send_segments(context, chat_id, segs)
+    _save_state()
+    asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
+    _note = str(LAST_TURN.get("memory_note") or "")
+    if _note:
+        asyncio.create_task(_save_memory_note(_note))   # 发完再存，不占她的时间
+    return
+
+
+async def _transcribe_image(b64: str, media_type: str = "image/jpeg") -> str:
+    """先把图片转述成文字，再交给他正常回复——和网页那条线同样的做法。
+    绝不整场切成识图模型：那模型笨，人设和记忆都拿不稳。"""
+    r = await _telegram_llm_create(
+        model=VISION_MODEL, max_tokens=1500,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "把这张图完整转述成文字：截图里的文字逐字抄下来"
+                                     "（保留标题/列表/结构）；照片就客观细致地描述画面。"
+                                     "只输出转述内容，不要任何评论。"},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{b64}"}},
+        ]}])
+    return (r.choices[0].message.content or "").strip()[:6000]
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     # 还没设白名单时，只回 chat id，绝不接通大脑（保护私密记忆 + 不烧额度）
@@ -1265,61 +1342,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # ── TG 直连（默认）：不经过大脑生成管线，几秒回 ──
     if OMBRE_TG_DIRECT:
-        mid = f"telegram:{chat_id}:{update.message.message_id}"
-        asyncio.create_task(_sync_main_line("me", user_text, mid))
-        t0 = time.time()
-        _typing = asyncio.create_task(_keep_typing())
-        _sent: list[str] = []
-
-        async def _emit(seg: str) -> None:
-            _typing.cancel()                           # 第一句已经发出，不再显示输入中
-            await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
-            _sent.append(seg)
-            if len(_sent) == 1:
-                LAST_TURN["first_bubble_s"] = round(time.time() - t0, 1)
-                logger.info("TG 首句送达 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
-
-        # 语音模式要合成整条语音，不能逐段发；其余一律流式
-        _stream = not (openai_client is not None and voice_mode.get(chat_id))
-        try:
-            reply = await asyncio.wait_for(
-                _ask_claude(history, on_segment=_emit if _stream else None,
-                            writing=bool(writing_mode.get(chat_id))),
-                timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
-        except asyncio.TimeoutError:
-            _typing.cancel()
-            LAST_TURN["total_s"] = round(time.time() - t0, 1)
-            LAST_TURN["result"] = "硬超时"
-            logger.warning("整轮硬超时（%.1fs），已发 %d 段", time.time() - t0, len(_sent))
-            if not _sent:
-                await update.message.reply_text("我这轮卡住了 你再说一句")
-            return
-        except Exception:  # noqa: BLE001
-            _typing.cancel()
-            logger.exception("直连调用失败（%.1fs）", time.time() - t0)
-            if _sent:
-                return  # 已经发出去几段了，别再跟一句报错吓她
-            if history and history[-1]["role"] == "user":
-                history.pop()
-            await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
-            return
-        _typing.cancel()
-        LAST_TURN["total_s"] = round(time.time() - t0, 1)
-        logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
-        segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
-        segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
-        if not segs and not _sent:
-            await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
-            return
-        history.append({"role": "assistant", "content": "\n".join(segs)})
-        _save_state()
-        if not _sent:                       # 非流式（语音模式）才在这里统一发
-            await _send_segments(context, chat_id, segs)
-        _save_state()
-        asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
-        _note = str(LAST_TURN.get("memory_note") or "")
-        if _note:
-            asyncio.create_task(_save_memory_note(_note))   # 发完再存，不占她的时间
+        await _direct_reply(update, context, chat_id, history,
+                            f"telegram:{chat_id}:{update.message.message_id}", user_text)
         return
 
     # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全但慢 ──
@@ -1383,10 +1407,35 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    mid = f"telegram:{chat_id}:{update.message.message_id}"
+
+    # ── 直连快线：先把图转述成文字，再走和文字消息完全相同的那条路 ──
+    if OMBRE_TG_DIRECT:
+        try:
+            _seen = await asyncio.wait_for(_transcribe_image(b64), timeout=90)
+        except Exception:  # noqa: BLE001
+            logger.exception("识图转述失败")
+            _seen = ""
+        LAST_TURN["vision_chars"] = len(_seen)
+        if _seen:
+            _line = (f"[闪闪发来一张图片] {caption}\n"
+                     f"【你看到的画面】{_seen}").strip()
+        else:
+            # 转述失败也要让他开口，绝不甩一句「识图失败」把她晾在那
+            _line = (f"[闪闪发来一张图片] {caption}\n"
+                     "【系统提示】这张图没能看清（识图接口没返回），"
+                     "别装作看见了，直接跟她说你没看清、让她说说图里是什么。").strip()
+        history.append({"role": "user", "content": _line})
+        if len(history) > MAX_HISTORY_MESSAGES:
+            del history[: len(history) - MAX_HISTORY_MESSAGES]
+        await _direct_reply(update, context, chat_id, history, mid,
+                            f"[图片] {caption}".strip())
+        return
+
+    # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口 ──
     try:
         segs = await _ask_brain(
-            blocks,
-            message_id=f"telegram:{chat_id}:{update.message.message_id}",
+            blocks, message_id=mid,
             timestamp=update.message.date.astimezone(timezone.utc).isoformat(),
         )
     except Exception:  # noqa: BLE001
