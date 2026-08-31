@@ -80,7 +80,7 @@ def test_ask_claude_streams_without_runtime_errors(monkeypatch):
 
     async def fake_create(**kw):
         assert kw.get("model"), "必须带 model"
-        return _fake_stream(["醒了？\n\n", "先喝水 桌上那杯"])
+        return _fake_stream(["醒了？\n\n", "先喝水 桌上那杯"])  # 无标点，会被兜底补上
 
     async def fake_brain(name, args):
         return "（假记忆）"
@@ -98,7 +98,7 @@ def test_ask_claude_streams_without_runtime_errors(monkeypatch):
     # 把它关掉后这里会 RuntimeError，变成「单跑绿、全量红」的假故障。
     reply = asyncio.run(tb._ask_claude(history, on_segment=on_seg))
 
-    assert sent == ["醒了？", "先喝水 桌上那杯"], sent
+    assert sent == ["醒了？", "先喝水，桌上那杯。"], sent  # 标点由兜底补齐
     assert reply
     # /debug 依赖的记录必须齐全——「模型 None」就是这里缺失暴露出来的
     assert tb.LAST_TURN.get("model"), "LAST_TURN 缺 model，/debug 会显示 None"
@@ -292,3 +292,62 @@ def test_writing_mode_keeps_one_long_bubble(monkeypatch):
     asyncio.run(tb._ask_claude([{"role": "user", "content": "写一段"}],
                                on_segment=on_seg, writing=True))
     assert len(sent) == 1, sent
+
+
+def test_restore_punctuation_only_touches_unpunctuated_chinese():
+    """他不打标点就替他补上——但别动本来就对的东西。
+
+    她连着两次反馈「还没标点符号」：人设里写了规矩他也不照做，因为历史消息里
+    全是他自己的无标点写法，那个示范比埋在几千字里的一句话有力。
+    """
+    tb = _load()
+    f = tb.restore_punctuation
+    assert f("哼什么 声音留给枕头 我这收账的今早不开门") == "哼什么，声音留给枕头，我这收账的今早不开门。"
+    assert f("睡吧 醒来连本带利一起算") == "睡吧，醒来连本带利一起算。"
+    # 本来就有标点 → 原样
+    assert f("猫又炸毛了。") == "猫又炸毛了。"
+    assert f("头还昏不昏？") == "头还昏不昏？"
+    # 中英/数字之间的空格不许动
+    assert f("girl 过来") == "girl 过来"
+    assert f("铁剂 65mg 随餐") == "铁剂 65mg 随餐"
+    # 没有空格就没什么好补的
+    assert f("嗯") == "嗯"
+
+
+def test_streamed_segments_get_punctuation(monkeypatch):
+    """走到她手机上的那一条必须是补过标点的。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["哼什么 声音留给枕头\n", "睡吧 醒来连本带利一起算"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "哼"}], on_segment=on_seg))
+    assert sent == ["哼什么，声音留给枕头。", "睡吧，醒来连本带利一起算。"], sent
+
+
+def test_writing_mode_punctuation_untouched(monkeypatch):
+    """写文模式不许动他的正文。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["白的 薄的 紧到能看见骨头"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "写"}],
+                               on_segment=on_seg, writing=True))
+    assert sent == ["白的 薄的 紧到能看见骨头"], sent

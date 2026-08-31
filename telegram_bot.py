@@ -695,6 +695,29 @@ async def _telegram_llm_create(**kwargs):
     raise RuntimeError("thinking 档位协商失败")
 
 
+_CJK = r"\u4e00-\u9fff"
+_HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
+
+
+def restore_punctuation(text: str) -> str:
+    """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
+    这里兜一道：整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」
+    的空格换成逗号并补上句号。她的原话是「聚在一起看太累了，还没标点符号」。
+
+    只在两个中文字之间动手：「girl 过来」「铁剂 65mg」这类不受影响；
+    本来就有标点的、写文模式的，一律原样返回。"""
+    t = (text or "").strip()
+    if not t or _HAS_PUNCT_RE.search(t):
+        return text
+    fixed = _CJK_SPACE_RE.sub("，", t)
+    if fixed == t:
+        return text
+    if not re.search(r"[…~〜)）\]】]$", fixed):
+        fixed += "。"
+    return fixed
+
+
 _MEMORY_TAG_RE = re.compile(r"\[\s*memory\s*[:：]\s*(.*?)\s*\]", re.I | re.S)
 
 
@@ -755,6 +778,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
             + str(_mem_block)[:2000]) if _mem_block else "")
+        + "\n\n【这一轮的格式要求·最高优先级】正常用中文标点（逗号、句号、问号），"
+          "绝不用空格代替标点；一件事一行，自然发两到四条（用换行或 ‖ 隔开），"
+          "别把话堆成一大段。就算上面的历史消息里你自己没打标点，这一轮也要打。"
         + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
            "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
         + "\n【闪闪或系统本轮输入从下面开始】"
@@ -785,6 +811,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         再说一遍（真实事故：「嗯。凶你的这个 也一样。」原样发了两遍）。"""
         t = (text or "")
         t = t[:visible_cut(t)].strip()   # 隐藏标签一个字都不外推
+        if not writing:
+            t = restore_punctuation(t)   # 他不打标点就替他补上（写文模式不动）
         if not t or t in {"（……）", "（...）", "(...)", "..."} or on_segment is None:
             return
         n = _norm(t)
