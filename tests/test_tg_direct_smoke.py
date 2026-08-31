@@ -126,3 +126,45 @@ def test_tiny_message_skips_memory_lookup(monkeypatch):
     asyncio.run(tb._ask_claude([{"role": "user", "content": "🥺"}], on_segment=_noop))
     assert called == [], f"表情消息不该调用记忆检索，实际调了 {called}"
     assert tb.LAST_TURN.get("tiny") is True
+
+
+def test_memory_tag_never_reaches_her_and_is_saved_after_reply(monkeypatch):
+    """记忆标签不许发给她；写记忆的工具不许出现在聊天工具表里。
+
+    真实事故：他为了存一条 hold 写了 145.6 秒，正文 0 字，她干等两分半；
+    被强制摘掉工具后又把没写完的记忆内容当成话说给她听。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        names = [t["function"]["name"] for t in (kw.get("tools") or [])]
+        assert "hold" not in names and "grow" not in names, \
+            f"聊天不该带写记忆的工具，实际带了 {names}"
+        return _fake_stream(["先喝水 桌上那杯", "\n[memory:事实：她一天没吃饭]"])
+
+    async def fake_brain(name, args):
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "我一天没吃饭了"}],
+                               on_segment=on_seg))
+
+    joined = "".join(sent)
+    assert "memory" not in joined.lower(), f"隐藏标签漏给她了：{sent}"
+    assert "她一天没吃饭" not in joined, f"记忆内容漏给她了：{sent}"
+    assert sent and sent[0].startswith("先喝水"), sent
+    assert tb.LAST_TURN.get("memory_note") == "事实：她一天没吃饭", tb.LAST_TURN.get("memory_note")
+
+
+def test_chat_tool_list_excludes_memory_writes():
+    tb = _load()
+    names = {t["function"]["name"] for t in tb.CHAT_TOOLS}
+    assert not (names & {"hold", "grow", "trace"}), names
+    assert "breath" in names and "make_page" in names, names

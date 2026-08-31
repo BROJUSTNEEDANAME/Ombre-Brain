@@ -60,6 +60,8 @@ import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
+from reply_sanitizer import visible_cut
+from utils import parse_memory_note
 from prompt_cache import inject_volatile_context
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
@@ -203,6 +205,13 @@ _BRAIN_TOOLS_RAW = [
 ]
 
 # 转成 OpenAI function calling 格式（GLM / OpenRouter / DeepSeek 等通用）
+# ⚠️ 写记忆的工具（hold/grow/trace）不给聊天用。
+# 真实事故：他为了存一条记忆，花了 145.6 秒写 hold 的参数，正文一个字没吐，
+# 她干等两分半；被强制摘工具后又把没写完的记忆内容当成话说给她听。
+# 网页那边早就不这么干——先说话，记忆用回复末尾的隐藏标签在后台存。
+# 这里对齐同一套做法：聊天只留读记忆和做网页的工具。
+_MEMORY_WRITE_TOOLS = {"hold", "grow", "trace"}
+
 BRAIN_TOOLS = [
     {"type": "function", "function": {
         "name": t["name"],
@@ -211,6 +220,11 @@ BRAIN_TOOLS = [
     }}
     for t in _BRAIN_TOOLS_RAW
 ]
+
+
+# 聊天用的工具集：去掉写记忆的那几个（见上）。
+CHAT_TOOLS = [t for t in BRAIN_TOOLS
+              if t["function"]["name"] not in _MEMORY_WRITE_TOOLS]
 
 
 async def _call_brain_tool(name: str, args: dict) -> str:
@@ -507,6 +521,17 @@ SYSTEM_PROMPT = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 # ★和网页同一份人设主体（CHAT_STYLE_SYSTEM）：他怎么说话、怎么爱她、什么绝不许做。
 # 以前这里只有上面那份 1600 字的简版，直连时人设会崩——两边同源之后不会再崩。
 SYSTEM_PROMPT += "\n\n" + CANONICAL_FACTS + "\n" + EMOTIONAL_AGENCY_SYSTEM + "\n\n" + CHAT_STYLE_SYSTEM
+# 记忆写入走隐藏标签，不占用她等回复的时间（和网页同一套做法）。
+SYSTEM_PROMPT += """
+
+【记忆怎么记·和网页同一套】
+- 记忆不使用工具调用。先把话说完，然后另起一行输出一个隐藏标签：
+  [memory:事实：一句完整摘要]；是你自己的感受就写 [memory:感受：……]。
+  这一行不会显示给闪闪，系统会在你说完之后在后台存进大脑。
+- 这轮没有值得记的（纯口水话、已经记过的同一件事）就写 [memory:不记录]。
+- 系统每轮已经把相关记忆浮现给你了，不用自己 breath；只有她明确问
+  「还记得吗／之前说过」而浮现里又没有时，才去 breath 检索。
+- ⛔ 绝不把标签里的内容、或「我去存一下记忆」这类过程说给她听。"""
 
 # ----------------------------------------------------------------------------
 
@@ -670,6 +695,27 @@ async def _telegram_llm_create(**kwargs):
     raise RuntimeError("thinking 档位协商失败")
 
 
+_MEMORY_TAG_RE = re.compile(r"\[\s*memory\s*[:：]\s*(.*?)\s*\]", re.I | re.S)
+
+
+def _extract_memory_note(text: str) -> str:
+    """把回复末尾的 [memory:...] 摘出来（正文里的标签由 visible_cut 负责不外推）。"""
+    m = _MEMORY_TAG_RE.search(text or "")
+    return m.group(1).strip() if m else ""
+
+
+async def _save_memory_note(note: str) -> None:
+    """回复已经发出去之后，在后台把这轮记忆写进大脑。
+
+    ⚠️ 绝不能放在回复之前：他曾为了写一条 hold 花掉 145 秒，她干等两分半
+    才等到第一个字。存记忆是他的事，不该让她等。"""
+    for content, feel in parse_memory_note(note):
+        try:
+            await _call_brain_tool("hold", {"content": content, "feel": bool(feel)})
+        except Exception:  # noqa: BLE001
+            logger.warning("后台存记忆失败：%s", content[:30])
+
+
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
@@ -737,7 +783,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
 
         ⚠️ 必须去重：他常在工具轮里先说一句、调完记忆工具后在下一轮把同样的话
         再说一遍（真实事故：「嗯。凶你的这个 也一样。」原样发了两遍）。"""
-        t = (text or "").strip()
+        t = (text or "")
+        t = t[:visible_cut(t)].strip()   # 隐藏标签一个字都不外推
         if not t or t in {"（……）", "（...）", "(...)", "..."} or on_segment is None:
             return
         n = _norm(t)
@@ -758,7 +805,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         # 请求里没有 tools 就自相矛盾，模型会 decode 崩掉、吐出满屏乱码（踩过）。
         # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
         _kw = {"model": use_model, "max_tokens": _budget, "messages": messages,
-               "tools": BRAIN_TOOLS}
+               "tools": (BRAIN_TOOLS if writing else CHAT_TOOLS)}
         if _force_speak:
             _kw["tool_choice"] = "none"
             logger.info("tool_choice=none 逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
@@ -865,6 +912,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             + ("／已摘工具" if _force_speak else ""))
 
         if not tool_calls:
+            # 记忆标签留给发完之后的后台任务，绝不占用她等回复的时间
+            LAST_TURN["memory_note"] = _extract_memory_note(content or "")
             reply = (content or "").strip()
             # 做了网页但话里没带上链接 → 补上，绝不让她收到空手
             if page_url and page_url not in reply:
@@ -1268,6 +1317,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await _send_segments(context, chat_id, segs)
         _save_state()
         asyncio.create_task(_sync_main_line("you", "\n".join(segs), mid + ":reply"))
+        _note = str(LAST_TURN.get("memory_note") or "")
+        if _note:
+            asyncio.create_task(_save_memory_note(_note))   # 发完再存，不占她的时间
         return
 
     # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全但慢 ──
