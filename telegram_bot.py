@@ -556,8 +556,17 @@ def _now_line() -> str:
     )
 
 
+# 每条回复前的「[周日 23:35]」前缀：默认关掉。Telegram 每条消息角落本来就显示
+# 时间，这个前缀纯属重复，还让他每句话都像系统日志播报——人设里也明写着
+# 「绝不把时间报出来当台词、不写时间戳」。想要回来就设 OMBRE_TG_STAMP=1。
+OMBRE_TG_STAMP = os.environ.get("OMBRE_TG_STAMP", "").strip().lower() in (
+    "1", "on", "true", "yes")
+
+
 def _stamp() -> str:
-    """给每条文字回复前加的准确时间戳（来自服务器时钟，永远真实）。"""
+    """回复前缀的时间戳（默认关；OMBRE_TG_STAMP=1 打开）。"""
+    if not OMBRE_TG_STAMP:
+        return ""
     now = datetime.now(USER_TZ)
     return f"[{_WEEKDAYS[now.weekday()]} {now:%H:%M}] "
 
