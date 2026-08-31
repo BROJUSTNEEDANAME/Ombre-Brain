@@ -1692,7 +1692,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             continue
         await _sync_you_line(
             NUDGES[count],
-            f"telegram:{chat_id}:nudge:{int(last_activity_ts.get(chat_id, 0))}:{count}",
+            f"telegram:{chat_id}:nudge:{int(last_user_ts.get(chat_id, 0))}:{count}",
         )
         nudge_count[chat_id] = count + 1
         last_nudge_ts[chat_id] = now

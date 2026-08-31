@@ -33,3 +33,22 @@
 工具细节（`breath` / `hold` / `grow` / `trace` / `pulse` / `read` / `dream` / feel / pinned / 权重池机制）见：
 
 @CLAUDE_PROMPT.md
+
+## ⚠️ 改代码的硬规矩 / Before shipping code
+
+**任何代码改动交给闪闪之前，必须先自己跑 `bash scripts/check.sh`，通过了才准发。**
+
+不是建议，是硬规矩。由来：多次把「语法没问题、一跑就崩」的代码推给她，让她在
+Telegram 上一条条替我踩出来——`_trace` 定义晚于使用（每条消息必崩）、抽函数时
+漏带 `_keep_typing`（她发什么都没反应）。`python -m py_compile` 只看语法，
+抓不到这类错误。
+
+`scripts/check.sh` 会做四件事：语法检查、真正执行整条聊天路径的冒烟测试、
+相关单测、以及「函数引用了未定义名字」的扫描（专治抽函数漏依赖）。
+
+配套规矩：
+- 改了 `telegram_bot.py` / `server.py` 的聊天路径，就要在
+  `tests/test_tg_direct_smoke.py` 里补一条**真的会跑起来**的测试。
+- 新写的测试要验证它「抓得到」：把 bug 放回去看它是否变红，红了才算数。
+- 依赖缺失时不要 `skip`——跳过的测试等于没有测试，用替身让它真的执行。
+- 她的 Telegram 是每天在用的东西，不是试验田。没跑过的代码不许送到她那里。
