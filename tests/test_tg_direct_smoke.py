@@ -98,7 +98,7 @@ def test_ask_claude_streams_without_runtime_errors(monkeypatch):
     # 把它关掉后这里会 RuntimeError，变成「单跑绿、全量红」的假故障。
     reply = asyncio.run(tb._ask_claude(history, on_segment=on_seg))
 
-    assert sent == ["醒了？", "先喝水，桌上那杯。"], sent  # 标点由兜底补齐
+    assert sent == ["醒了？", "先喝水 桌上那杯"], sent  # 默认不补标点（她喜欢的写法）
     assert reply
     # /debug 依赖的记录必须齐全——「模型 None」就是这里缺失暴露出来的
     assert tb.LAST_TURN.get("model"), "LAST_TURN 缺 model，/debug 会显示 None"
@@ -294,13 +294,14 @@ def test_writing_mode_keeps_one_long_bubble(monkeypatch):
     assert len(sent) == 1, sent
 
 
-def test_restore_punctuation_only_touches_unpunctuated_chinese():
+def test_restore_punctuation_only_touches_unpunctuated_chinese(monkeypatch):
     """他不打标点就替他补上——但别动本来就对的东西。
 
     她连着两次反馈「还没标点符号」：人设里写了规矩他也不照做，因为历史消息里
     全是他自己的无标点写法，那个示范比埋在几千字里的一句话有力。
     """
     tb = _load()
+    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)
     f = tb.restore_punctuation
     assert f("哼什么 声音留给枕头 我这收账的今早不开门") == "哼什么，声音留给枕头，我这收账的今早不开门。"
     assert f("睡吧 醒来连本带利一起算") == "睡吧，醒来连本带利一起算。"
@@ -329,6 +330,7 @@ def test_streamed_segments_get_punctuation(monkeypatch):
     async def on_seg(s):
         sent.append(s)
 
+    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)   # 显式打开开关才补
     asyncio.run(tb._ask_claude([{"role": "user", "content": "哼"}], on_segment=on_seg))
     assert sent == ["哼什么，声音留给枕头。", "睡吧，醒来连本带利一起算。"], sent
 
