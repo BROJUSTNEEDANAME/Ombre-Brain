@@ -118,6 +118,20 @@ CHAT_MAX_TOKENS = int(os.environ.get("OMBRE_TG_CHAT_MAX_TOKENS", "1200"))
 # 绝不允许出现「发了三分钟一个字没有」。
 CHAT_TOOL_ROUNDS = int(os.environ.get("OMBRE_TG_TOOL_ROUNDS", "3"))
 SOFT_DEADLINE = float(os.environ.get("OMBRE_TG_SOFT_DEADLINE", "40"))
+# 单轮流式的硬墙：软时限只在每轮开始时检查，救不了「一轮就跑了九分钟」的复读
+# 死循环（真实事故：首句 525 秒，满屏乱码，systemd 最后 SIGKILL）。
+STREAM_MAX_SECONDS = float(os.environ.get("OMBRE_TG_STREAM_MAX_SECONDS", "75"))
+
+
+def _looks_degenerate(text: str) -> bool:
+    """复读死循环探测：尾部片段在正文里反复出现就是模型崩了，立刻掐掉。
+    只在正文够长时才判，避免误伤他本来就短的重复口头禅（「嗯。」「好。」）。"""
+    if len(text) < 240:
+        return False
+    tail = text[-40:].strip()
+    if len(tail) < 20:
+        return False
+    return text.count(tail) >= 3
 TELEGRAM_MSG_LIMIT = 4096
 
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
@@ -699,22 +713,49 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
         _force_speak = _round >= CHAT_TOOL_ROUNDS or (
             not said and time.time() - _t0 > SOFT_DEADLINE)
-        _tools = None if _force_speak else BRAIN_TOOLS
+        # ⚠️ 绝不能把 tools 整个摘掉：历史里还留着之前的 tool_calls / tool 结果，
+        # 请求里没有 tools 就自相矛盾，模型会 decode 崩掉、吐出满屏乱码（踩过）。
+        # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
+        _kw = {"model": use_model, "max_tokens": _budget, "messages": messages,
+               "tools": BRAIN_TOOLS}
         if _force_speak:
-            logger.info("摘掉工具逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
-        _kw = {"model": use_model, "max_tokens": _budget, "messages": messages}
-        if _tools:
-            _kw["tools"] = _tools
+            _kw["tool_choice"] = "none"
+            logger.info("tool_choice=none 逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
+        async def _create(**extra):
+            try:
+                return await _telegram_llm_create(**_kw, **extra)
+            except Exception as e:  # noqa: BLE001
+                if "tool_choice" not in str(e).lower():
+                    raise
+                _kw.pop("tool_choice", None)  # 这家不认这个参数：去掉重试，别整轮挂掉
+                logger.warning("provider 不认 tool_choice，去掉重试")
+                return await _telegram_llm_create(**_kw, **extra)
+
         if on_segment is None:
-            resp = await _telegram_llm_create(**_kw)
+            resp = await _create()
             msg = resp.choices[0].message
             content, tool_calls = msg.content or "", list(msg.tool_calls or [])
         else:
             # 流式：正文攒到一个气泡边界（‖）就立刻发；工具轮结束时把这轮说的话
             # 也立刻发出去——「回来了就好」这种工具前的正经话，她当场就该收到。
-            st = await _telegram_llm_create(stream=True, **_kw)
+            st = await _create(stream=True)
             buf, pending, tc_acc = "", "", {}
+            _broke = False
+            _checked = 0
             async for ch in st:
+                # 硬墙：单轮流式绝不允许无限跑下去
+                if time.time() - _t0 > STREAM_MAX_SECONDS:
+                    logger.warning("单轮流式超过 %.0fs，掐断", STREAM_MAX_SECONDS)
+                    _broke = True
+                    break
+                # 复读死循环：每多 200 字查一次，崩了就立刻掐，绝不把乱码发给她
+                if len(buf) - _checked >= 200:
+                    _checked = len(buf)
+                    if _looks_degenerate(buf):
+                        logger.warning("检测到复读死循环，掐断本轮（已生成 %d 字）", len(buf))
+                        _broke = True
+                        pending = ""      # 半截乱码一个字都不发
+                        break
                 if not ch.choices:
                     continue
                 d = ch.choices[0].delta
@@ -736,6 +777,14 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                     while "‖" in pending:
                         seg, pending = pending.split("‖", 1)
                         await _emit(seg)
+            if _broke:
+                try:
+                    await st.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                if said:
+                    return "‖".join(said)      # 前面说的算数，后面掐掉
+                return "（我这轮卡住了，你再说一句。）"
             if pending.strip():  # 本轮剩下的尾巴：不管是不是工具轮，都当场发
                 await _emit(pending)
                 pending = ""
@@ -1114,8 +1163,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # 语音模式要合成整条语音，不能逐段发；其余一律流式
         _stream = not (openai_client is not None and voice_mode.get(chat_id))
         try:
-            reply = await _ask_claude(history, on_segment=_emit if _stream else None,
-                                      writing=bool(writing_mode.get(chat_id)))
+            reply = await asyncio.wait_for(
+                _ask_claude(history, on_segment=_emit if _stream else None,
+                            writing=bool(writing_mode.get(chat_id))),
+                timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "120")))
+        except asyncio.TimeoutError:
+            _typing.cancel()
+            logger.warning("整轮硬超时（%.1fs），已发 %d 段", time.time() - t0, len(_sent))
+            if not _sent:
+                await update.message.reply_text("我这轮卡住了 你再说一句")
+            return
         except Exception:  # noqa: BLE001
             _typing.cancel()
             logger.exception("直连调用失败（%.1fs）", time.time() - t0)
