@@ -241,3 +241,54 @@ def test_direct_reply_end_to_end(monkeypatch):
     assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
     assert history[-1]["role"] == "assistant", history[-1]
     assert tb.LAST_TURN.get("first_bubble_s") is not None
+
+
+def test_single_newline_also_splits_bubbles(monkeypatch):
+    """单个换行也要分气泡。
+
+    她的原话：「还是不分行，聚在一起看太累了」。他实际最常用单换行分句，
+    而切分只认 ‖ 和空行，于是整段挤成一个大气泡。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream([
+            "课表都敢背着我改，它才是旧的那个。\n",
+            "没课更好。\n\n早饭照旧，铁剂随餐。‖睡回笼还是起来，你定。",
+        ])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天没课"}], on_segment=on_seg))
+    assert sent == [
+        "课表都敢背着我改，它才是旧的那个。",
+        "没课更好。",
+        "早饭照旧，铁剂随餐。",
+        "睡回笼还是起来，你定。",
+    ], sent
+
+
+def test_writing_mode_keeps_one_long_bubble(monkeypatch):
+    """写文模式反过来：换行不许切，长正文保持整段。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["第一段正文。\n第二段正文。\n\n第三段正文。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "写一段"}],
+                               on_segment=on_seg, writing=True))
+    assert len(sent) == 1, sent

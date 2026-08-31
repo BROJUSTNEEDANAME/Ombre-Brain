@@ -865,13 +865,18 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                     pending += c
                     # 边界：‖ 或空行。他实际上常用空行分段而不是 ‖，
                     # 只认 ‖ 的话整段会挤成一个气泡，她要的「连发好几条」就没了。
-                    while True:
-                        _i1 = pending.find("‖")
-                        _i2 = -1 if writing else pending.find("\n\n")
-                        _c = [(i, ln) for i, ln in ((_i1, 1), (_i2, 2)) if i >= 0]
-                        if not _c:
+                    # 边界：‖、空行、以及**单个换行**。他实际上最常用单换行分句，
+                    # 只认 ‖ 和空行的话整段会挤成一个大气泡——她的原话是
+                    # 「还是不分行，聚在一起看太累了」。写文模式不切，长正文保持整段。
+                    while not writing:
+                        _i = pending.find("‖")
+                        _ln = 1
+                        _nl = pending.find("\n")
+                        if _nl >= 0 and (_i < 0 or _nl < _i):
+                            _i = _nl
+                            _ln = 2 if pending[_nl:_nl + 2] == "\n\n" else 1
+                        if _i < 0:
                             break
-                        _i, _ln = min(_c)
                         seg, pending = pending[:_i], pending[_i + _ln:]
                         await _emit(seg)
             if _broke:
