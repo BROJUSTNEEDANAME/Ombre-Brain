@@ -119,11 +119,11 @@ MAX_TOKENS = 16384
 CHAT_MAX_TOKENS = int(os.environ.get("OMBRE_TG_CHAT_MAX_TOKENS", "4000"))
 # 工具轮上限 + 软性总时限：超过就把工具摘掉，逼他必须开口说话——
 # 绝不允许出现「发了三分钟一个字没有」。
-CHAT_TOOL_ROUNDS = int(os.environ.get("OMBRE_TG_TOOL_ROUNDS", "3"))
+CHAT_TOOL_ROUNDS = int(os.environ.get("OMBRE_TG_TOOL_ROUNDS", "2"))
 SOFT_DEADLINE = float(os.environ.get("OMBRE_TG_SOFT_DEADLINE", "40"))
 # 单轮流式的硬墙：软时限只在每轮开始时检查，救不了「一轮就跑了九分钟」的复读
 # 死循环（真实事故：首句 525 秒，满屏乱码，systemd 最后 SIGKILL）。
-STREAM_MAX_SECONDS = float(os.environ.get("OMBRE_TG_STREAM_MAX_SECONDS", "75"))
+STREAM_MAX_SECONDS = float(os.environ.get("OMBRE_TG_STREAM_MAX_SECONDS", "150"))
 
 
 def _looks_degenerate(text: str) -> bool:
@@ -532,6 +532,8 @@ voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语�
 # 走 WRITING_MODE_SYSTEM——长段正文、不拆气泡、不受日常「空格断句/少动作
 # 括号」那套限制。日常聊天默认关。
 writing_mode: dict[int, bool] = {}
+# 最近一轮的耗时明细：/debug 直接给她看，省得每次都要开服务器终端翻日志。
+LAST_TURN: dict[str, object] = {}
 todos: dict[int, str] = {}  # 她今天的「每日必办」（/todo 设置，早安时念）
 
 
@@ -682,19 +684,24 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     # 他还会为了「这是什么意思」想很久，最后超时被掐 → 她收到「我这轮卡住了」。
     # 这种直接跳过记忆检索，并明说别琢磨，随口接住就行。
     _tiny = len(_last_text.strip()) <= 6 and not re.search(r"[\u4e00-\u9fff a-zA-Z]{3,}", _last_text)
+    LAST_TURN["input_len"] = len(_last_text)
+    LAST_TURN["tiny"] = _tiny
+    _mem_t = time.time()
     _mem_block = ""
     if not _tiny:
         try:
             _mem_block = await asyncio.wait_for(
-                _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 2500}),
+                _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 1200}),
                 timeout=8)
         except Exception:  # noqa: BLE001
             logger.warning("记忆预浮现失败，这轮先不带记忆说话")
+    _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s"
+                  + ("（跳过）" if _tiny else f"／{len(str(_mem_block))}字"))
     dynamic_context = (
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
-            + str(_mem_block)[:4000]) if _mem_block else "")
+            + str(_mem_block)[:2000]) if _mem_block else "")
         + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
            "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
         + "\n【闪闪或系统本轮输入从下面开始】"
@@ -711,6 +718,10 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
     _t0 = time.time()
+    _trace: list[str] = []
+    LAST_TURN.clear()
+    LAST_TURN["model"] = MODEL
+    LAST_TURN["trace"] = _trace
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
     _empty_retried = False  # 空回复只补救一次，别没完没了
     _broke_retried = False  # 被硬墙掐断后的补救也只做一次
@@ -737,6 +748,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
 
     for _round in range(12):  # 最多 12 轮工具循环
         # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
+        _round_start = time.time()
         _force_speak = _force_next or _round >= CHAT_TOOL_ROUNDS or (
             not said and time.time() - _t0 > SOFT_DEADLINE)
         _force_next = False
@@ -843,6 +855,12 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             _budget = min(_budget * 3, MAX_TOKENS)
             logger.warning("正文为空（多半是思考吃光额度），加大到 %d 重来一轮", _budget)
             continue
+
+        _trace.append(
+            f"第{_round + 1}轮 {time.time() - _round_start:.1f}s"
+            f"／正文{len((content or '').strip())}字"
+            f"／工具{'+'.join(tc.function.name for tc in tool_calls) or '无'}"
+            + ("／已摘工具" if _force_speak else ""))
 
         if not tool_calls:
             reply = (content or "").strip()
@@ -1207,6 +1225,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
             _sent.append(seg)
             if len(_sent) == 1:
+                LAST_TURN["first_bubble_s"] = round(time.time() - t0, 1)
                 logger.info("TG 首句送达 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
 
         # 语音模式要合成整条语音，不能逐段发；其余一律流式
@@ -1215,9 +1234,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             reply = await asyncio.wait_for(
                 _ask_claude(history, on_segment=_emit if _stream else None,
                             writing=bool(writing_mode.get(chat_id))),
-                timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "120")))
+                timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
         except asyncio.TimeoutError:
             _typing.cancel()
+            LAST_TURN["total_s"] = round(time.time() - t0, 1)
+            LAST_TURN["result"] = "硬超时"
             logger.warning("整轮硬超时（%.1fs），已发 %d 段", time.time() - t0, len(_sent))
             if not _sent:
                 await update.message.reply_text("我这轮卡住了 你再说一句")
@@ -1232,6 +1253,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
             return
         _typing.cancel()
+        LAST_TURN["total_s"] = round(time.time() - t0, 1)
         logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
         segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
         segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
@@ -1402,6 +1424,7 @@ BOT_COMMANDS = [
     ("todo", "今天要做的事 · 早安时他会念给你"),
     ("manage", "托管我…… · 让他盯着你做完一件事"),
     ("stopmanage", "停止托管"),
+    ("debug", "上一轮慢在哪儿"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
 ]
@@ -1415,6 +1438,27 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = ["能用的指令都在这 打一个 / 也会自动弹出来", ""]
     lines += [f"/{name} — {desc}" for name, desc in BOT_COMMANDS]
     lines += ["", "其余的直接说话就行 不用指令。"]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/debug：把最近一轮慢在哪儿列出来——她不用开服务器终端翻日志。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    if not LAST_TURN:
+        await update.message.reply_text("还没有可看的记录 先跟他说句话再来")
+        return
+    lines = [f"模型 {LAST_TURN.get('model')}"]
+    lines.append(f"你这条 {LAST_TURN.get('input_len')} 字"
+                 + ("（判为表情/极短）" if LAST_TURN.get("tiny") else ""))
+    lines += [f"· {x}" for x in (LAST_TURN.get("trace") or [])]
+    if LAST_TURN.get("first_bubble_s") is not None:
+        lines.append(f"第一句送达 {LAST_TURN['first_bubble_s']}s")
+    if LAST_TURN.get("total_s") is not None:
+        lines.append(f"整轮 {LAST_TURN['total_s']}s")
+    if LAST_TURN.get("result"):
+        lines.append(f"结果 {LAST_TURN['result']}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -1615,6 +1659,7 @@ def main() -> None:
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("write", write_cmd))
+    app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
