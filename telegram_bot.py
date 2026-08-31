@@ -45,7 +45,7 @@ from datetime import datetime, time as dtime, timezone
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -1249,6 +1249,31 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+# ⭐ 指令总表：Telegram 的「/」菜单和 /help 都从这里生成——加了新指令只改这里，
+# 不会出现「菜单里没有」或「帮助里漏了一条」。她不用记，打个 / 就全在眼前。
+BOT_COMMANDS = [
+    ("write", "写文模式开关 · 开了他整段写不拆消息"),
+    ("voice", "语音开关 · 开了他用语音跟你说话"),
+    ("mood", "看他此刻的情绪面板"),
+    ("todo", "今天要做的事 · 早安时他会念给你"),
+    ("manage", "托管我…… · 让他盯着你做完一件事"),
+    ("stopmanage", "停止托管"),
+    ("help", "看所有指令"),
+    ("id", "拿到本机 chat id"),
+]
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/help：把所有指令列给她——她不用记，也不用回头翻聊天记录。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    lines = ["能用的指令都在这 打一个 / 也会自动弹出来", ""]
+    lines += [f"/{name} — {desc}" for name, desc in BOT_COMMANDS]
+    lines += ["", "其余的直接说话就行 不用指令。"]
+    await update.message.reply_text("\n".join(lines))
+
+
 async def write_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/write 开关：写文模式（和网页那个「写文」开关同一件事）。"""
     chat_id = update.effective_chat.id
@@ -1451,6 +1476,7 @@ def main() -> None:
     app.add_handler(CommandHandler("todo", todo_cmd))
     app.add_handler(CommandHandler("manage", manage_cmd))
     app.add_handler(CommandHandler("stopmanage", stop_manage_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.VOICE, on_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
@@ -1471,6 +1497,16 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             _mh, _mm = 6, 50
         app.job_queue.run_daily(morning_greeting, time=dtime(hour=_mh, minute=_mm, tzinfo=USER_TZ))
+    async def _publish_menu(application: Application) -> None:
+        """把指令表推给 Telegram：她在输入框打「/」就能看到全部指令和说明。"""
+        try:
+            await application.bot.set_my_commands(
+                [BotCommand(name, desc) for name, desc in BOT_COMMANDS])
+            logger.info("指令菜单已注册（%d 条）", len(BOT_COMMANDS))
+        except Exception:  # noqa: BLE001
+            logger.warning("指令菜单注册失败，不影响聊天")
+
+    app.post_init = _publish_menu
     logger.info("Ombre Brain Telegram bot 启动 | model=%s | mcp=%s", MODEL, OMBRE_MCP_URL)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
