@@ -673,6 +673,13 @@ async def _telegram_llm_create(**kwargs):
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
+    # ⚠️ 这三行必须在函数最前面：下面的记忆检索就会往 _trace 里写，
+    # 定义晚了会 UnboundLocalError，每一条消息都必崩（踩过，全线挂掉）。
+    _t0 = time.time()
+    _trace: list[str] = []
+    LAST_TURN.clear()
+    LAST_TURN["model"] = MODEL
+    LAST_TURN["trace"] = _trace
     _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
     messages = [{"role": "system", "content": _sys}] + list(history)
     # 记忆预浮现：先替他把相关记忆捞好塞进上下文，省掉「他先调 breath、拿到结果
@@ -717,11 +724,6 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     use_model = VISION_MODEL if _has_img(history) else MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
-    _t0 = time.time()
-    _trace: list[str] = []
-    LAST_TURN.clear()
-    LAST_TURN["model"] = MODEL
-    LAST_TURN["trace"] = _trace
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
     _empty_retried = False  # 空回复只补救一次，别没完没了
     _broke_retried = False  # 被硬墙掐断后的补救也只做一次
