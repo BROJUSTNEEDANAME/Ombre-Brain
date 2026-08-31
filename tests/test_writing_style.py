@@ -4,9 +4,22 @@ from writing_style import INTIMATE_WRITING_ENGINE
 
 _ROOT = Path(__file__).resolve().parent.parent
 
+def _prompt_text() -> str:
+    """人设全文 = server.py + 被搬进共用模块的两块（CHAT_STYLE / WRITING_MODE）。
+
+    这些断言关心的是「最终拼给模型的人设里有没有这句话」，不是「它写在哪个文件」。
+    人设主体已经抽进 personality.py / writing_style.py 供网页和 Telegram 共用，
+    只读 server.py 会漏掉搬走的部分（重构时踩过：文本一字未改，测试却全红）。
+    """
+    return "\n".join(
+        (_ROOT / name).read_text(encoding="utf-8")
+        for name in ("server.py", "personality.py", "writing_style.py")
+    )
+
+
 
 def test_writing_mode_suspends_caretaking_reflexes_and_bans_nanny_register():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # 写文模式必须显式压制日常照顾/哄睡反射，否则凌晨/经期背景会把床戏拽回奶爸腔
     assert "本轮暂停一切日常照顾反射" in server_src
     assert "禁止奶爸/圣父腔" in server_src
@@ -15,7 +28,7 @@ def test_writing_mode_suspends_caretaking_reflexes_and_bans_nanny_register():
 
 
 def test_writing_mode_bans_repetition_and_demands_extremity():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # 复读（三快一慢/三下 反复念）和「不够极致」是用户明确点名的两个失败
     assert "绝不复读" in server_src
     assert "三快一慢" in server_src  # 具体点名要禁的复读公式
@@ -23,7 +36,7 @@ def test_writing_mode_bans_repetition_and_demands_extremity():
 
 
 def test_writing_mode_drives_emotion_engines_when_enabled():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # /api/chat 必须在写文模式下把两套情绪引擎顶进上头档
     assert "drives.enter_intimate(thread)" in server_src
     assert "endocrine.enter_writing_mode(thread)" in server_src
@@ -31,7 +44,7 @@ def test_writing_mode_drives_emotion_engines_when_enabled():
 
 
 def test_sampling_penalties_are_off_by_default():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # frequency_penalty 会压掉中文标点、presence_penalty 会拖长回复：默认必须关掉，
     # 只留 env 旋钮（默认 0＝不带）。主回复入口仍统一走 _llm_reply。
     assert "async def _llm_reply(" in server_src
@@ -41,7 +54,7 @@ def test_sampling_penalties_are_off_by_default():
 
 
 def test_new_looping_formulas_are_named_in_ban_list():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     assert "第二回比第一回更满" in server_src
     assert "不是从零开始" in server_src
 

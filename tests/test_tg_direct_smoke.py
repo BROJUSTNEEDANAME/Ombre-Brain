@@ -94,8 +94,9 @@ def test_ask_claude_streams_without_runtime_errors(monkeypatch):
         sent.append(s)
 
     history = [{"role": "user", "content": "我回来了 今天好累"}]
-    reply = asyncio.get_event_loop().run_until_complete(
-        tb._ask_claude(history, on_segment=on_seg))
+    # 用 asyncio.run 而不是 get_event_loop：后者依赖全局循环，别的测试跑完
+    # 把它关掉后这里会 RuntimeError，变成「单跑绿、全量红」的假故障。
+    reply = asyncio.run(tb._ask_claude(history, on_segment=on_seg))
 
     assert sent == ["醒了？", "先喝水 桌上那杯"], sent
     assert reply
@@ -119,7 +120,9 @@ def test_tiny_message_skips_memory_lookup(monkeypatch):
     monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
     monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
 
-    asyncio.get_event_loop().run_until_complete(
-        tb._ask_claude([{"role": "user", "content": "🥺"}], on_segment=lambda s: asyncio.sleep(0)))
+    async def _noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "🥺"}], on_segment=_noop))
     assert called == [], f"表情消息不该调用记忆检索，实际调了 {called}"
     assert tb.LAST_TURN.get("tiny") is True

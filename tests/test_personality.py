@@ -4,6 +4,19 @@ from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
 
 _ROOT = Path(__file__).resolve().parent.parent
 
+def _prompt_text() -> str:
+    """人设全文 = server.py + 被搬进共用模块的两块（CHAT_STYLE / WRITING_MODE）。
+
+    这些断言关心的是「最终拼给模型的人设里有没有这句话」，不是「它写在哪个文件」。
+    人设主体已经抽进 personality.py / writing_style.py 供网页和 Telegram 共用，
+    只读 server.py 会漏掉搬走的部分（重构时踩过：文本一字未改，测试却全红）。
+    """
+    return "\n".join(
+        (_ROOT / name).read_text(encoding="utf-8")
+        for name in ("server.py", "personality.py", "writing_style.py")
+    )
+
+
 
 def test_emotional_agency_allows_conflict_and_initiative():
     assert "可以吃醋、生气、受伤" in EMOTIONAL_AGENCY_SYSTEM
@@ -40,7 +53,7 @@ def test_canonical_ages_are_fixed_facts():
 
 
 def test_both_chat_paths_load_shared_facts_and_agency():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     telegram_src = (_ROOT / "telegram_bot.py").read_text(encoding="utf-8")
     for src in (server_src, telegram_src):
         assert "CANONICAL_FACTS" in src
@@ -54,12 +67,12 @@ def test_telegram_prompt_no_longer_forbids_conflict():
 
 
 def test_web_prompt_does_not_model_banned_slogans():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     assert '"别离开"' not in server_src
 
 
 def test_prompt_forbids_fabricating_food_and_inventory():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # 张罗吃饭的照顾冲动不能变成现编假事实（点了外卖/冰箱有剩意面）
     assert "冰箱里有昨天剩的意面" in server_src
     assert "只有两个来源：她亲口说的、你记忆里存的" in server_src
@@ -148,14 +161,14 @@ def test_never_wears_her_degrading_label():
 
 
 def test_no_nighttime_sleep_coaxing_default():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     # 凌晨不再默认"哄睡/去睡闭眼收尾"——这是每晚测都翻车的真正机制
     assert "绝不许每次都拿" in server_src and "去睡/闭眼/睡吧/带你去睡" in server_src
     assert "想把她收去睡" not in server_src
 
 
 def test_think_forbids_permissive_bystander_monologue():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     assert '"由她闹吧""闹累了自然会睡"' in server_src
     assert "纵容/放手/看客式的独白" in server_src
 
@@ -169,6 +182,6 @@ def test_no_riddle_perseveration_read_the_room():
 
 
 def test_no_verbatim_self_repeat_after_she_answered():
-    server_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+    server_src = _prompt_text()
     assert "绝不重复你自己上一条" in server_src
     assert "你问过的问题她已经回答了" in server_src
