@@ -375,3 +375,31 @@ def test_liveness_rules_present_in_persona():
     assert "长度必须参差" in C
     assert "被戳到要真的破防" in C
     assert "禁止把一个梗系统化经营" in C
+
+
+def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
+    """连着聊时复用记忆块，别每句都白等 3~5 秒；问到过去时必须现查。"""
+    tb = _load()
+    calls = []
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯"])
+
+    async def fake_brain(name, args):
+        calls.append(args.get("query", ""))
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "我回来了"}], on_segment=noop))
+    assert len(calls) == 1, calls                      # 第一句：现查
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天好累"}], on_segment=noop))
+    assert len(calls) == 1, f"紧接着的一句应当复用，实际又查了：{calls}"
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "你还记得我上次说的吗"}],
+                               on_segment=noop))
+    assert len(calls) == 2, f"问到过去必须现查，实际没查：{calls}"

@@ -559,6 +559,13 @@ voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语�
 writing_mode: dict[int, bool] = {}
 # 最近一轮的耗时明细：/debug 直接给她看，省得每次都要开服务器终端翻日志。
 LAST_TURN: dict[str, object] = {}
+# 记忆块短期复用：连着聊的那几分钟里记忆几乎不变，每句都重查等于白等 3~5 秒。
+# 存 (时刻, 记忆块)；她问到过去时照常重查。
+_MEM_CACHE: dict[str, object] = {}
+MEM_CACHE_SECONDS = float(os.environ.get("OMBRE_TG_MEM_CACHE_SECONDS", "180"))
+# 她明确问到过去时不能吃缓存，必须现查
+_RECALL_HINT_RE = re.compile(
+    r"还记得|记不记得|之前|上次|上回|以前|那天|你忘|忘了吗|说过|提过|当初")
 todos: dict[int, str] = {}  # 她今天的「每日必办」（/todo 设置，早安时念）
 
 
@@ -773,15 +780,26 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     LAST_TURN["tiny"] = _tiny
     _mem_t = time.time()
     _mem_block = ""
+    _mem_how = "跳过"
     if not _tiny:
-        try:
-            _mem_block = await asyncio.wait_for(
-                _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 1200}),
-                timeout=8)
-        except Exception:  # noqa: BLE001
-            logger.warning("记忆预浮现失败，这轮先不带记忆说话")
-    _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s"
-                  + ("（跳过）" if _tiny else f"／{len(str(_mem_block))}字"))
+        _asks_past = bool(_RECALL_HINT_RE.search(_last_text))
+        _cached_at = float(_MEM_CACHE.get("at") or 0)
+        if not _asks_past and time.time() - _cached_at < MEM_CACHE_SECONDS:
+            _mem_block = str(_MEM_CACHE.get("block") or "")
+            _mem_how = "复用"
+        else:
+            try:
+                _mem_block = await asyncio.wait_for(
+                    _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 1200}),
+                    timeout=8)
+                _MEM_CACHE["at"] = time.time()
+                _MEM_CACHE["block"] = _mem_block
+                _mem_how = "现查"
+            except Exception:  # noqa: BLE001
+                logger.warning("记忆预浮现失败，这轮先不带记忆说话")
+                _mem_how = "失败"
+    _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s（{_mem_how}）"
+                  + (f"／{len(str(_mem_block))}字" if _mem_block else ""))
     dynamic_context = (
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
