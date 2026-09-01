@@ -101,12 +101,39 @@ OMBRE_MCP_URL = os.environ.get(
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
-MODEL_CHOICES = ["glm-5.3", "glm-5.2", "glm-5.1", "glm-4.6"]
-model_override: dict[str, str] = {}
+# 可选组合：模型 × 思考开关。
+# ⚠️ glm-5.3 的思考关不掉——传 thinking=disabled 会被 API 拒（1210:
+# cannot be disabled; please use low, high, or max），所以它没有「关思考」这档，
+# 一共是 5 种真实组合，不是 6 种。
+# 每项：(她发的名字, 模型, 是否关思考, 一句话说明)
+MODEL_CHOICES = [
+    ("5.3", "glm-5.3", True, "最聪明；思考关不掉，开口前要想一轮，最慢"),
+    ("5.2", "glm-5.2", True, "关思考，最快"),
+    ("5.2t", "glm-5.2", False, "开思考，慢一些，遇到复杂的更稳"),
+    ("5.1", "glm-5.1", True, "关思考，快"),
+    ("5.1t", "glm-5.1", False, "开思考"),
+]
+model_override: dict[str, object] = {}
 
 
 def current_model() -> str:
-    return model_override.get("model") or MODEL
+    return str(model_override.get("model") or MODEL)
+
+
+def thinking_wanted_off() -> bool:
+    """这一轮要不要压掉思考。她用 /model 选过就听她的；没选过看环境变量。"""
+    if "think_off" in model_override:
+        return bool(model_override["think_off"])
+    return os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in (
+        "on", "1", "true", "enabled")
+
+
+def current_choice_label() -> str:
+    m, off = current_model(), thinking_wanted_off()
+    for name, model, think_off, _ in MODEL_CHOICES:
+        if model == m and think_off == off:
+            return name
+    return f"{m}{'' if off else '+思考'}"
 # 识图模型：她发图片时这一轮自动切到能看图的模型（GLM 5.3 纯文本看不了图）。
 # GLM 的识图模型带 V：glm-4.6v。换别家自行改 OMBRE_VISION_MODEL。
 VISION_MODEL = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
@@ -674,7 +701,7 @@ def _load_state() -> None:
         nudge_count.update({int(k): v for k, v in data.get("nudge_count", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         writing_mode.update({int(k): v for k, v in data.get("writing_mode", {}).items()})
-        model_override.update({str(k): str(v) for k, v in data.get("model_override", {}).items()})
+        model_override.update(dict(data.get("model_override", {})))
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
@@ -690,7 +717,7 @@ async def _telegram_llm_create(**kwargs):
 
     思考档位和网页端同一套：默认压到关（GLM-5.3 这类关不掉的自动降到 low），
     否则隐藏推理会吃光 max_tokens，正文回空 → 上层报 model_empty。"""
-    want_off = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower() not in ("on", "1", "true", "enabled")
+    want_off = thinking_wanted_off()
     level = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower()
     model = kwargs.get("model") or ""
     if level in ("low", "high", "max"):
@@ -765,7 +792,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _trace: list[str] = []
     LAST_TURN.clear()
-    LAST_TURN["model"] = current_model()
+    LAST_TURN["model"] = f"{current_model()}（{'关思考' if thinking_wanted_off() else '开思考'}）"
     LAST_TURN["trace"] = _trace
     _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
     messages = [{"role": "system", "content": _sys}] + list(history)
@@ -1608,26 +1635,29 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/model：看当前模型，或直接换一个。省得为了对比快慢跑去服务器改 env。"""
+    """/model：看当前用的是哪套，或直接换。模型 × 思考一共 5 种组合。"""
     chat_id = update.effective_chat.id
     if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
         return
-    want = (" ".join(context.args).strip() if context.args else "")
+    want = (" ".join(context.args).strip().lower().replace("glm-", "") if context.args else "")
     if not want:
-        lines = [f"现在用的是 {current_model()}", "", "想换就发："]
-        lines += [f"/model {m}" + ("（现在这个）" if m == current_model() else "")
-                  for m in MODEL_CHOICES]
-        lines += ["", "5.3 最聪明但开口前要想一会儿；5.2 关得掉思考，回得快。",
+        cur = current_choice_label()
+        lines = [f"现在用的是 {cur}", ""]
+        lines += [f"/model {n}{'  ← 现在这个' if n == cur else ''}\n   {d}"
+                  for n, _m, _o, d in MODEL_CHOICES]
+        lines += ["", "带 t 的是开思考。5.3 没有关思考那档——它的思考关不掉。",
                   "人设不受影响，换回来随时。"]
         await update.message.reply_text("\n".join(lines))
         return
-    if want not in MODEL_CHOICES:
-        await update.message.reply_text(
-            "没有这个型号。能选的：" + "、".join(MODEL_CHOICES))
-        return
-    model_override["model"] = want
-    _save_state()
-    await update.message.reply_text(f"换成 {want} 了 直接说话试试")
+    for name, model, think_off, desc in MODEL_CHOICES:
+        if want == name:
+            model_override["model"] = model
+            model_override["think_off"] = think_off
+            _save_state()
+            await update.message.reply_text(f"换成 {name} 了（{desc}）\n直接说话试试")
+            return
+    await update.message.reply_text(
+        "没有这个。能选的：" + "、".join(n for n, *_ in MODEL_CHOICES))
 
 
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

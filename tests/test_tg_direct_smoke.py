@@ -414,5 +414,46 @@ def test_model_override_is_used_and_reported(monkeypatch):
     tb._MEM_CACHE.clear()
     asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
     assert used["model"] == "glm-5.2", used         # 设了 → 用它
-    assert tb.LAST_TURN.get("model") == "glm-5.2", tb.LAST_TURN.get("model")
+    assert "glm-5.2" in str(tb.LAST_TURN.get("model")), tb.LAST_TURN.get("model")
+    tb.model_override.clear()
+
+
+def test_model_choices_cover_thinking_combos(monkeypatch):
+    """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
+    tb = _load()
+    names = [n for n, *_ in tb.MODEL_CHOICES]
+    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t"], names
+    # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
+    assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
+
+    seen = {}
+
+    def fake_thinking(model, want_off):
+        seen["want_off"] = want_off
+        return {"thinking": {"type": "disabled"}} if want_off else None
+
+    async def fake_create(**kw):
+        seen["model"] = kw.get("model")
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "thinking_request", fake_thinking)
+    monkeypatch.setattr(tb, "llm", types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=fake_create))))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    tb.model_override.clear()
+    tb.model_override.update({"model": "glm-5.2", "think_off": False})   # 5.2t
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen["model"] == "glm-5.2" and seen["want_off"] is False, seen
+    assert tb.current_choice_label() == "5.2t", tb.current_choice_label()
+
+    tb.model_override.update({"model": "glm-5.2", "think_off": True})    # 5.2
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen["want_off"] is True, seen
+    assert tb.current_choice_label() == "5.2", tb.current_choice_label()
     tb.model_override.clear()
