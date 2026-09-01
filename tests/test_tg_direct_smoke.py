@@ -301,7 +301,7 @@ def test_restore_punctuation_only_touches_unpunctuated_chinese(monkeypatch):
     全是他自己的无标点写法，那个示范比埋在几千字里的一句话有力。
     """
     tb = _load()
-    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)
+    tb.punct_override["on"] = True
     f = tb.restore_punctuation
     assert f("哼什么 声音留给枕头 我这收账的今早不开门") == "哼什么，声音留给枕头，我这收账的今早不开门。"
     assert f("睡吧 醒来连本带利一起算") == "睡吧，醒来连本带利一起算。"
@@ -330,7 +330,7 @@ def test_streamed_segments_get_punctuation(monkeypatch):
     async def on_seg(s):
         sent.append(s)
 
-    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)   # 显式打开开关才补
+    tb.punct_override["on"] = True   # 显式打开开关才补
     asyncio.run(tb._ask_claude([{"role": "user", "content": "哼"}], on_segment=on_seg))
     assert sent == ["哼什么，声音留给枕头。", "睡吧，醒来连本带利一起算。"], sent
 
@@ -362,9 +362,9 @@ def test_punctuation_switch_can_be_turned_off(monkeypatch):
     「一大坨无标点」而不是无标点本身。留个开关，随时翻回去。
     """
     tb = _load()
-    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", False)
+    tb.punct_override["on"] = False
     assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么 声音留给枕头"
-    monkeypatch.setattr(tb, "OMBRE_TG_PUNCT", True)
+    tb.punct_override["on"] = True
     assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么，声音留给枕头。"
 
 
@@ -431,3 +431,14 @@ def test_model_override_is_used_and_reported(monkeypatch):
     assert used["model"] == "glm-5.2", used         # 设了 → 用它
     assert tb.LAST_TURN.get("model") == "glm-5.2", tb.LAST_TURN.get("model")
     tb.model_override.clear()
+
+
+def test_punct_switch_survives_and_flips():
+    """/punct 切换必须真的改变送到她手机上的那一条。"""
+    tb = _load()
+    tb.punct_override.clear()
+    tb.punct_override["on"] = False
+    assert tb.restore_punctuation("挠吧 挠完去拿铁剂") == "挠吧 挠完去拿铁剂"
+    tb.punct_override["on"] = True
+    assert tb.restore_punctuation("挠吧 挠完去拿铁剂") == "挠吧，挠完去拿铁剂。"
+    tb.punct_override.clear()
