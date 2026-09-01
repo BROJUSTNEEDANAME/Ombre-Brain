@@ -1314,57 +1314,49 @@ async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
 
 
-# ── 连发合并：等她说完再回 ──
-# 她连着发三条，他应该攒着、等她停下来当成一整段回一次；而不是挨条各回一次。
-# 做法是给每个 chat 一个「安静了几秒」的计时器：每来一条就重置，真正停下来
-# 才触发生成。⚠️ 不用锁——加锁那次把整个对话卡死过；计时器取消是安全的。
-BATCH_SECONDS = float(os.environ.get("OMBRE_TG_BATCH_SECONDS", "4"))
-_pending_msgs: dict[int, list[str]] = {}
-_pending_meta: dict[int, tuple] = {}
-_batch_tasks: dict[int, object] = {}
+# ── 连发合并：不等待，抢答 ──
+# 她连发时应该合成一轮回，但为此让每条都先等几秒是亏的（她原话：限制太大）。
+# 改成：来了就开始生成；她在他吐出第一个字之前又发了一条，就把这一轮作废、
+# 连着新的一起重新想。单条零延迟，连发照样只回一次。
+# 他已经开口了就不打断——那时候他正在跟她说话，掐掉才奇怪。
+# ⚠️ 不用锁：加锁那次把整个对话卡死过；这里只是取消一个任务，取消是安全的。
+_inflight: dict[int, dict] = {}
 
 
 def _take_pending(chat_id: int) -> list[str]:
-    """取走攒着的消息并停掉计时器（图片路径也要用，保证先后顺序不乱）。"""
-    task = _batch_tasks.pop(chat_id, None)
+    """把还没开口的那一轮作废并取回她说过的话（图片路径也用，保证顺序不乱）。"""
+    st = _inflight.get(chat_id)
+    if not st or st.get("sent"):
+        return []
+    _inflight.pop(chat_id, None)
+    task = st.get("task")
     if task is not None and not task.done():
         task.cancel()
-    _pending_meta.pop(chat_id, None)
-    return _pending_msgs.pop(chat_id, [])
+    history = histories.get(chat_id) or []
+    if history and history[-1].get("content") == st["text"]:
+        history.pop()          # 那条还没被回应，合并后会重新写进去
+    return [st["text"]]
 
 
-async def _queue_message(update, context, chat_id: int, text: str) -> None:
-    _pending_msgs.setdefault(chat_id, []).append(text)
-    _pending_meta[chat_id] = (update, context)
-    old = _batch_tasks.get(chat_id)
-    if old is not None and not old.done():
-        old.cancel()          # 她又打了一条 → 重新等
-    _batch_tasks[chat_id] = asyncio.create_task(_flush_after_quiet(chat_id))
-
-
-async def _flush_after_quiet(chat_id: int) -> None:
-    try:
-        await asyncio.sleep(BATCH_SECONDS)
-    except asyncio.CancelledError:
-        return                # 她还在打，交给新的计时器
-    meta = _pending_meta.get(chat_id)
-    msgs = _take_pending(chat_id)
-    if not msgs or meta is None:
-        return
-    update, context = meta
-    joined = "\n".join(msgs)
+async def _handle_direct(update, context, chat_id: int, text: str) -> None:
+    merged = _take_pending(chat_id)
+    if merged:
+        text = merged[0] + "\n" + text
+        logger.info("她又发了一条，合并重来 chat=%s", chat_id)
     history = histories.setdefault(chat_id, [])
-    history.append({"role": "user", "content": joined})
+    history.append({"role": "user", "content": text})
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
-    if len(msgs) > 1:
-        logger.info("合并了 %d 条消息一起回 chat=%s", len(msgs), chat_id)
-    await _direct_reply(update, context, chat_id, history,
-                        f"telegram:{chat_id}:{update.message.message_id}", joined)
+    state: dict = {"sent": False, "text": text}
+    state["task"] = asyncio.create_task(
+        _direct_reply(update, context, chat_id, history,
+                      f"telegram:{chat_id}:{update.message.message_id}", text,
+                      state=state))
+    _inflight[chat_id] = state
 
 
 async def _direct_reply(update, context, chat_id: int, history: list[dict],
-                        mid: str, sync_text: str) -> None:
+                        mid: str, sync_text: str, state: dict | None = None) -> None:
     """直连快线：说一句发一句。文字消息和图片消息共用同一条路。
 
     图片以前只能走网页大脑那条线，而那条线有 60 秒超时，GLM-5.3 在上面动辄
@@ -1392,6 +1384,8 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     _sent: list[str] = []
 
     async def _emit(seg: str) -> None:
+        if state is not None:
+            state["sent"] = True                   # 已经开口 → 后续消息不许再打断这一轮
         _typing.cancel()                           # 第一句已经发出，不再显示输入中
         await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
         _sent.append(seg)
@@ -1406,6 +1400,9 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
             _ask_claude(history, on_segment=_emit if _stream else None,
                         writing=bool(writing_mode.get(chat_id))),
             timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
+    except asyncio.CancelledError:
+        _typing.cancel()      # 被抢答取消：别把「正在输入」留在她那儿
+        raise
     except asyncio.TimeoutError:
         _typing.cancel()
         LAST_TURN["total_s"] = round(time.time() - t0, 1)
@@ -1475,9 +1472,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await _maybe_handle_management(update, context):
         _save_state()
         return
-    # ── TG 直连（默认）：先攒着，等她说完再一起回 ──
+    # ── TG 直连（默认）：立刻开始回；她抢在他开口前又发一条就合并重来 ──
     if OMBRE_TG_DIRECT:
-        await _queue_message(update, context, chat_id, user_text)
+        await _handle_direct(update, context, chat_id, user_text)
         return
 
     history = histories.setdefault(chat_id, [])  # 本地影子：只给值守任务当参考，上下文以大脑主线为准

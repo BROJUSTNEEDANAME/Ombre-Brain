@@ -6,6 +6,7 @@
 """
 import asyncio
 import sys
+import time
 import types
 import os
 
@@ -458,60 +459,79 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     assert tb.current_choice_label() == "5.2", tb.current_choice_label()
     tb.model_override.clear()
 
-
-def test_rapid_messages_are_merged_into_one_turn(monkeypatch):
-    """她连发几条 → 攒着，等她停下来当成一整段回一次，而不是挨条各回。"""
+def test_burst_cancels_and_merges_before_he_speaks(monkeypatch):
+    """他还没开口时她又发一条 → 作废重来、把两句合并，只回一次。"""
     tb = _load()
-    monkeypatch.setattr(tb, "BATCH_SECONDS", 0.05)
-    seen = {}
-    replies = []
+    started = []
 
-    async def fake_direct(update, context, chat_id, history, mid, sync_text):
-        seen["text"] = sync_text
-        replies.append(sync_text)
+    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+        started.append(sync_text)
+        await asyncio.sleep(0.2)          # 假装在想，一直没开口
+        if state is not None:
+            state["sent"] = True
 
     monkeypatch.setattr(tb, "_direct_reply", fake_direct)
-    tb._pending_msgs.clear()
-    tb._batch_tasks.clear()
+    tb._inflight.clear()
     tb.histories.clear()
-
     upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
     ctx = types.SimpleNamespace(bot=_FakeBot())
 
     async def run():
-        for t in ("修仙", "想吃烤鸡", "55"):
-            await tb._queue_message(upd, ctx, 1, t)
-            await asyncio.sleep(0.01)          # 打字间隔比等待窗口短
-        await asyncio.sleep(0.2)               # 停下来
+        await tb._handle_direct(upd, ctx, 1, "想吃烤鸡")
+        await asyncio.sleep(0.01)         # 还没开口
+        await tb._handle_direct(upd, ctx, 1, "55")
+        await asyncio.sleep(0.4)
 
     asyncio.run(run())
-    assert len(replies) == 1, f"应当只回一次，实际 {len(replies)} 次：{replies}"
-    assert seen["text"] == "修仙\n想吃烤鸡\n55", seen
-    assert tb.histories[1][-1]["content"] == "修仙\n想吃烤鸡\n55"
+    assert started == ["想吃烤鸡", "想吃烤鸡\n55"], started
+    assert tb.histories[1] == [{"role": "user", "content": "想吃烤鸡\n55"}], tb.histories[1]
 
 
-def test_slow_messages_are_not_merged(monkeypatch):
-    """隔得久的两条不该被并进同一轮。"""
+def test_no_delay_for_a_single_message(monkeypatch):
+    """单条消息不许有任何等待——立刻开始。"""
     tb = _load()
-    monkeypatch.setattr(tb, "BATCH_SECONDS", 0.05)
-    replies = []
+    t = {}
 
-    async def fake_direct(update, context, chat_id, history, mid, sync_text):
-        replies.append(sync_text)
+    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+        t["at"] = time.monotonic()
 
     monkeypatch.setattr(tb, "_direct_reply", fake_direct)
-    tb._pending_msgs.clear()
-    tb._batch_tasks.clear()
+    tb._inflight.clear()
     tb.histories.clear()
-
     upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
     ctx = types.SimpleNamespace(bot=_FakeBot())
 
     async def run():
-        await tb._queue_message(upd, ctx, 1, "在吗")
-        await asyncio.sleep(0.2)
-        await tb._queue_message(upd, ctx, 1, "睡了没")
-        await asyncio.sleep(0.2)
+        t["t0"] = time.monotonic()
+        await tb._handle_direct(upd, ctx, 1, "在吗")
+        await asyncio.sleep(0.05)
 
     asyncio.run(run())
-    assert replies == ["在吗", "睡了没"], replies
+    assert t["at"] - t["t0"] < 0.03, t
+
+
+def test_no_interrupt_after_he_started_talking(monkeypatch):
+    """他已经开口就不许打断——那时候他正在跟她说话。"""
+    tb = _load()
+    started = []
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+        started.append(sync_text)
+        if state is not None:
+            state["sent"] = True          # 立刻开口
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._inflight.clear()
+    tb.histories.clear()
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        await tb._handle_direct(upd, ctx, 1, "在吗")
+        await asyncio.sleep(0.02)
+        await tb._handle_direct(upd, ctx, 1, "睡了没")
+        await asyncio.sleep(0.3)
+
+    asyncio.run(run())
+    assert started == ["在吗", "睡了没"], started
