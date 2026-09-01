@@ -535,3 +535,27 @@ def test_no_interrupt_after_he_started_talking(monkeypatch):
 
     asyncio.run(run())
     assert started == ["在吗", "睡了没"], started
+
+
+def test_failure_reason_is_recorded_for_debug(monkeypatch):
+    """调用失败时必须把原因留进 LAST_TURN，否则 /debug 在最需要它的时候是瞎的。"""
+    tb = _load()
+
+    async def boom(**kw):
+        raise RuntimeError("Error code: 400 - thinking not supported with tools")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", boom)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+    tb._MEM_CACHE.clear()
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    update = types.SimpleNamespace(message=msg)
+    context = types.SimpleNamespace(bot=bot)
+    asyncio.run(tb._direct_reply(update, context, 1,
+                                 [{"role": "user", "content": "在吗"}], "mid:1", "在吗"))
+
+    assert "失败" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
+    assert "thinking not supported" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
+    assert msg.replies and "/debug" in msg.replies[0], msg.replies

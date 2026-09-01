@@ -1411,14 +1411,21 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         if not _sent:
             await update.message.reply_text("我这轮卡住了 你再说一句")
         return
-    except Exception:  # noqa: BLE001
+    except Exception as _exc:  # noqa: BLE001
         _typing.cancel()
+        # ⚠️ 失败原因必须留在 /debug 里：探针只记成功路径，等于失败时全瞎——
+        # 她「每条都没生成出来」那次，/debug 只显示记忆检索、一行报错都没有。
+        _why = f"{type(_exc).__name__}: {str(_exc)}"
+        LAST_TURN["total_s"] = round(time.time() - t0, 1)
+        LAST_TURN["result"] = "失败 " + _why[:300]
         logger.exception("直连调用失败（%.1fs）", time.time() - t0)
         if _sent:
             return  # 已经发出去几段了，别再跟一句报错吓她
         if history and history[-1]["role"] == "user":
             history.pop()
-        await update.message.reply_text("这次回复没有生成出来，你的消息我记下了，再戳我一下。")
+        await update.message.reply_text(
+            "这次回复没有生成出来，你的消息我记下了，再戳我一下。\n"
+            "（发 /debug 能看到原因：" + _why[:80] + "）")
         return
     _typing.cancel()
     LAST_TURN["total_s"] = round(time.time() - t0, 1)
