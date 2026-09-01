@@ -1314,6 +1314,55 @@ async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
 
 
+# ── 连发合并：等她说完再回 ──
+# 她连着发三条，他应该攒着、等她停下来当成一整段回一次；而不是挨条各回一次。
+# 做法是给每个 chat 一个「安静了几秒」的计时器：每来一条就重置，真正停下来
+# 才触发生成。⚠️ 不用锁——加锁那次把整个对话卡死过；计时器取消是安全的。
+BATCH_SECONDS = float(os.environ.get("OMBRE_TG_BATCH_SECONDS", "4"))
+_pending_msgs: dict[int, list[str]] = {}
+_pending_meta: dict[int, tuple] = {}
+_batch_tasks: dict[int, object] = {}
+
+
+def _take_pending(chat_id: int) -> list[str]:
+    """取走攒着的消息并停掉计时器（图片路径也要用，保证先后顺序不乱）。"""
+    task = _batch_tasks.pop(chat_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    _pending_meta.pop(chat_id, None)
+    return _pending_msgs.pop(chat_id, [])
+
+
+async def _queue_message(update, context, chat_id: int, text: str) -> None:
+    _pending_msgs.setdefault(chat_id, []).append(text)
+    _pending_meta[chat_id] = (update, context)
+    old = _batch_tasks.get(chat_id)
+    if old is not None and not old.done():
+        old.cancel()          # 她又打了一条 → 重新等
+    _batch_tasks[chat_id] = asyncio.create_task(_flush_after_quiet(chat_id))
+
+
+async def _flush_after_quiet(chat_id: int) -> None:
+    try:
+        await asyncio.sleep(BATCH_SECONDS)
+    except asyncio.CancelledError:
+        return                # 她还在打，交给新的计时器
+    meta = _pending_meta.get(chat_id)
+    msgs = _take_pending(chat_id)
+    if not msgs or meta is None:
+        return
+    update, context = meta
+    joined = "\n".join(msgs)
+    history = histories.setdefault(chat_id, [])
+    history.append({"role": "user", "content": joined})
+    if len(history) > MAX_HISTORY_MESSAGES:
+        del history[: len(history) - MAX_HISTORY_MESSAGES]
+    if len(msgs) > 1:
+        logger.info("合并了 %d 条消息一起回 chat=%s", len(msgs), chat_id)
+    await _direct_reply(update, context, chat_id, history,
+                        f"telegram:{chat_id}:{update.message.message_id}", joined)
+
+
 async def _direct_reply(update, context, chat_id: int, history: list[dict],
                         mid: str, sync_text: str) -> None:
     """直连快线：说一句发一句。文字消息和图片消息共用同一条路。
@@ -1335,6 +1384,10 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
 
     asyncio.create_task(_sync_main_line("me", sync_text, mid))
     t0 = time.time()
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception:  # noqa: BLE001
+        pass
     _typing = asyncio.create_task(_keep_typing())
     _sent: list[str] = []
 
@@ -1422,18 +1475,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if await _maybe_handle_management(update, context):
         _save_state()
         return
+    # ── TG 直连（默认）：先攒着，等她说完再一起回 ──
+    if OMBRE_TG_DIRECT:
+        await _queue_message(update, context, chat_id, user_text)
+        return
+
     history = histories.setdefault(chat_id, [])  # 本地影子：只给值守任务当参考，上下文以大脑主线为准
     history.append({"role": "user", "content": user_text})
     if len(history) > MAX_HISTORY_MESSAGES:
         del history[: len(history) - MAX_HISTORY_MESSAGES]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-
-    # ── TG 直连（默认）：不经过大脑生成管线，几秒回 ──
-    if OMBRE_TG_DIRECT:
-        await _direct_reply(update, context, chat_id, history,
-                            f"telegram:{chat_id}:{update.message.message_id}", user_text)
-        return
 
     # ── 大脑线（OMBRE_TG_DIRECT=0）：网页同一入口，功能全但慢 ──
     # 文字聊天走流式：每攒满一个气泡立刻发——她等的是第一句，不是整场生成。
@@ -1500,6 +1552,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # ── 直连快线：先把图转述成文字，再走和文字消息完全相同的那条路 ──
     if OMBRE_TG_DIRECT:
+        _waiting = _take_pending(chat_id)      # 她刚打的字还没发出去 → 一起带上
+        if _waiting:
+            caption = ("\n".join(_waiting) + ("\n" + caption if caption else "")).strip()
         try:
             _seen = await asyncio.wait_for(_transcribe_image(b64), timeout=90)
         except Exception:  # noqa: BLE001

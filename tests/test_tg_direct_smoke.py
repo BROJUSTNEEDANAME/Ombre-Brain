@@ -457,3 +457,61 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     assert seen["want_off"] is True, seen
     assert tb.current_choice_label() == "5.2", tb.current_choice_label()
     tb.model_override.clear()
+
+
+def test_rapid_messages_are_merged_into_one_turn(monkeypatch):
+    """她连发几条 → 攒着，等她停下来当成一整段回一次，而不是挨条各回。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "BATCH_SECONDS", 0.05)
+    seen = {}
+    replies = []
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text):
+        seen["text"] = sync_text
+        replies.append(sync_text)
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._pending_msgs.clear()
+    tb._batch_tasks.clear()
+    tb.histories.clear()
+
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        for t in ("修仙", "想吃烤鸡", "55"):
+            await tb._queue_message(upd, ctx, 1, t)
+            await asyncio.sleep(0.01)          # 打字间隔比等待窗口短
+        await asyncio.sleep(0.2)               # 停下来
+
+    asyncio.run(run())
+    assert len(replies) == 1, f"应当只回一次，实际 {len(replies)} 次：{replies}"
+    assert seen["text"] == "修仙\n想吃烤鸡\n55", seen
+    assert tb.histories[1][-1]["content"] == "修仙\n想吃烤鸡\n55"
+
+
+def test_slow_messages_are_not_merged(monkeypatch):
+    """隔得久的两条不该被并进同一轮。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "BATCH_SECONDS", 0.05)
+    replies = []
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text):
+        replies.append(sync_text)
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._pending_msgs.clear()
+    tb._batch_tasks.clear()
+    tb.histories.clear()
+
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        await tb._queue_message(upd, ctx, 1, "在吗")
+        await asyncio.sleep(0.2)
+        await tb._queue_message(upd, ctx, 1, "睡了没")
+        await asyncio.sleep(0.2)
+
+    asyncio.run(run())
+    assert replies == ["在吗", "睡了没"], replies
