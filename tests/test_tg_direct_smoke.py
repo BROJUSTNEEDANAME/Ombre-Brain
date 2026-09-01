@@ -559,3 +559,53 @@ def test_failure_reason_is_recorded_for_debug(monkeypatch):
     assert "失败" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
     assert "thinking not supported" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
     assert msg.replies and "/debug" in msg.replies[0], msg.replies
+
+
+def test_manage_setup_does_not_repeat_verbatim_and_lets_her_out(monkeypatch):
+    """托管配置追问不许一字不差地复读，问两次答不上就放她走。
+
+    真实事故：他问「告诉我最晚几点结束、几分钟后第一次查你。」，她回「唔?」，
+    他把同一句原样又发了一遍——读着像坏掉的机器，而且在给出时间之前普通聊天
+    被完全挡住，她没有出口。
+    """
+    tb = _load()
+    sent = []
+
+    async def fake_send(context, chat_id, task, text, event):
+        sent.append(text)
+
+    async def fake_sync(update):
+        return None
+
+    monkeypatch.setattr(tb, "_send_manage_text", fake_send)
+    monkeypatch.setattr(tb, "_sync_manage_user", fake_sync)
+    monkeypatch.setattr(tb, "detect_start", lambda t: "")
+    monkeypatch.setattr(tb, "detect_control", lambda t: "")
+    monkeypatch.setattr(tb, "parse_deadline", lambda t, tz=None: None)
+    monkeypatch.setattr(tb, "parse_interval_minutes", lambda t: None)
+
+    task = {"status": "setup", "goal": "写作业", "id": "t1"}
+
+    class _Store:
+        def get(self, _c): return task
+        def configure(self, _c, **kw): return task
+        def end(self, _c, _r): return {**task, "status": "ended"}
+
+    monkeypatch.setattr(tb, "manage_store", _Store())
+    tb._setup_misses.clear()
+
+    def msg(text):
+        return types.SimpleNamespace(
+            effective_chat=types.SimpleNamespace(id=1),
+            message=types.SimpleNamespace(text=text, message_id=1))
+
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        return [await tb._maybe_handle_management(msg("唔?"), ctx) for _ in range(3)]
+
+    handled = asyncio.run(run())
+    assert len(set(sent)) == len(sent), f"追问重复了：{sent}"
+    assert handled[-1] is False, "问两次还答不上就该放她走，让消息回到正常聊天"
+    assert "算了" in sent[1] or "不想弄" in sent[1], sent
+    assert "先不弄了" in sent[-1], sent

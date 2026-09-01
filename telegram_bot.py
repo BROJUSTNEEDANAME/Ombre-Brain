@@ -1104,6 +1104,20 @@ async def _sync_manage_user(update: Update) -> None:
     )
 
 
+# 托管配置没填全时的追问。⚠️ 绝不能每次都原样重复同一句——她回了句「唔?」
+# 就收到一字不差的同一行，读着像坏掉的机器，人设里也明令禁止复读。
+# 而且必须给她出口：问两次还没答上就放她走，别把普通聊天一直挡在外面。
+_setup_misses: dict[int, int] = {}
+SETUP_MAX_MISSES = 2
+
+
+def _setup_retry_line(task: dict, miss: int) -> str:
+    need = _setup_question(task).rstrip("。？")
+    if miss <= 1:
+        return f"没听懂。{need}——一句话就行，比如「十一点，二十分钟后查我」。"
+    return f"{need}。说个数给我。不想弄就说「算了」。"
+
+
 def _setup_question(task: dict) -> str:
     missing = []
     if not task.get("goal"):
@@ -1197,7 +1211,11 @@ async def _maybe_handle_management(update: Update, context: ContextTypes.DEFAULT
         if task.get("deadline_at") and task.get("interval_minutes"):
             await _activate_management(context, chat_id, task)
         else:
-            await _send_manage_text(context, chat_id, task, _setup_question(task), "setup")
+            _setup_misses.pop(chat_id, None)
+            await _send_manage_text(
+                context, chat_id, task,
+                _setup_question(task) + "\n比如「十一点，二十分钟后查我」。不想弄就说「算了」。",
+                "setup")
         return True
 
     action = detect_control(text)
@@ -1217,9 +1235,21 @@ async def _maybe_handle_management(update: Update, context: ContextTypes.DEFAULT
             interval_minutes=parse_interval_minutes(text),
         )
         if task.get("goal") and task.get("deadline_at") and task.get("interval_minutes"):
+            _setup_misses.pop(chat_id, None)
             await _activate_management(context, chat_id, task)
-        else:
-            await _send_manage_text(context, chat_id, task, _setup_question(task), "setup:retry")
+            return True
+        miss = _setup_misses.get(chat_id, 0) + 1
+        _setup_misses[chat_id] = miss
+        if miss > SETUP_MAX_MISSES:
+            # 放她走：托管作废，这条消息交回给正常聊天，别再把她困在同一句里
+            _setup_misses.pop(chat_id, None)
+            ended = manage_store.end(chat_id, "stopped")
+            await _send_manage_text(context, chat_id, ended or task,
+                                    "行，这个先不弄了。想弄再跟我说「托管我……」。",
+                                    "setup:abandoned")
+            return False
+        await _send_manage_text(context, chat_id, task,
+                                _setup_retry_line(task, miss), "setup:retry")
         return True
 
     if action == "pause":
