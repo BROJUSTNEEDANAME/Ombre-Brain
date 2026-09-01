@@ -654,7 +654,6 @@ def _save_state() -> None:
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
                     "writing_mode": {str(k): v for k, v in writing_mode.items()},
                     "model_override": dict(model_override),
-                    "punct_override": dict(punct_override),
                     "todos": {str(k): v for k, v in todos.items()},
                 },
                 f,
@@ -676,7 +675,6 @@ def _load_state() -> None:
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         writing_mode.update({int(k): v for k, v in data.get("writing_mode", {}).items()})
         model_override.update({str(k): str(v) for k, v in data.get("model_override", {}).items()})
-        punct_override.update({str(k): bool(v) for k, v in data.get("punct_override", {}).items()})
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
@@ -719,28 +717,14 @@ _HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
 _CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
 
 
-# 默认关：她两次明确说喜欢 8/31 凌晨那版（liked/0831-early）的无标点写法。
-# 当初抱怨「没标点」其实是抱怨「一大坨没标点」——那是分气泡没生效导致的，
-# 单换行也切之后已经解决。想要回强制标点：OMBRE_TG_PUNCT=1。
-_PUNCT_DEFAULT_ON = os.environ.get("OMBRE_TG_PUNCT", "1").strip().lower() not in (
-    "0", "off", "false", "no")
-# 她可以在 Telegram 用 /punct 直接切，不用等我改代码。持久化，重启不丢。
-punct_override: dict[str, bool] = {}
-
-
-def punct_on() -> bool:
-    return bool(punct_override.get("on", _PUNCT_DEFAULT_ON))
-
-
 def restore_punctuation(text: str) -> str:
     """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
     这里兜一道：整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」
-    的空格换成逗号并补上句号。她的原话是「聚在一起看太累了，还没标点符号」。
+    的空格换成逗号并补上句号。打标点就是默认行为，没有开关——她要的一直是
+    「有标点，正常说话」；活人感靠短句和参差，不靠去掉标点。
 
     只在两个中文字之间动手：「girl 过来」「铁剂 65mg」这类不受影响；
     本来就有标点的、写文模式的，一律原样返回。"""
-    if not punct_on():
-        return text          # 关掉就完全不管，回到她喜欢的那版无标点写法
     t = (text or "").strip()
     if not t or _HAS_PUNCT_RE.search(t):
         return text
@@ -1606,7 +1590,6 @@ BOT_COMMANDS = [
     ("manage", "托管我…… · 让他盯着你做完一件事"),
     ("stopmanage", "停止托管"),
     ("model", "看／换模型 · 5.3 聪明 5.2 快"),
-    ("punct", "他说话打不打标点"),
     ("debug", "上一轮慢在哪儿"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
@@ -1622,24 +1605,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines += [f"/{name} — {desc}" for name, desc in BOT_COMMANDS]
     lines += ["", "其余的直接说话就行 不用指令。"]
     await update.message.reply_text("\n".join(lines))
-
-
-async def punct_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/punct：他说话打不打标点，她自己一秒切换。
-
-    这事来回反复过三次——她说过「没标点看着累」，也说过喜欢无标点那版。
-    与其我替她猜，不如把开关给她。"""
-    chat_id = update.effective_chat.id
-    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
-        return
-    punct_override["on"] = not punct_on()
-    _save_state()
-    if punct_override["on"]:
-        await update.message.reply_text(
-            "打标点了\n他会写成「挠吧，挠完去拿铁剂。」这样\n想换回去再发一次 /punct")
-    else:
-        await update.message.reply_text(
-            "不打标点了\n他会写成「挠吧 挠完去拿铁剂」这样\n想换回去再发一次 /punct")
 
 
 async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1885,7 +1850,6 @@ def main() -> None:
     app.add_handler(CommandHandler("write", write_cmd))
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("model", model_cmd))
-    app.add_handler(CommandHandler("punct", punct_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))

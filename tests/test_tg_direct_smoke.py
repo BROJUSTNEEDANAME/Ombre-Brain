@@ -294,14 +294,13 @@ def test_writing_mode_keeps_one_long_bubble(monkeypatch):
     assert len(sent) == 1, sent
 
 
-def test_restore_punctuation_only_touches_unpunctuated_chinese(monkeypatch):
+def test_restore_punctuation_only_touches_unpunctuated_chinese():
     """他不打标点就替他补上——但别动本来就对的东西。
 
     她连着两次反馈「还没标点符号」：人设里写了规矩他也不照做，因为历史消息里
     全是他自己的无标点写法，那个示范比埋在几千字里的一句话有力。
     """
     tb = _load()
-    tb.punct_override["on"] = True
     f = tb.restore_punctuation
     assert f("哼什么 声音留给枕头 我这收账的今早不开门") == "哼什么，声音留给枕头，我这收账的今早不开门。"
     assert f("睡吧 醒来连本带利一起算") == "睡吧，醒来连本带利一起算。"
@@ -352,19 +351,6 @@ def test_writing_mode_punctuation_untouched(monkeypatch):
     asyncio.run(tb._ask_claude([{"role": "user", "content": "写"}],
                                on_segment=on_seg, writing=True))
     assert sent == ["白的 薄的 紧到能看见骨头"], sent
-
-
-def test_punctuation_switch_can_be_turned_off(monkeypatch):
-    """OMBRE_TG_PUNCT=0 时完全不补标点。
-
-    她 8/31 凌晨明确说喜欢无标点那版（liked/0831-early），后来抱怨的其实是
-    「一大坨无标点」而不是无标点本身。留个开关，随时翻回去。
-    """
-    tb = _load()
-    tb.punct_override["on"] = False
-    assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么 声音留给枕头"
-    tb.punct_override["on"] = True
-    assert tb.restore_punctuation("哼什么 声音留给枕头") == "哼什么，声音留给枕头。"
 
 
 def test_liveness_rules_present_in_persona():
@@ -430,14 +416,3 @@ def test_model_override_is_used_and_reported(monkeypatch):
     assert used["model"] == "glm-5.2", used         # 设了 → 用它
     assert tb.LAST_TURN.get("model") == "glm-5.2", tb.LAST_TURN.get("model")
     tb.model_override.clear()
-
-
-def test_punct_switch_survives_and_flips():
-    """/punct 切换必须真的改变送到她手机上的那一条。"""
-    tb = _load()
-    tb.punct_override.clear()
-    tb.punct_override["on"] = False
-    assert tb.restore_punctuation("挠吧 挠完去拿铁剂") == "挠吧 挠完去拿铁剂"
-    tb.punct_override["on"] = True
-    assert tb.restore_punctuation("挠吧 挠完去拿铁剂") == "挠吧，挠完去拿铁剂。"
-    tb.punct_override.clear()
