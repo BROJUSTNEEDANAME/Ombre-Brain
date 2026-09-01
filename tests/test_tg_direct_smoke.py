@@ -403,3 +403,31 @@ def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
     asyncio.run(tb._ask_claude([{"role": "user", "content": "你还记得我上次说的吗"}],
                                on_segment=noop))
     assert len(calls) == 2, f"问到过去必须现查，实际没查：{calls}"
+
+
+def test_model_override_is_used_and_reported(monkeypatch):
+    """/model 换的型号必须真的用在请求上，并且 /debug 里报的是同一个。"""
+    tb = _load()
+    used = {}
+
+    async def fake_create(**kw):
+        used["model"] = kw.get("model")
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    tb.model_override.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert used["model"] == tb.MODEL, used          # 没设过 → 用默认
+
+    tb.model_override["model"] = "glm-5.2"
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert used["model"] == "glm-5.2", used         # 设了 → 用它
+    assert tb.LAST_TURN.get("model") == "glm-5.2", tb.LAST_TURN.get("model")
+    tb.model_override.clear()

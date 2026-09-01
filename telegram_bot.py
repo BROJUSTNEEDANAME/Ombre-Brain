@@ -99,6 +99,14 @@ OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
+# 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
+# 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
+MODEL_CHOICES = ["glm-5.3", "glm-5.2", "glm-5.1", "glm-4.6"]
+model_override: dict[str, str] = {}
+
+
+def current_model() -> str:
+    return model_override.get("model") or MODEL
 # 识图模型：她发图片时这一轮自动切到能看图的模型（GLM 5.3 纯文本看不了图）。
 # GLM 的识图模型带 V：glm-4.6v。换别家自行改 OMBRE_VISION_MODEL。
 VISION_MODEL = os.environ.get("OMBRE_VISION_MODEL", "glm-4.6v")
@@ -645,6 +653,7 @@ def _save_state() -> None:
                     "nudge_count": {str(k): v for k, v in nudge_count.items()},
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
                     "writing_mode": {str(k): v for k, v in writing_mode.items()},
+                    "model_override": dict(model_override),
                     "todos": {str(k): v for k, v in todos.items()},
                 },
                 f,
@@ -665,6 +674,7 @@ def _load_state() -> None:
         nudge_count.update({int(k): v for k, v in data.get("nudge_count", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         writing_mode.update({int(k): v for k, v in data.get("writing_mode", {}).items()})
+        model_override.update({str(k): str(v) for k, v in data.get("model_override", {}).items()})
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
     except Exception:  # noqa: BLE001
@@ -763,7 +773,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _trace: list[str] = []
     LAST_TURN.clear()
-    LAST_TURN["model"] = MODEL
+    LAST_TURN["model"] = current_model()
     LAST_TURN["trace"] = _trace
     _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
     messages = [{"role": "system", "content": _sys}] + list(history)
@@ -820,7 +830,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "image_url" for b in c):
                 return True
         return False
-    use_model = VISION_MODEL if _has_img(history) else MODEL
+    use_model = VISION_MODEL if _has_img(history) else current_model()
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
@@ -1587,6 +1597,7 @@ BOT_COMMANDS = [
     ("todo", "今天要做的事 · 早安时他会念给你"),
     ("manage", "托管我…… · 让他盯着你做完一件事"),
     ("stopmanage", "停止托管"),
+    ("model", "看／换模型 · 5.3 聪明 5.2 快"),
     ("debug", "上一轮慢在哪儿"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
@@ -1602,6 +1613,29 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines += [f"/{name} — {desc}" for name, desc in BOT_COMMANDS]
     lines += ["", "其余的直接说话就行 不用指令。"]
     await update.message.reply_text("\n".join(lines))
+
+
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/model：看当前模型，或直接换一个。省得为了对比快慢跑去服务器改 env。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    want = (" ".join(context.args).strip() if context.args else "")
+    if not want:
+        lines = [f"现在用的是 {current_model()}", "", "想换就发："]
+        lines += [f"/model {m}" + ("（现在这个）" if m == current_model() else "")
+                  for m in MODEL_CHOICES]
+        lines += ["", "5.3 最聪明但开口前要想一会儿；5.2 关得掉思考，回得快。",
+                  "人设不受影响，换回来随时。"]
+        await update.message.reply_text("\n".join(lines))
+        return
+    if want not in MODEL_CHOICES:
+        await update.message.reply_text(
+            "没有这个型号。能选的：" + "、".join(MODEL_CHOICES))
+        return
+    model_override["model"] = want
+    _save_state()
+    await update.message.reply_text(f"换成 {want} 了 直接说话试试")
 
 
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1823,6 +1857,7 @@ def main() -> None:
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("write", write_cmd))
     app.add_handler(CommandHandler("debug", debug_cmd))
+    app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
