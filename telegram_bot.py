@@ -722,7 +722,7 @@ _CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
 # 默认关：她两次明确说喜欢 8/31 凌晨那版（liked/0831-early）的无标点写法。
 # 当初抱怨「没标点」其实是抱怨「一大坨没标点」——那是分气泡没生效导致的，
 # 单换行也切之后已经解决。想要回强制标点：OMBRE_TG_PUNCT=1。
-_PUNCT_DEFAULT_ON = os.environ.get("OMBRE_TG_PUNCT", "0").strip().lower() not in (
+_PUNCT_DEFAULT_ON = os.environ.get("OMBRE_TG_PUNCT", "1").strip().lower() not in (
     "0", "off", "false", "no")
 # 她可以在 Telegram 用 /punct 直接切，不用等我改代码。持久化，重启不丢。
 punct_override: dict[str, bool] = {}
@@ -823,9 +823,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
             + str(_mem_block)[:2000]) if _mem_block else "")
-        + "\n\n【这一轮的格式要求·最高优先级】一件事一行，自然发两到四条"
-          "（用换行或 ‖ 隔开），绝不把几件事堆进一大段。短句可以像随手打字那样"
-          "用空格断句、不打逗号句号；问句要有问号。长度要参差，该一个字就一个字。"
+        + "\n\n【这一轮的格式要求·最高优先级】正常打中文标点（逗号、句号、问号），"
+          "不许用空格代替标点。一件事一行，自然发两到四条（用换行或 ‖ 隔开），"
+          "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"
         + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
            "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
         + "\n【闪闪或系统本轮输入从下面开始】"

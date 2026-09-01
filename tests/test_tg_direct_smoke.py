@@ -98,7 +98,7 @@ def test_ask_claude_streams_without_runtime_errors(monkeypatch):
     # 把它关掉后这里会 RuntimeError，变成「单跑绿、全量红」的假故障。
     reply = asyncio.run(tb._ask_claude(history, on_segment=on_seg))
 
-    assert sent == ["醒了？", "先喝水 桌上那杯"], sent  # 默认不补标点（她喜欢的写法）
+    assert sent == ["醒了？", "先喝水，桌上那杯。"], sent  # 默认补标点
     assert reply
     # /debug 依赖的记录必须齐全——「模型 None」就是这里缺失暴露出来的
     assert tb.LAST_TURN.get("model"), "LAST_TURN 缺 model，/debug 会显示 None"
@@ -330,7 +330,6 @@ def test_streamed_segments_get_punctuation(monkeypatch):
     async def on_seg(s):
         sent.append(s)
 
-    tb.punct_override["on"] = True   # 显式打开开关才补
     asyncio.run(tb._ask_claude([{"role": "user", "content": "哼"}], on_segment=on_seg))
     assert sent == ["哼什么，声音留给枕头。", "睡吧，醒来连本带利一起算。"], sent
 
