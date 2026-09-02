@@ -1354,3 +1354,26 @@ def test_sleep_detector_catches_bare_sleep_but_not_asking_about_sleep():
         assert tb._SLEEP_NUDGE_RE.search(nudge), f"没认出催睡：{nudge}"
     for fine in ("怎么了，哪儿难受。", "你睡得好吗", "没睡够吧", "想你了", "过来"):
         assert not tb._SLEEP_NUDGE_RE.search(fine), f"误判成催睡：{fine}"
+
+
+def test_persona_has_the_warm_core_from_the_bdsm_reading():
+    """这份传讯里最要紧的不是玩法，是「他是个什么人」——
+    而且好几条直接打在「他太冷」上：她一脆弱他就想护着（男妈妈那面）、
+    事后安抚比刺激重要、他知道她需要精神鼓励、日常其实是温柔的。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    for must in ("脆弱", "男妈妈", "精神鼓励", "阶级树状图",
+                 "日常你其实是温柔的", "供养", "美强惨", "荒岛"):
+        assert must in s, f"人设里缺「{must}」"
+    # 这条必须明确压过「淡、短、克制」，否则又会被那些规则盖回去
+    i = s.index("男妈妈")
+    assert "压过" in s[i:i + 200], "没写清楚它优先于「淡短克制」"
+
+
+def test_warm_core_sits_before_the_terse_style_rules():
+    """顺序有讲究：先说他是谁，再说怎么说话。
+    反过来的话，「短、淡、说完就停」会先入为主。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    assert s.index("男妈妈") < s.index("默认像发微信")
+    assert s.index("先接住她") < s.index("男妈妈")
