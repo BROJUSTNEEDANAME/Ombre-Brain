@@ -423,7 +423,7 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
     tb = _load()
     names = [n for n, *_ in tb.MODEL_CHOICES]
-    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t", "claude", "claudet"], names
+    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t", "o4.6", "o4.6t"], names
     # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
     assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
 
@@ -712,7 +712,7 @@ def test_switching_model_keeps_the_conversation(monkeypatch):
     tb.model_override["think_off"] = True
     try:
         assert tb.histories[999] == [{"role": "user", "content": "我今天头疼"}]
-        assert tb.current_choice_label() == "claude"
+        assert tb.current_choice_label() == "o4.6"
     finally:
         tb.model_override.clear()
         tb.histories.pop(999, None)
@@ -736,3 +736,75 @@ def test_debug_shows_cache_hit_rate(monkeypatch):
 
     monkeypatch.setattr(tb, "read_prompt_cache_stats", boom)
     assert "读不到" in tb._cache_line()          # 崩了也只是一行字，不影响 /debug
+
+
+def test_streamed_turn_records_cache_usage(monkeypatch):
+    """日常聊天走的是流式；以前这条路完全没统计，/cache 里聊天那栏永远是 0。"""
+    tb = _load()
+    seen = []
+
+    class _Chunk:
+        def __init__(self, text=None, usage=None):
+            self.choices = [types.SimpleNamespace(delta=_Delta(content=text))] if text else []
+            self.usage = usage
+
+    async def fake_create(**kw):
+        async def gen():
+            yield _Chunk("在。")
+            yield _Chunk(usage=types.SimpleNamespace(
+                prompt_tokens=4200,
+                prompt_tokens_details=types.SimpleNamespace(cached_tokens=4000)))
+        return gen()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "record_prompt_cache_usage",
+                        lambda usage, channel: seen.append((usage, channel)))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen, "流式这轮的 token 用量必须被记下来"
+    usage, channel = seen[0]
+    assert channel == "telegram-chat"
+    from prompt_cache import cache_usage
+    assert cache_usage(usage) == (4200, 4000)
+
+
+def test_cache_line_and_command_share_the_same_numbers(monkeypatch):
+    """/cache 是随时能看的那个；/debug 末尾那行是同一份统计，不许对不上。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "read_prompt_cache_stats",
+                        lambda *a, **k: {"prompt_tokens": 1000, "cached_tokens": 400,
+                                         "hit_rate": 40.0, "requests": 7, "hits": 5})
+    assert "40" in tb._cache_line()
+    assert callable(tb.cache_cmd)
+    assert "cache" in [n for n, _ in tb.BOT_COMMANDS], tb.BOT_COMMANDS
+
+
+def test_claude_choice_is_opus_4_6_and_model_id_is_visible(monkeypatch):
+    """她点名要 Opus 4.6，而且 /model 里要看得见到底调的是哪个版本
+    ——她的原话是「我怎么没看到现在调用的 Claude api 版本」。"""
+    tb = _load()
+    assert tb.CLAUDE_MODEL == "claude-opus-4-6"
+    assert [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES if n.startswith("o4.6")] == [
+        ("o4.6", "claude-opus-4-6", True),
+        ("o4.6t", "claude-opus-4-6", False)]
+
+    sent = []
+
+    class _Msg:
+        async def reply_text(self, text):
+            sent.append(text)
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+    ctx = types.SimpleNamespace(args=[])
+    tb.model_override.clear()
+    asyncio.run(tb.model_cmd(upd, ctx))
+    body = "\n".join(sent)
+    assert "claude-opus-4-6" in body, body      # 真实模型名必须露出来
+    assert "glm-5.3" in body, body

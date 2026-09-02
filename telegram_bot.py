@@ -101,7 +101,8 @@ OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
-CLAUDE_MODEL = os.environ.get("OMBRE_CLAUDE_MODEL", "claude-opus-5")
+# 她要的是 Opus 4.6 这一代。换别的版本改这个环境变量就行，代码不用动。
+CLAUDE_MODEL = os.environ.get("OMBRE_CLAUDE_MODEL", "claude-opus-4-6")
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
 # 可选组合：模型 × 思考开关。
@@ -118,8 +119,8 @@ MODEL_CHOICES = [
     # Claude 走 Anthropic 官方接口（claude_provider.py），不是 z.ai。
     # 需要在 .env.apibot 里配 OMBRE_ANTHROPIC_KEY；记忆/人设/指令全都一样，
     # 因为大脑是 REST 调的，跟用哪家模型没关系。
-    ("claude", CLAUDE_MODEL, True, "Claude，关思考，快；能直接看图"),
-    ("claudet", CLAUDE_MODEL, False, "Claude 开思考（自适应），复杂的更稳"),
+    ("o4.6", CLAUDE_MODEL, True, "Opus 4.6，不开思考，快；能直接看图"),
+    ("o4.6t", CLAUDE_MODEL, False, "Opus 4.6 开思考（自适应），复杂的更稳"),
 ]
 model_override: dict[str, object] = {}
 
@@ -928,6 +929,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             # 流式：正文攒到一个气泡边界（‖）就立刻发；工具轮结束时把这轮说的话
             # 也立刻发出去——「回来了就好」这种工具前的正经话，她当场就该收到。
             st = await _create(stream=True)
+            _stream_usage = None    # 流式这条路以前完全没统计，/cache 里日常聊天是空白的
             buf, pending, tc_acc = "", "", {}
             _broke = False
             _checked = 0
@@ -946,6 +948,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                         _broke = True
                         pending = ""      # 半截乱码一个字都不发
                         break
+                _u = getattr(ch, "usage", None)   # OpenAI 兼容流常在最后一块带上
+                if _u is not None:
+                    _stream_usage = _u
                 if not ch.choices:
                     continue
                 d = ch.choices[0].delta
@@ -993,6 +998,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                     logger.warning("被掐断且一个字没说，改成不许用工具再来一轮")
                     continue
                 return "（我这轮卡住了，你再说一句。）"
+            _u = _stream_usage or getattr(st, "usage", None)   # Claude 的挂在 st 上
+            if _u is not None:
+                record_prompt_cache_usage(_u, "telegram-chat")
             if pending.strip():  # 本轮剩下的尾巴：不管是不是工具轮，都当场发
                 await _emit(pending)
                 pending = ""
@@ -1709,6 +1717,7 @@ BOT_COMMANDS = [
     ("stopmanage", "停止托管"),
     ("model", "看／换模型 · 5.3 聪明 5.2 快"),
     ("debug", "上一轮慢在哪儿"),
+    ("cache", "缓存命中率 · 省了多少钱"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
 ]
@@ -1733,9 +1742,9 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     want = (" ".join(context.args).strip().lower().replace("glm-", "") if context.args else "")
     if not want:
         cur = current_choice_label()
-        lines = [f"现在用的是 {cur}", ""]
-        lines += [f"/model {n}{'  ← 现在这个' if n == cur else ''}\n   {d}"
-                  for n, _m, _o, d in MODEL_CHOICES]
+        lines = [f"现在用的是 {cur}（{current_model()}）", ""]
+        lines += [f"/model {n}{'  ← 现在这个' if n == cur else ''}\n   {m} · {d}"
+                  for n, m, _o, d in MODEL_CHOICES]
         lines += ["", "带 t 的是开思考。5.3 没有关思考那档——它的思考关不掉。",
                   "换模型不清上下文：这一屏聊的他还记得，记忆库也是同一个。",
                   "人设不受影响，换回来随时。"]
@@ -1753,7 +1762,7 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             model_override["model"] = model
             model_override["think_off"] = think_off
             _save_state()
-            await update.message.reply_text(f"换成 {name} 了（{desc}）\n直接说话试试")
+            await update.message.reply_text(f"换成 {name} 了\n{model} · {desc}\n直接说话试试")
             return
     await update.message.reply_text(
         "没有这个。能选的：" + "、".join(n for n, *_ in MODEL_CHOICES))
@@ -1773,6 +1782,49 @@ def _cache_line() -> str:
     cached = int(stats.get("cached_tokens", 0) or 0)
     return (f"缓存 命中 {stats.get('hit_rate', 0)}%"
             f"（{cached}/{prompt} token 没重复付钱，共 {stats.get('requests', 0)} 次）")
+
+
+async def cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cache：随时看缓存命中率。
+
+    人设那几千字每轮一模一样，命中了就不按原价重复计费。她问过「我怎么知道
+    我现在的缓存有多少」——/debug 得先跟他说过话才有记录，这个随时能看。
+    统计只记 token 总数，不存任何正文。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    try:
+        stats = read_prompt_cache_stats()
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"读不到统计：{e}")
+        return
+    prompt = int(stats.get("prompt_tokens", 0) or 0)
+    if not prompt:
+        await update.message.reply_text(
+            "还没有统计。跟他聊几句再来——攒够几轮才有数。")
+        return
+    cached = int(stats.get("cached_tokens", 0) or 0)
+    lines = [
+        f"缓存命中 {stats.get('hit_rate', 0)}%",
+        f"{cached} / {prompt} token 没按原价重复付钱",
+        f"共 {stats.get('requests', 0)} 次请求，{stats.get('hits', 0)} 次命中",
+    ]
+    channels = stats.get("channels") or {}
+    if channels:
+        _name = {"telegram-chat": "TG 聊天", "telegram-claude": "TG·Claude",
+                 "telegram-background": "TG 后台", "brain": "网页", "brain-stream": "网页流式"}
+        lines.append("")
+        for key, item in sorted(channels.items()):
+            req = int((item or {}).get("requests", 0) or 0)
+            hit = int((item or {}).get("hits", 0) or 0)
+            if req:
+                lines.append(f"{_name.get(key, key)} {hit}/{req} 次命中")
+    last = stats.get("last") or {}
+    if last.get("prompt_tokens"):
+        lines += ["", f"最近一次 {last.get('hit_rate', 0)}%"
+                      f"（{last.get('cached_tokens', 0)}/{last.get('prompt_tokens', 0)}）"]
+    lines += ["", "命中率越高越省。人设那几千字每轮都一样，是最该被缓存住的部分。"]
+    await update.message.reply_text("\n".join(lines))
 
 
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1996,6 +2048,7 @@ def main() -> None:
     app.add_handler(CommandHandler("write", write_cmd))
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("model", model_cmd))
+    app.add_handler(CommandHandler("cache", cache_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))

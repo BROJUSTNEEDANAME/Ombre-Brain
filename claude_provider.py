@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+import types
 import os
 import re
 from typing import Any
@@ -171,8 +172,15 @@ def convert_tool_choice(choice: Any) -> dict | None:
     return None
 
 
+# 哪些模型不认 thinking={"type":"disabled"}。Opus 4.6 这代文档只写了「支持
+# 自适应思考」，没承诺能关；Opus 5 能关但只在 effort<=high。所以做法是：
+# 先试着关，被拒就记住这个模型、以后直接不带这个字段（和 GLM 那套档位协商同理）。
+_no_disable: set[str] = set()
+
+
 def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
-                 tools=None, tool_choice=None, thinking: bool = False) -> dict:
+                 tools=None, tool_choice=None, thinking: bool = False,
+                 allow_disable: bool = True) -> dict:
     system, msgs = convert_messages(messages)
     kw: dict[str, Any] = {"model": model, "max_tokens": int(max_tokens), "messages": msgs}
     if system:
@@ -186,8 +194,10 @@ def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
         if tc:
             kw["tool_choice"] = tc
     if thinking:
-        # 4.6 以后是自适应思考，不再传 budget_tokens（传了会 400）
+        # 4.6 起是自适应思考，不再传 budget_tokens（传了会 400）
         kw["thinking"] = {"type": "adaptive"}
+    elif allow_disable and model not in _no_disable:
+        kw["thinking"] = {"type": "disabled"}
     return kw
 
 
@@ -243,14 +253,32 @@ def shape_response(message: Any) -> _Resp:
     return _Resp([_Choice(message=_Msg(text, calls))], getattr(message, "usage", None))
 
 
+class _Usage:
+    """翻成 prompt_cache.cache_usage() 认识的形状。
+
+    Anthropic 的字段是 input_tokens / cache_read_input_tokens /
+    cache_creation_input_tokens；缓存命中的那部分算在 cache_read 里，
+    它不计入 input_tokens，所以「这轮一共送进去多少」要三项相加。"""
+
+    def __init__(self, raw):
+        read = int(getattr(raw, "cache_read_input_tokens", 0) or 0)
+        write = int(getattr(raw, "cache_creation_input_tokens", 0) or 0)
+        self.prompt_tokens = int(getattr(raw, "input_tokens", 0) or 0) + read + write
+        self.completion_tokens = int(getattr(raw, "output_tokens", 0) or 0)
+        self.prompt_tokens_details = types.SimpleNamespace(cached_tokens=read)
+
+
 class Stream:
     """把 Anthropic 的事件流翻成上层那个 `async for ch in st` 循环认识的块。
 
     上层只用三样东西：ch.choices[0].delta.content、delta.tool_calls（带
-    index/id/function.name/function.arguments 增量）、以及 await st.close()。"""
+    index/id/function.name/function.arguments 增量）、以及 await st.close()。
+    另外把这轮的 token 用量挂在 .usage 上，好让缓存命中率统计得到流式这条路
+    ——不然 /cache 只统计得到后台调用，她日常聊天那部分全是空白。"""
 
     def __init__(self, raw):
         self._raw = raw
+        self.usage = None
 
     async def close(self) -> None:
         try:
@@ -262,7 +290,16 @@ class Stream:
         idx_of: dict[int, int] = {}
         async for event in self._raw:
             etype = getattr(event, "type", "")
-            if etype == "content_block_start":
+            if etype == "message_start":
+                u = getattr(getattr(event, "message", None), "usage", None)
+                if u is not None:
+                    self.usage = _Usage(u)      # 入参用量（含缓存命中）在开头就给
+            elif etype == "message_delta":
+                u = getattr(event, "usage", None)
+                if u is not None and self.usage is not None:
+                    self.usage.completion_tokens = int(
+                        getattr(u, "output_tokens", 0) or 0)
+            elif etype == "content_block_start":
                 block = getattr(event, "content_block", None)
                 if getattr(block, "type", None) == "tool_use":
                     i = getattr(event, "index", 0) or 0
@@ -288,9 +325,20 @@ class Stream:
 
 
 async def create(*, stream: bool = False, thinking: bool = False, **kwargs):
-    """对外唯一入口：形状和 llm.chat.completions.create 一致。"""
-    kw = build_kwargs(thinking=thinking, **kwargs)
+    """对外唯一入口：形状和 llm.chat.completions.create 一致。
+
+    「关思考」那档会先试 thinking={"type":"disabled"}；这一代模型要是不认，
+    记下来、去掉这个字段重来一次，绝不因为一个参数让整轮说不出话。"""
+    model = kwargs.get("model", "")
     c = client()
-    if stream:
-        return Stream(await c.messages.create(stream=True, **kw))
-    return shape_response(await c.messages.create(**kw))
+    for _attempt in (1, 2):
+        kw = build_kwargs(thinking=thinking, **kwargs)
+        try:
+            if stream:
+                return Stream(await c.messages.create(stream=True, **kw))
+            return shape_response(await c.messages.create(**kw))
+        except Exception as e:  # noqa: BLE001
+            if "thinking" not in str(e).lower() or model in _no_disable or thinking:
+                raise
+            _no_disable.add(model)   # 这代关不掉：以后都不带这个字段
+    raise RuntimeError("thinking 参数协商失败")

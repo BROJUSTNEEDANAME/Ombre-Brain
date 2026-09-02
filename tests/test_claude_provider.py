@@ -145,3 +145,109 @@ def test_missing_key_says_so_instead_of_crashing_later(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OMBRE_ANTHROPIC_KEY"):
         cp.client()
+
+
+def test_stream_reports_token_usage_with_cache_hits():
+    """流式这条路必须报用量，否则 /cache 里日常聊天永远是 0。
+
+    Anthropic 的缓存命中算在 cache_read_input_tokens 里，**不计入**
+    input_tokens——所以「这轮送进去多少」得三项相加，算错了命中率会虚高。"""
+    raw = _RawStream([
+        _blk(type="message_start", message=_blk(usage=_blk(
+            input_tokens=120, cache_read_input_tokens=4000,
+            cache_creation_input_tokens=80, output_tokens=1))),
+        _blk(type="content_block_delta", index=0,
+             delta=_blk(type="text_delta", text="在。")),
+        _blk(type="message_delta", usage=_blk(output_tokens=42)),
+    ])
+    st = cp.Stream(raw)
+
+    async def _drain():
+        async for _ in st:
+            pass
+
+    asyncio.run(_drain())
+    assert st.usage.prompt_tokens == 4200        # 120 + 4000 + 80
+    assert st.usage.prompt_tokens_details.cached_tokens == 4000
+    assert st.usage.completion_tokens == 42
+
+    # 必须能被统计模块直接读懂
+    from prompt_cache import cache_usage
+    assert cache_usage(st.usage) == (4200, 4000)
+
+
+def test_stream_without_usage_events_leaves_usage_none():
+    """没给用量的流不许伪造一个 0，那会把命中率算低。"""
+    st = cp.Stream(_RawStream([
+        _blk(type="content_block_delta", index=0,
+             delta=_blk(type="text_delta", text="嗯")),
+    ]))
+
+    async def _drain():
+        async for _ in st:
+            pass
+
+    asyncio.run(_drain())
+    assert st.usage is None
+
+
+def test_off_thinking_asks_to_disable_then_gives_up_gracefully():
+    """「不开思考」那档先试着关；这代不认就记住，去掉字段重来——
+    绝不因为一个参数让她收不到回复。"""
+    cp._no_disable.discard("claude-opus-4-6")
+    kw = cp.build_kwargs(model="claude-opus-4-6", max_tokens=10,
+                         messages=[{"role": "user", "content": "hi"}], thinking=False)
+    assert kw["thinking"] == {"type": "disabled"}
+
+    calls = []
+
+    class _Msgs:
+        async def create(self, **k):
+            calls.append(k)
+            if "thinking" in k:
+                raise RuntimeError("thinking: disabled is not supported for this model")
+            return types.SimpleNamespace(content=[_blk(type="text", text="在")], usage=None)
+
+    class _C:
+        messages = _Msgs()
+
+    cp._client = _C()
+    try:
+        resp = asyncio.run(cp.create(model="claude-opus-4-6", max_tokens=10,
+                                     messages=[{"role": "user", "content": "hi"}],
+                                     thinking=False))
+    finally:
+        cp._client = None
+    assert resp.choices[0].message.content == "在"
+    assert len(calls) == 2 and "thinking" not in calls[1]   # 第二次不带这个字段
+    assert "claude-opus-4-6" in cp._no_disable              # 记住了，下次不再白试
+    cp._no_disable.discard("claude-opus-4-6")
+
+
+def test_thinking_on_never_gets_downgraded():
+    """开思考那档报错就如实抛出：不重试、不悄悄降级成不思考。
+
+    只断言「抛了个带 thinking 的错」太弱——降不降级它都抛。所以这里数调用次数：
+    开思考只许发一次请求。"""
+    calls = []
+
+    class _Msgs:
+        async def create(self, **k):
+            calls.append(k)
+            raise RuntimeError("thinking: something went wrong")
+
+    class _C:
+        messages = _Msgs()
+
+    cp._no_disable.discard("claude-opus-4-6")
+    cp._client = _C()
+    try:
+        with pytest.raises(RuntimeError, match="thinking"):
+            asyncio.run(cp.create(model="claude-opus-4-6", max_tokens=10,
+                                  messages=[{"role": "user", "content": "hi"}],
+                                  thinking=True))
+    finally:
+        cp._client = None
+    assert len(calls) == 1, f"开思考不该重试，实际发了 {len(calls)} 次"
+    assert calls[0]["thinking"] == {"type": "adaptive"}
+    assert "claude-opus-4-6" not in cp._no_disable   # 这不是「关不掉」，别记错账
