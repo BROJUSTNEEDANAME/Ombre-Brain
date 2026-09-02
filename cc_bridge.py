@@ -354,7 +354,7 @@ def _keepalive() -> None:
     import time
     import urllib.request
 
-    url = os.environ.get("OMBRE_HEALTH_URL", "https://ombre-brain-6e05.onrender.com/health")
+    url = os.environ.get("OMBRE_HEALTH_URL", "http://127.0.0.1:8000/health")
     while True:
         try:
             urllib.request.urlopen(url, timeout=10).read()

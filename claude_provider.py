@@ -1,0 +1,296 @@
+"""接 Anthropic 官方 API 的适配层（/model 里那几个 claude 档位就走这里）。
+
+为什么要这么一层：整个 telegram_bot._ask_claude 是照 OpenAI 那套报文写的
+（messages 里 role=tool、assistant.tool_calls、流式 delta.tool_calls）。
+Claude 的原生报文完全不一样——工具是 content block、工具结果是 user 消息里的
+tool_result、流式是 content_block_delta 事件。
+
+两条路：把 _ask_claude 拆成两套（改动大、气泡分段/去重/掐断那些坑要踩第二遍），
+或者只在**边界**上翻译一次。选后者：这里用 anthropic 官方 SDK 发真正的原生请求，
+只把「进」和「出」翻译成上层已经在用的形状。上层一行不用改，GLM 那条路也不受影响。
+
+⚠️ 不是「用 OpenAI 兼容接口去调 Claude」——那样会丢掉 thinking、缓存这些；
+这里发出去的是 Anthropic 原生请求，翻译只发生在本文件里。
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+from typing import Any
+
+
+def is_claude_model(model: str | None) -> bool:
+    return str(model or "").startswith("claude-")
+
+
+_client = None
+
+
+def client():
+    """懒加载：没选 claude 档位的时候不碰这个 SDK，也不要求装/配 key。"""
+    global _client
+    if _client is None:
+        # 先查 key 再 import：缺 key 是最常见的情况，要给一句人话，
+        # 不是一个 ModuleNotFoundError。
+        key = (
+            os.environ.get("OMBRE_ANTHROPIC_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or ""
+        ).strip()
+        if not key:
+            raise RuntimeError(
+                "没配 Claude 的 key：在 .env.apibot 里加 OMBRE_ANTHROPIC_KEY=..."
+            )
+        try:
+            from anthropic import AsyncAnthropic  # noqa: PLC0415
+        except ModuleNotFoundError as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "没装 anthropic：pip install -r requirements-telegram.txt"
+            ) from exc
+        _client = AsyncAnthropic(
+            api_key=key,
+            timeout=float(os.environ.get("OMBRE_LLM_TIMEOUT", "60")),
+            max_retries=0,
+        )
+    return _client
+
+
+# ---------------------------------------------------------------------------
+# 进：OpenAI 形状 → Anthropic 原生
+# ---------------------------------------------------------------------------
+
+_DATA_URL_RE = re.compile(r"^data:([\w./+-]+);base64,(.*)$", re.S)
+
+
+def _image_block(url: str) -> dict | None:
+    m = _DATA_URL_RE.match(url or "")
+    if m:
+        return {"type": "image",
+                "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)}}
+    if str(url).startswith("http"):
+        return {"type": "image", "source": {"type": "url", "url": url}}
+    return None
+
+
+def _user_content(content: Any) -> list[dict]:
+    """user 消息正文：字符串直接包成 text；图片列表逐块翻译。"""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content.strip() else []
+    out: list[dict] = []
+    for block in content or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            if str(block.get("text") or "").strip():
+                out.append({"type": "text", "text": block["text"]})
+        elif block.get("type") == "image_url":
+            url = (block.get("image_url") or {}).get("url", "")
+            img = _image_block(url)
+            if img:
+                out.append(img)
+    return out
+
+
+def convert_messages(messages: list[dict]) -> tuple[str, list[dict]]:
+    """拆出 system，其余翻成 Anthropic 的 messages。
+
+    Anthropic 的硬性要求：system 单独传、第一条必须是 user、相邻同 role 要合并、
+    工具结果得放在紧跟着的那条 user 消息里。这里一次性满足。"""
+    system_parts: list[str] = []
+    out: list[dict] = []
+
+    def _push(role: str, blocks: list[dict]) -> None:
+        if not blocks:
+            return
+        if out and out[-1]["role"] == role:
+            out[-1]["content"].extend(blocks)
+        else:
+            out.append({"role": role, "content": blocks})
+
+    for msg in messages or []:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system":
+            if isinstance(content, str) and content.strip():
+                system_parts.append(content)
+        elif role == "user":
+            _push("user", _user_content(content))
+        elif role == "assistant":
+            blocks: list[dict] = []
+            if isinstance(content, str) and content.strip():
+                blocks.append({"type": "text", "text": content})
+            for tc in msg.get("tool_calls") or []:
+                fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:  # noqa: BLE001
+                    args = {}
+                blocks.append({
+                    "type": "tool_use",
+                    "id": (tc.get("id") if isinstance(tc, dict) else None) or "call_0",
+                    "name": fn.get("name") or "",
+                    "input": args if isinstance(args, dict) else {},
+                })
+            _push("assistant", blocks)
+        elif role == "tool":
+            _push("user", [{
+                "type": "tool_result",
+                "tool_use_id": msg.get("tool_call_id") or "call_0",
+                "content": str(msg.get("content") or "")[:8000],
+            }])
+
+    while out and out[0]["role"] != "user":   # 第一条必须是 user
+        out.pop(0)
+    return "\n\n".join(system_parts), out
+
+
+def convert_tools(tools: list[dict] | None) -> list[dict]:
+    out = []
+    for t in tools or []:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if not fn:
+            continue
+        out.append({
+            "name": fn.get("name"),
+            "description": fn.get("description") or "",
+            "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return out
+
+
+def convert_tool_choice(choice: Any) -> dict | None:
+    if choice in (None, "", "auto"):
+        return None
+    if choice == "none":
+        return {"type": "none"}
+    if choice == "required":
+        return {"type": "any"}
+    return None
+
+
+def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
+                 tools=None, tool_choice=None, thinking: bool = False) -> dict:
+    system, msgs = convert_messages(messages)
+    kw: dict[str, Any] = {"model": model, "max_tokens": int(max_tokens), "messages": msgs}
+    if system:
+        # 人设是每轮一模一样的长前缀，缓存下来能省一大笔钱、也更快
+        kw["system"] = [{"type": "text", "text": system,
+                         "cache_control": {"type": "ephemeral"}}]
+    tl = convert_tools(tools)
+    if tl:
+        kw["tools"] = tl
+        tc = convert_tool_choice(tool_choice)
+        if tc:
+            kw["tool_choice"] = tc
+    if thinking:
+        # 4.6 以后是自适应思考，不再传 budget_tokens（传了会 400）
+        kw["thinking"] = {"type": "adaptive"}
+    return kw
+
+
+# ---------------------------------------------------------------------------
+# 出：Anthropic 原生 → 上层在用的 OpenAI 形状
+# ---------------------------------------------------------------------------
+
+class _Fn:
+    def __init__(self, name=None, arguments=None):
+        self.name, self.arguments = name, arguments
+
+
+class _ToolCall:
+    def __init__(self, index=0, id=None, name=None, arguments=None):  # noqa: A002
+        self.index, self.id = index, id
+        self.function = _Fn(name, arguments)
+
+
+class _Msg:
+    def __init__(self, content, tool_calls):
+        self.content, self.tool_calls = content, tool_calls
+
+
+class _Choice:
+    def __init__(self, message=None, delta=None):
+        self.message, self.delta = message, delta
+
+
+class _Resp:
+    def __init__(self, choices, usage=None):
+        self.choices, self.usage = choices, usage
+
+
+class _Delta:
+    def __init__(self, content=None, tool_calls=None):
+        self.content, self.tool_calls = content, tool_calls
+
+
+def shape_response(message: Any) -> _Resp:
+    """非流式返回：拼成 resp.choices[0].message.content / .tool_calls。"""
+    text, calls = "", []
+    for i, block in enumerate(getattr(message, "content", None) or []):
+        btype = getattr(block, "type", None)
+        if btype == "text":
+            text += getattr(block, "text", "") or ""
+        elif btype == "tool_use":
+            calls.append(_ToolCall(
+                index=i,
+                id=getattr(block, "id", None) or f"call_{i}",
+                name=getattr(block, "name", "") or "",
+                arguments=json.dumps(getattr(block, "input", None) or {}, ensure_ascii=False),
+            ))
+    return _Resp([_Choice(message=_Msg(text, calls))], getattr(message, "usage", None))
+
+
+class Stream:
+    """把 Anthropic 的事件流翻成上层那个 `async for ch in st` 循环认识的块。
+
+    上层只用三样东西：ch.choices[0].delta.content、delta.tool_calls（带
+    index/id/function.name/function.arguments 增量）、以及 await st.close()。"""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    async def close(self) -> None:
+        try:
+            await self._raw.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def __aiter__(self):
+        idx_of: dict[int, int] = {}
+        async for event in self._raw:
+            etype = getattr(event, "type", "")
+            if etype == "content_block_start":
+                block = getattr(event, "content_block", None)
+                if getattr(block, "type", None) == "tool_use":
+                    i = getattr(event, "index", 0) or 0
+                    idx_of[i] = len(idx_of)
+                    yield _Resp([_Choice(delta=_Delta(tool_calls=[_ToolCall(
+                        index=idx_of[i],
+                        id=getattr(block, "id", None) or f"call_{i}",
+                        name=getattr(block, "name", "") or "",
+                        arguments="",
+                    )]))])
+            elif etype == "content_block_delta":
+                delta = getattr(event, "delta", None)
+                dtype = getattr(delta, "type", "")
+                if dtype == "text_delta":
+                    yield _Resp([_Choice(delta=_Delta(content=getattr(delta, "text", "")))])
+                elif dtype == "input_json_delta":
+                    i = getattr(event, "index", 0) or 0
+                    yield _Resp([_Choice(delta=_Delta(tool_calls=[_ToolCall(
+                        index=idx_of.get(i, i),
+                        arguments=getattr(delta, "partial_json", "") or "",
+                    )]))])
+                # thinking_delta：内心戏，不外推
+
+
+async def create(*, stream: bool = False, thinking: bool = False, **kwargs):
+    """对外唯一入口：形状和 llm.chat.completions.create 一致。"""
+    kw = build_kwargs(thinking=thinking, **kwargs)
+    c = client()
+    if stream:
+        return Stream(await c.messages.create(stream=True, **kw))
+    return shape_response(await c.messages.create(**kw))

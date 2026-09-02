@@ -23,7 +23,7 @@ LLM 用 OpenAI 兼容接口，默认接 z.ai（智谱 GLM），换任意兼容 A
 可选：
     LLM_BASE_URL         接口地址，默认 z.ai：https://api.z.ai/api/paas/v4/
     OMBRE_BOT_MODEL      模型名，默认 glm-5.3（要旧版就设成 glm-5.2 / glm-5.1 / glm-4.6）
-    OMBRE_MCP_URL        大脑地址，默认 https://ombre-brain-6e05.onrender.com/mcp
+    OMBRE_MCP_URL        大脑地址，默认 http://127.0.0.1:8000/mcp（VPS 本机的 brain server）
 
 本地跑：
     pip install -r requirements-telegram.txt
@@ -63,6 +63,7 @@ from writing_style import WRITING_MODE_SYSTEM
 from reply_sanitizer import visible_cut
 from utils import parse_memory_note
 from prompt_cache import inject_volatile_context
+import claude_provider
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
 from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
@@ -99,6 +100,7 @@ OMBRE_MCP_URL = os.environ.get(
     "OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp"
 )
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
+CLAUDE_MODEL = os.environ.get("OMBRE_CLAUDE_MODEL", "claude-opus-5")
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
 # 可选组合：模型 × 思考开关。
@@ -112,6 +114,11 @@ MODEL_CHOICES = [
     ("5.2t", "glm-5.2", False, "开思考，慢一些，遇到复杂的更稳"),
     ("5.1", "glm-5.1", True, "关思考，快"),
     ("5.1t", "glm-5.1", False, "开思考"),
+    # Claude 走 Anthropic 官方接口（claude_provider.py），不是 z.ai。
+    # 需要在 .env.apibot 里配 OMBRE_ANTHROPIC_KEY；记忆/人设/指令全都一样，
+    # 因为大脑是 REST 调的，跟用哪家模型没关系。
+    ("claude", CLAUDE_MODEL, True, "Claude，关思考，快；能直接看图"),
+    ("claudet", CLAUDE_MODEL, False, "Claude 开思考（自适应），复杂的更稳"),
 ]
 model_override: dict[str, object] = {}
 
@@ -720,6 +727,12 @@ async def _telegram_llm_create(**kwargs):
     want_off = thinking_wanted_off()
     level = os.environ.get("OMBRE_GLM_THINKING", "").strip().lower()
     model = kwargs.get("model") or ""
+    if claude_provider.is_claude_model(model):
+        # Anthropic 原生接口：thinking 档位、user_id 那套是 z.ai 专有的，不往这边传。
+        response = await claude_provider.create(thinking=not want_off, **kwargs)
+        if not kwargs.get("stream"):
+            record_prompt_cache_usage(getattr(response, "usage", None), "telegram-claude")
+        return response
     if level in ("low", "high", "max"):
         preset_thinking_level(model, level)
     for _attempt in range(3):
@@ -849,7 +862,10 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             if isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "image_url" for b in c):
                 return True
         return False
-    use_model = VISION_MODEL if _has_img(history) else current_model()
+    # Claude 自己就能看图，不用切走；GLM 纯文本看不了，这轮换 glm-4.6v。
+    use_model = current_model()
+    if _has_img(history) and not claude_provider.is_claude_model(use_model):
+        use_model = VISION_MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
@@ -1720,11 +1736,19 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines += [f"/model {n}{'  ← 现在这个' if n == cur else ''}\n   {d}"
                   for n, _m, _o, d in MODEL_CHOICES]
         lines += ["", "带 t 的是开思考。5.3 没有关思考那档——它的思考关不掉。",
+                  "换模型不清上下文：这一屏聊的他还记得，记忆库也是同一个。",
                   "人设不受影响，换回来随时。"]
         await update.message.reply_text("\n".join(lines))
         return
     for name, model, think_off, desc in MODEL_CHOICES:
         if want == name:
+            # 没配 key 就当场说，别等她发下一句才收到「这次回复没有生成出来」
+            if claude_provider.is_claude_model(model):
+                try:
+                    claude_provider.client()
+                except Exception as e:  # noqa: BLE001
+                    await update.message.reply_text(f"换不了：{e}")
+                    return
             model_override["model"] = model
             model_override["think_off"] = think_off
             _save_state()

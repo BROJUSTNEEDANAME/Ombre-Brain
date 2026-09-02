@@ -6,7 +6,7 @@ Backup every memory bucket from the (remote) brain to local disk.
 用法 / Usage:
     python3 backup_memories.py
     # 或指定地址：
-    OMBRE_BRAIN_URL=https://ombre-brain-6e05.onrender.com python3 backup_memories.py
+    OMBRE_BRAIN_URL=http://127.0.0.1:8000 python3 backup_memories.py
 
 产出 / Output（存到 ./ombre_backup_<日期戳>/）：
     all_buckets.json          —— 所有桶的完整数据（元信息 + 正文），一个大 JSON
@@ -22,7 +22,7 @@ import sys
 import urllib.request
 import urllib.error
 
-BRAIN_URL = os.environ.get("OMBRE_BRAIN_URL", "https://ombre-brain-6e05.onrender.com").rstrip("/")
+BRAIN_URL = os.environ.get("OMBRE_BRAIN_URL", "http://127.0.0.1:8000").rstrip("/")
 TIMEOUT = 60
 
 

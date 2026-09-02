@@ -423,7 +423,7 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
     tb = _load()
     names = [n for n, *_ in tb.MODEL_CHOICES]
-    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t"], names
+    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t", "claude", "claudet"], names
     # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
     assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
 
@@ -641,3 +641,78 @@ def test_free_text_cannot_open_management(monkeypatch):
         message=types.SimpleNamespace(text="一直陪着我好不好呀哥哥", message_id=1))
     ctx = types.SimpleNamespace(bot=_FakeBot())
     assert asyncio.run(tb._maybe_handle_management(upd, ctx)) is False
+
+
+def test_claude_choice_routes_to_anthropic_not_zai(monkeypatch):
+    """选了 claude 档位就必须走 Anthropic 原生接口，不许再打 z.ai。"""
+    tb = _load()
+    import claude_provider as cp
+
+    seen = {}
+
+    async def fake_cp_create(**kw):
+        seen.update(kw)
+        return "ok"
+
+    async def boom(**kw):
+        raise AssertionError("claude 档位不许走 OpenAI 兼容那条路")
+
+    monkeypatch.setattr(cp, "create", fake_cp_create)
+    monkeypatch.setattr(tb.llm.chat.completions, "create", boom, raising=False)
+
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    tb.model_override["think_off"] = False          # claudet
+    try:
+        out = asyncio.run(tb._telegram_llm_create(
+            model=tb.CLAUDE_MODEL, max_tokens=100,
+            messages=[{"role": "user", "content": "在吗"}]))
+    finally:
+        tb.model_override.clear()
+    assert out == "ok"
+    assert seen["thinking"] is True                 # 带 t = 开思考
+    assert seen["model"] == tb.CLAUDE_MODEL
+
+
+def test_claude_reads_images_without_switching_to_glm_vision(monkeypatch):
+    """Claude 自己能看图；不许再切去 glm-4.6v（切了就丢人设、也白花钱）。"""
+    tb = _load()
+    used = {}
+
+    async def fake_create(**kw):
+        used["model"] = kw.get("model")
+        return _fake_stream(["看到了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    history = [{"role": "user", "content": [
+        {"type": "text", "text": "看这个"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}]}]
+
+    tb.model_override["model"] = "glm-5.3"
+    asyncio.run(tb._ask_claude(list(history), on_segment=noop))
+    assert used["model"] == tb.VISION_MODEL          # GLM 看不了图 → 切
+
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    asyncio.run(tb._ask_claude(list(history), on_segment=noop))
+    tb.model_override.clear()
+    assert used["model"] == tb.CLAUDE_MODEL          # Claude 不切
+
+
+def test_switching_model_keeps_the_conversation(monkeypatch):
+    """换模型不等于开新窗口：histories 一个字都不许被清掉。"""
+    tb = _load()
+    tb.histories[999] = [{"role": "user", "content": "我今天头疼"}]
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    tb.model_override["think_off"] = True
+    try:
+        assert tb.histories[999] == [{"role": "user", "content": "我今天头疼"}]
+        assert tb.current_choice_label() == "claude"
+    finally:
+        tb.model_override.clear()
+        tb.histories.pop(999, None)
