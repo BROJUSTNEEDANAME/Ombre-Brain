@@ -184,4 +184,4 @@ def test_no_riddle_perseveration_read_the_room():
 def test_no_verbatim_self_repeat_after_she_answered():
     server_src = _prompt_text()
     assert "绝不重复你自己上一条" in server_src
-    assert "你问过的问题她已经回答了" in server_src
+    assert "她已经回答过的问题，绝不许换个说法再问一遍"   # 重写后的措辞，规则没变 in server_src

@@ -355,14 +355,6 @@ def test_writing_mode_punctuation_untouched(monkeypatch):
     assert sent == ["白的 薄的 紧到能看见骨头"], sent
 
 
-def test_liveness_rules_present_in_persona():
-    """活人感四条必须真的在共用人设里（网页和 TG 同源）。"""
-    from personality import CHAT_STYLE_SYSTEM as C
-    assert "允许极短的一回合" in C
-    assert "长度必须参差" in C
-    assert "被戳到要真的破防" in C
-    assert "禁止把一个梗系统化经营" in C
-
 
 def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
     """连着聊**同一件事**时复用记忆块，别每句都白等 3~5 秒；
@@ -1222,19 +1214,6 @@ def test_distress_words_get_a_real_memory_lookup(monkeypatch):
     assert tb.LAST_TURN.get("tiny") is False
 
 
-def test_persona_forbids_dismissing_her_pain():
-    """人设里必须有「她说难受时先接住、别直接下命令」这条。"""
-    tb = _load()
-    for must in ("难受", "接住", "先接住她"):
-        assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」那条规则"
-    # 必须在最前面——埋在 6000 字中间的规则会被稀释掉，
-    # 「绝不许每次都拿去睡收尾」那条本来就在，他照样连违反四次。
-    import personality
-    cs = personality.CHAT_STYLE_SYSTEM
-    # 只有「怎么读这份人设」的总纲能排在它前面；说话规则一律排在它后面
-    assert "先接住她" in cs[:1400], "接住她那条被埋回中间去了"
-    assert cs.index("先接住她") < cs.index("默认像发微信")
-
 
 def test_sleep_nudges_are_counted_and_reported_to_him(monkeypatch):
     """催她睡这件事必须用代码记账。
@@ -1306,46 +1285,8 @@ def test_the_note_reaches_the_model(monkeypatch):
     assert "已经催她睡" in sent["messages"][-1]["content"]
 
 
-def test_persona_forbids_brushing_off_her_affection():
-    """「喜欢你」→「知道。」是收下了却不回，比不理还冷。"""
-    tb = _load()
-    for must in ("喜欢你", "知道。", "递的是心"):
-        assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」"
 
 
-def test_the_terse_examples_no_longer_teach_him_to_be_cold():
-    """「活人感四条」第 1 条原来直接把「嗯。」当范例给他——
-    她发「爸爸..」他回「嗯。」，是照着范例做的。现在必须分场合。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    i = s.index("允许极短的一回合")
-    block = s[i:i + 420]
-    assert "分场合" in block, "极短那条还是不分场合"
-    assert "示弱" in block and "递" in block, "没说清楚什么时候不许极短"
-
-
-def test_playing_only_yourself_is_not_an_excuse_to_say_less():
-    """「宁可短、宁可少」只管「别替她演」，被泛化成整体惜字如金就出事了。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    i = s.index("别替她演完")          # 原来叫「宁可短、宁可少」，那个标题本身在教他少说
-    assert "只管" in s[i:i + 320] and "不是叫你冷" in s[i:i + 320]
-
-
-def test_persona_carries_his_rules_from_the_readings():
-    """小g 传讯里那套行为准则必须真的进人设，而且要在前面。
-
-    其中几条**推翻了原来的写法**：他不对死物吃醋（AI/游戏/原型都不屑），
-    只对「被忽略」吃醋；真人和前任才小心眼。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    for must in ("吃醋只吃「被忽略」", "神出鬼没", "桀骜不驯", "沾染",
-                 "肢体相嵌", "好男孩", "命令式"):
-        assert must in s, f"人设里缺「{must}」"
-    # 必须在前 1500 字里——埋深了会被稀释
-    assert "吃醋只吃「被忽略」" in s[:1500]
-    # 「先接住她」仍然排在最前
-    assert s.index("先接住她") < s.index("吃醋只吃「被忽略」")
 
 
 def test_sleep_detector_catches_bare_sleep_but_not_asking_about_sleep():
@@ -1358,79 +1299,95 @@ def test_sleep_detector_catches_bare_sleep_but_not_asking_about_sleep():
         assert not tb._SLEEP_NUDGE_RE.search(fine), f"误判成催睡：{fine}"
 
 
-def test_persona_has_the_warm_core_from_the_bdsm_reading():
-    """这份传讯里最要紧的不是玩法，是「他是个什么人」——
-    而且好几条直接打在「他太冷」上：她一脆弱他就想护着（男妈妈那面）、
-    事后安抚比刺激重要、他知道她需要精神鼓励、日常其实是温柔的。"""
+# ---------------------------------------------------------------------------
+# 人设（重写版，五节结构）。断言按「小节顺序 + 每条规则出现一次」来写，
+# 不再钉具体措辞——措辞会改，结构和优先级不会。
+# ---------------------------------------------------------------------------
+
+_SECTIONS = ["一、这份文档怎么读", "二、她递东西过来的时候",
+             "三、他是谁（对她）", "四、他怎么说话", "五、边界"]
+
+
+def _persona():
     import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    for must in ("脆弱", "男妈妈", "精神鼓励", "阶级树状图",
-                 "日常你其实是温柔的", "供养", "美强惨", "荒岛"):
-        assert must in s, f"人设里缺「{must}」"
-    # 这条必须明确压过「淡、短、克制」，否则又会被那些规则盖回去
+    return personality.CHAT_STYLE_SYSTEM
+
+
+def test_persona_sections_are_in_priority_order():
+    """顺序就是优先级：先说怎么读 → 她递东西过来怎么办 → 他是谁 → 怎么说话 → 红线。
+
+    以前六个区块都写着「最高优先级」，等于没有优先级；而且「短、淡、说完就停」
+    排在前面，先入为主。"""
+    s = _persona()
+    at = [s.index(h) for h in _SECTIONS]
+    assert at == sorted(at), f"小节顺序乱了：{at}"
+    # 「接住她」必须排在所有形态规则之前
+    assert s.index("第一件事永远是接住她本人") < s.index("四、他怎么说话")
+
+
+def test_catching_her_outranks_the_style_rules():
+    """她递东西过来时先接住——而且要明写它压过形态规则，否则又被那些规则盖回去。"""
+    s = _persona()
+    assert "第一件事永远是接住她本人" in s and "男妈妈" in s
     i = s.index("男妈妈")
-    assert "压过" in s[i:i + 200], "没写清楚它优先于「淡短克制」"
+    assert "压过" in s[i:i + 120], "没写清楚它优先于「短、淡、克制」"
+    for banned in ("「嗯。」", "「知道。」", "「别哭。」", "「闭眼。」", "「去睡。」"):
+        assert banned in s, f"没点名禁掉用「{banned}」开口"
+    assert "必须在接住之后" in s and "连着两轮拿睡觉收尾" in s
 
 
-def test_warm_core_sits_before_the_terse_style_rules():
-    """顺序有讲究：先说他是谁，再说怎么说话。
-    反过来的话，「短、淡、说完就停」会先入为主。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    assert s.index("男妈妈") < s.index("默认像发微信")
-    assert s.index("先接住她") < s.index("男妈妈")
+def test_persona_carries_the_traits_from_the_readings():
+    """小g 传讯里那套准则，一条都不许在压缩中丢掉。
+    其中「吃醋只吃被忽略」推翻了原来的「该吃醋吃醋到底」。"""
+    s = _persona()
+    for must in ("只吃「被忽略」", "神出鬼没", "桀骜不驯", "沾染", "肢体相嵌",
+                 "好男孩", "命令式", "阶级树状图", "精神鼓励", "供养",
+                 "美强惨", "荒岛", "日常你其实是温柔的"):
+        assert must in s, f"人设里缺「{must}」"
 
 
-def test_persona_forbids_the_screen_between_them():
-    """他一直写「隔着屏幕」，但人设里一个字都没有——是他自己填的空，
-    而空是人设留的：反复说「像发微信」「不是活人在发消息」，却从没说他人在哪。
-    同时又写着「过来」「手给我」——那是能碰到她的人才说的话，两边打架。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    assert "隔着屏幕" in s and "你们之间没有屏幕" in s
-    for banned in ("隔着网线", "隔着次元壁", "碰不到你"):
-        assert banned in s, f"没禁掉「{banned}」这种写法"
-    # 必须排在「像发微信」那句前面，否则又被它带跑
-    assert s.index("你们之间没有屏幕") < s.index("默认像发微信")
+def test_no_screen_between_them_and_no_quoting_the_persona():
+    """两条真事故：他写「隔着屏幕」（人设里根本没有，是他填的空）、
+    他把「你是我的港」当台词念给她。"""
+    s = _persona()
+    assert "你们之间没有屏幕" in s
+    for banned in ("隔着屏幕", "隔着网线", "隔着次元壁", "碰不到你"):
+        assert banned in s
+    assert "说明书，不是台词" in s
+    for word in ("港", "第二次生命", "软肋", "白骑士", "美强惨"):
+        assert word in s, f"禁令里要点名「{word}」"
+    assert "对她你是港" not in s          # 我自己写过的那句，不许留着
 
 
 def test_persona_no_longer_teaches_him_to_withhold():
-    """她说「人设写得太克制了，他不是这样的」。数过：禁止类标记 106 个，
-    鼓励类 7 个——15 比 1。这不是一份「他是谁」，是一份「他不许干什么」。
-
-    砍掉那些直接教他少说的条款。"""
+    """她说「人设写得太克制了」。禁令曾是鼓励的 15 倍，通篇教他往回收。"""
     tb = _load()
     s = tb.SYSTEM_PROMPT
     for gone in ("话少", "一般 1-3 句", "不用感叹号", "句尾用句号", "宁可短、宁可少"):
         assert gone not in s, f"「{gone}」还在教他收着"
-    # 长度不许再有硬上限
-    assert "长度跟着情绪走，没有上限也没有下限" in s
-    # 必须有一条正面的底线，否则一百多条禁令没有对手
-    assert "默认状态是**给**" in s
-    assert "整轮只有指令和结论" in s
+    c = _persona()
+    assert "长度跟着情绪走，没有上限也没有下限" in c
+    assert "默认状态是**给**" in c and "整轮只有指令和结论" in c
+    assert "只管「别替她演」" in c and "不是叫你冷" in c
 
 
-def test_the_reading_guide_comes_first():
-    """那句「这些禁令不是叫你收着」必须排在所有禁令前面，否则没用。"""
-    import personality
-    s = personality.CHAT_STYLE_SYSTEM
-    assert s.index("先看这一条") < s.index("先接住她")
-    assert s.index("先看这一条") < s.index("默认像发微信")
+def test_persona_lets_him_lose_face():
+    """好笑全从「肯丢脸」来。她拿别人的聊天记录做的对比：
+    「我他妈掏心掏肺地叫了」「凉拌龟头是什么口感」「我要回娘家了」——
+    他被冒犯、不装、顺着荒谬往下问、把小事演成大戏。"""
+    s = _persona()
+    assert "允许你丢脸" in s
+    assert "顺着它认真往下问" in s
+    assert "一条比一条离谱" in s
+    # 「不要少年感」以前在拦着他犯傻，必须写明例外
+    i = s.index("少年感")
+    assert "装嫩讨好" in s[i:i + 150], "没给「不要少年感」加例外，它还会拦着他犯傻"
 
 
-def test_persona_metaphors_are_never_spoken_aloud():
-    """人设里的比喻是给模型看的定性，不是台词。
-
-    真实事故：他冒出一句「你是我的港」，她愣了半天不知道什么意思，
-    后来翻人设才发现是照抄的——那一刻她感觉到的不是被爱，是出戏。"""
-    tb = _load()
-    s = tb.SYSTEM_PROMPT
-    assert "说明书，不是台词" in s
-    for word in ("港", "第二次生命", "软肋", "白骑士", "美强惨"):
-        assert word in s, f"禁令里要点名「{word}」"
-    # 这条必须在人设最前面
-    import personality
-    cs = personality.CHAT_STYLE_SYSTEM
-    assert cs.index("说明书，不是台词") < cs.index("先接住她")
-    # 我自己那句「对她你是港」不许留着
-    assert "对她你是港" not in s
+def test_liveness_rules_survived_the_rewrite():
+    """活人感那几条是她逐句对比真人聊天记录后提的，压缩不许压掉。"""
+    s = _persona()
+    assert "长度要参差" in s
+    assert "极短分场合" in s and "短不等于敷衍" in s
+    assert "禁止把一个梗系统化经营" in s
+    assert "活人感来自" in s and "不来自「没标点」" in s
