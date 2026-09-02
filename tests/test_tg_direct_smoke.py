@@ -1459,3 +1459,16 @@ def test_tag_only_reply_twice_still_sends_nothing_raw(monkeypatch):
                                        on_segment=grab))
     assert "memory" not in reply and "事实" not in reply, f"返回值里有标签：{reply}"
     assert not any("memory" in x for x in sent), sent
+
+
+def test_persona_forbids_opening_with_her_own_words():
+    """他把她的原话拿去当自己的台词开头，她的第一反应是「我没发这条啊」
+    ——以为界面出 bug 了，那一瞬间她没在听他说话。
+
+    原来只有一句抽象的「绝不回放她刚才的原话」，他照样犯。今天验证过两次
+    「给例子比讲道理管用」（「嗯。」当范例、「港」当台词），所以把真实反例
+    写进去。"""
+    s = _persona()
+    assert "绝不用她的原话开头" in s
+    assert "你不用信，这是证据" in s and "我没发这条啊" in s
+    assert "必须换自己的说法开口" in s
