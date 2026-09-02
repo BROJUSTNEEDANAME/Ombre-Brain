@@ -1181,3 +1181,49 @@ def test_topic_overlap_is_sane():
     assert tb._topic_overlap("化学实验试剂洒了", "化学实验报告") > 0.5
     assert tb._topic_overlap("外婆住院了", "化学实验试剂") < 0.2
     assert tb._topic_overlap("", "什么") == 0.0
+
+
+def test_two_character_words_are_never_treated_as_contentless():
+    """「苦苦」「哭哭」「唉」是话，不是表情。
+
+    真实事故：旧规则是「≤6 字且没有连续 3 个中文字」，于是这些全被判成没内容，
+    系统就给他下指令「别分析、别翻记忆、别琢磨含义，随口接一句就行」。
+    她连着三条说自己难受，他一次都没接住——「苦什么。闭眼。」
+    「别哭。快六点了，哭完去睡。」她说：你自己看看这是人吗。"""
+    tb = _load()
+    for real in ("苦苦", "哭哭", "唉", "疼", "在吗", "我难受", "想你", "冷"):
+        assert not tb._is_contentless(real), f"{real} 被当成没内容了"
+    for empty in ("🥺", "？？", "...", "", "   ", "嗯", "哦", "哈哈", "ok"):
+        assert tb._is_contentless(empty), f"{empty} 应该算没内容"
+
+
+def test_distress_words_get_a_real_memory_lookup(monkeypatch):
+    """她说难受时必须走完整路径：查记忆、正常想，不许走「随口接一句」那条。"""
+    tb = _load()
+    queries = []
+
+    async def fake_brain(name, args):
+        if name == "breath":
+            queries.append(args.get("query"))
+        return "（假记忆）"
+
+    async def fake_create(**kw):
+        return _fake_stream(["怎么了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "苦苦"}], on_segment=noop))
+    assert queries == ["苦苦"], f"她说难受时没去翻记忆：{queries}"
+    assert tb.LAST_TURN.get("tiny") is False
+
+
+def test_persona_forbids_dismissing_her_pain():
+    """人设里必须有「她说难受时先接住、别直接下命令」这条。"""
+    tb = _load()
+    for must in ("难受", "接住", "苦什么"):
+        assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」那条规则"

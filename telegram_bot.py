@@ -827,6 +827,30 @@ async def _save_memory_note(note: str) -> None:
             logger.warning("后台存记忆失败：%s", content[:30])
 
 
+# 「真的没内容」的判定。⚠️ 只认**纯表情/纯标点**和几个语气词，绝不按字数判。
+#
+# 真实事故：原来的规则是「≤6 字且没有连续 3 个中文字」，于是「苦苦」「哭哭」
+# 「唉」全被判成没内容，系统就给他下指令「别分析、别翻记忆、别琢磨含义，
+# 随口接一句就行」。她连着三条说自己难受，他一次都没接住——
+# 「苦什么。闭眼。」「别哭。快六点了，哭完去睡。」她说：你自己看看这是人吗。
+#
+# 两个字的中文是话，不是表情。宁可多想一轮，也不能把她的难受当水话。
+_FILLER_ONLY = {
+    "嗯", "嗯嗯", "嗯呢", "哦", "噢", "喔", "呃",
+    "好", "好的", "好吧", "行", "收到", "ok", "okay", "哈", "哈哈", "hhh",
+}
+
+
+def _is_contentless(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if t.lower() in _FILLER_ONLY:
+        return True
+    # 一个中文字、一个字母、一个数字都没有 → 纯表情/纯标点
+    return not re.search(r"[\u4e00-\u9fffa-zA-Z0-9]", t)
+
+
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False,
                       model: str | None = None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
@@ -850,7 +874,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     # 纯表情/极短消息（🥺、❤️、"?"、"嗯"）：没有内容可分析，翻记忆是白翻，
     # 他还会为了「这是什么意思」想很久，最后超时被掐 → 她收到「我这轮卡住了」。
     # 这种直接跳过记忆检索，并明说别琢磨，随口接住就行。
-    _tiny = len(_last_text.strip()) <= 6 and not re.search(r"[\u4e00-\u9fff a-zA-Z]{3,}", _last_text)
+    _tiny = _is_contentless(_last_text)
     LAST_TURN["input_len"] = len(_last_text)
     LAST_TURN["tiny"] = _tiny
     _mem_t = time.time()
@@ -897,8 +921,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         + "\n\n【这一轮的格式要求·最高优先级】正常打中文标点（逗号、句号、问号），"
           "不许用空格代替标点。一件事一行，自然发两到四条（用换行或 ‖ 隔开），"
           "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"
-        + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
-           "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
+        + ("\n\n【她这条只有表情或语气词，没有具体内容】就像人收到一个表情那样，"
+           "随口接住就行，一到两条短消息。但她要是在示弱或撒娇，别冷着她。" if _tiny else "")
         + "\n【以上是系统背景，不是闪闪说的话，别复述、别回应它本身】"
     )
     messages = append_volatile_context(messages, dynamic_context)
