@@ -948,3 +948,68 @@ def test_multi_bubble_think_block_never_reaches_her(monkeypatch):
     for leaked in ("撒娇", "占有欲", "我应该", "think", "0.90", "嫉妒"):
         assert leaked not in body, f"思考漏出来了：{leaked} / {sent}"
     assert "八百多人看了" in body and "该吃醋的是我" in body, sent
+
+
+def test_stale_cmd_lists_and_undoes(monkeypatch, tmp_path):
+    """/stale 要能看见被沉底的记忆，也要能一句话恢复。
+    自动沉底没有账、不能撤销，就是一个悄悄吞记忆的黑箱。"""
+    tb = _load()
+    import stale_ledger as sl
+
+    ledger = tmp_path / "stale_ledger.json"
+    monkeypatch.setattr(sl, "ledger_path", lambda p=None: ledger)
+    sl.record([{"old_id": "old1", "old_name": "旧课表",
+                "reason": "课表改了", "confidence": 0.93}])
+
+    sent, traced = [], []
+
+    class _Msg:
+        async def reply_text(self, text):
+            sent.append(text)
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+
+    async def fake_trace(name, args):
+        traced.append((name, args))
+        return "ok"
+
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_trace)
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=[])))
+    assert "旧课表" in sent[0] and "old1" in sent[0]
+    assert "沉底不是删除" in sent[0]          # 必须说清楚不是删除
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=["撤销", "old1"])))
+    assert traced == [("trace", {"bucket_id": "old1", "resolved": 0})]
+    assert sl.pending() == []                # 撤销后不再出现在待办里
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=[])))
+    assert "没有被判过期的记忆" in sent[-1]
+
+
+def test_stale_cmd_never_deletes(monkeypatch, tmp_path):
+    """这条命令永远不许发出 delete —— 沉底和删除是两件事。"""
+    tb = _load()
+    import stale_ledger as sl
+    monkeypatch.setattr(sl, "ledger_path", lambda p=None: tmp_path / "l.json")
+    sl.record([{"old_id": "old1", "old_name": "x"}])
+
+    calls = []
+
+    class _Msg:
+        async def reply_text(self, text):
+            pass
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+
+    async def fake_trace(name, args):
+        calls.append(args)
+        return "ok"
+
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_trace)
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=["撤销", "old1"])))
+    assert all("delete" not in a for a in calls), calls

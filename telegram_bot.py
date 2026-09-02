@@ -64,6 +64,7 @@ from reply_sanitizer import strip_hidden_stream, visible_cut
 from utils import parse_memory_note
 from prompt_cache import append_volatile_context
 import claude_provider
+import stale_ledger
 from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
@@ -1732,6 +1733,7 @@ BOT_COMMANDS = [
     ("model", "看／换模型 · 5.3 聪明 5.2 快"),
     ("debug", "上一轮慢在哪儿"),
     ("cache", "缓存命中率 · 省了多少钱"),
+    ("stale", "哪些记忆因为过期被沉底了 · 可撤销"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
 ]
@@ -1839,6 +1841,44 @@ async def cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines += ["", f"最近一次 {last.get('hit_rate', 0)}%"
                       f"（{last.get('cached_tokens', 0)}/{last.get('prompt_tokens', 0)}）"]
     lines += ["", "命中率越高越省。人设那几千字每轮都一样，是最该被缓存住的部分。"]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def stale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/stale：列出被「矛盾检测」判为过期、已经沉底的记忆；/stale 撤销 <ID> 恢复。
+
+    自动沉底如果没有账、不能撤销，就是一个会悄悄吞记忆的黑箱。
+    沉底不是删除——桶还在，权重降到底，关键词照样捞得回来。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    args = [a for a in (context.args or []) if a.strip()]
+    if args and args[0] in ("撤销", "恢复", "undo"):
+        if len(args) < 2:
+            await update.message.reply_text("要带上 ID：/stale 撤销 <记忆ID>")
+            return
+        bucket_id = args[1].strip()
+        try:
+            await _call_brain_tool("trace", {"bucket_id": bucket_id, "resolved": 0})
+        except Exception as e:  # noqa: BLE001
+            await update.message.reply_text(f"恢复失败：{e}")
+            return
+        stale_ledger.mark_undone(bucket_id)
+        await update.message.reply_text(f"{bucket_id} 恢复了 它会重新参与浮现。")
+        return
+
+    items = stale_ledger.pending(limit=10)
+    if not items:
+        await update.message.reply_text(
+            "没有被判过期的记忆。\n"
+            "（矛盾检测只在新记忆改写了旧事实时才动手，比如课表变了、搬家了。）")
+        return
+    lines = ["这些记忆被判断成「已经被新的取代」，已沉底：", ""]
+    for e in items:
+        lines.append(f"· {e.get('old_name') or e.get('old_id')}")
+        lines.append(f"  {e.get('reason')}（把握 {e.get('confidence')}）")
+        lines.append(f"  /stale 撤销 {e.get('old_id')}")
+    lines += ["", "沉底不是删除——桶还在，只是不再主动浮现，提到关键词照样捞得回来。"]
     await update.message.reply_text("\n".join(lines))
 
 
@@ -2064,6 +2104,7 @@ def main() -> None:
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("cache", cache_cmd))
+    app.add_handler(CommandHandler("stale", stale_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
