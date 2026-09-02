@@ -79,6 +79,8 @@ async def main() -> int:
                     help="最多沉底几条")
     ap.add_argument("--limit", type=int, default=40,
                     help="这轮最多检查几条新记忆（从最新的开始）")
+    ap.add_argument("--show", action="store_true",
+                    help="把每一对的比较和判官的理由都打出来（看它判得对不对）")
     ap.add_argument("--max-pairs", type=int, default=150,
                     help="最多问模型几次。默认值按「一次几分钱」定的，别去掉")
     args = ap.parse_args()
@@ -171,13 +173,25 @@ async def main() -> int:
         print(f"  [{i}/{total}] 已判断 {pairs} 对，问了模型 {asked['n']} 次",
               flush=True)
 
+    def _show(v: dict) -> None:
+        mark = "✅ 取代" if v.get("superseded") else "—  不算"
+        print(f"    {mark}  新《{cd.short(v.get('new_name'), 18)}》"
+              f" vs 旧《{cd.short(v.get('old_name'), 18)}》"
+              f"  {v.get('confidence'):.2f}  {cd.short(v.get('reason'), 40)}",
+              flush=True)
+
     print("[矛盾检测] 开始判断（每条一行进度，Ctrl+C 随时可停，预演不写任何东西）")
+    if args.show:
+        print("[矛盾检测] --show 已开：每一对的比较和理由都会打出来")
     hits = await cd.sweep(full, find_related, ask, max_retire=args.max,
-                          on_progress=_progress)
+                          on_progress=_progress,
+                          on_verdict=_show if args.show else None)
     print(f"[矛盾检测] 问了模型 {asked['n']} 次"
           + ("（到上限了，--max-pairs 可调）" if asked["n"] >= args.max_pairs else ""))
     if not hits:
         print("[矛盾检测] 没发现被取代的旧记忆。")
+        if not args.show:
+            print("[矛盾检测] 想知道它到底比了什么、判官怎么说，加 --show 再跑一次。")
         return 0
 
     print(f"[矛盾检测] 判定 {len(hits)} 条已被取代：")

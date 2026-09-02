@@ -224,3 +224,26 @@ def test_progress_is_reported_even_when_a_bucket_has_no_candidates():
     _run(cd.sweep([_b("n1", created=NEW), _b("n2", created=NEW)],
                   find_related, ask, on_progress=lambda *a: seen.append(a)))
     assert len(seen) == 2
+
+
+def test_every_verdict_is_reported_not_just_the_ones_acted_on():
+    """判官说了什么必须能看见——包括判「不算」的那些。
+
+    否则「没发现被取代的旧记忆」到底是真没有、还是判官太保守、
+    还是配对配错了，根本分不出来。"""
+    seen = []
+
+    async def find_related(_b_):
+        return [_b("o1", "旧一", created=OLD), _b("o2", "旧二", created=OLD)]
+
+    async def ask(prompt):
+        return ('{"superseded": true, "confidence": 0.9, "reason": "被改写"}'
+                if "旧一" in prompt else
+                '{"superseded": false, "confidence": 0.8, "reason": "两件事"}')
+
+    out = _run(cd.sweep([_b("n1", "新的", created=NEW)], find_related, ask,
+                        on_verdict=seen.append))
+    assert len(seen) == 2, seen                 # 两条都要报，不只报动手的那条
+    assert {v["old_name"] for v in seen} == {"旧一", "旧二"}
+    assert {v["new_name"] for v in seen} == {"新的"}
+    assert [v["old_id"] for v in out] == ["o1"]   # 但只有一条真动手
