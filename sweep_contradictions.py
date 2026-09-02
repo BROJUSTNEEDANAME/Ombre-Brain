@@ -28,7 +28,12 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import contradiction as cd            # noqa: E402
+import env_file                       # noqa: E402
 import stale_ledger                   # noqa: E402
+
+# ⚠️ 必须在读下面这些环境变量之前加载。key 都在 systemd 的 EnvironmentFile 里，
+# shell 里没有——手动跑 backfill 和这个脚本各踩过一次「missing API key」。
+_ENV_USED = env_file.load()
 
 BRAIN = os.environ.get("OMBRE_BRAIN_URL", "http://127.0.0.1:8000").rstrip("/")
 TOKEN = os.environ.get("OMBRE_BRAIN_TOKEN", "").strip()
@@ -57,18 +62,33 @@ def recent_buckets(days: int) -> list[dict]:
 
 
 def _detail(bucket_id: str) -> dict:
+    """取单条的完整正文。拿回来不是字典就当没拿到——别让脏数据一路往下走，
+    最后表现成「跑完了、0 次判断」这种看起来正常的静默失败。"""
     try:
-        return _get("/api/bucket/" + urllib.parse.quote(bucket_id))
+        got = _get("/api/bucket/" + urllib.parse.quote(bucket_id))
     except Exception:  # noqa: BLE001
         return {}
+    return got if isinstance(got, dict) else {}
 
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=2, help="只看最近几天的新记忆")
     ap.add_argument("--write", action="store_true", help="真的沉底（默认只预演）")
-    ap.add_argument("--max", type=int, default=cd.MAX_RETIRE_PER_SWEEP)
+    ap.add_argument("--max", type=int, default=cd.MAX_RETIRE_PER_SWEEP,
+                    help="最多沉底几条")
+    ap.add_argument("--limit", type=int, default=40,
+                    help="这轮最多检查几条新记忆（从最新的开始）")
+    ap.add_argument("--max-pairs", type=int, default=150,
+                    help="最多问模型几次。默认值按「一次几分钱」定的，别去掉")
     args = ap.parse_args()
+
+    if _ENV_USED:
+        print(f"[矛盾检测] 配置读自 {_ENV_USED}")
+    if not (os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY")):
+        print("[矛盾检测] 没读到 LLM_API_KEY —— 判官模型没法调。")
+        print("  它应该在 .env.apibot 里；确认那个文件当前用户读得到。")
+        return 1
 
     try:
         fresh = recent_buckets(args.days)
@@ -83,41 +103,71 @@ async def main() -> int:
     print(f"[矛盾检测] 最近 {args.days} 天有 {len(fresh)} 条新记忆")
     if not fresh:
         return 0
+    fresh.sort(key=lambda b: str((b if "created" in b else b.get("metadata") or {})
+                                 .get("created") or ""), reverse=True)
+    if len(fresh) > args.limit:
+        print(f"[矛盾检测] 只看最新的 {args.limit} 条（--limit 可调）")
+        fresh = fresh[:args.limit]
 
-    from openai import AsyncOpenAI  # noqa: PLC0415
+    all_buckets = _get("/api/buckets")          # 只取一次，别每条都重拉一遍全库
+    print(f"[矛盾检测] 库里一共 {len(all_buckets)} 条，开始配对")
+
+    try:
+        from openai import AsyncOpenAI  # noqa: PLC0415
+    except ModuleNotFoundError:
+        print("[矛盾检测] 没装 openai 包。用仓库自己的虚拟环境跑：")
+        print("  .venv/bin/python sweep_contradictions.py ...")
+        return 1
     llm = AsyncOpenAI(
         api_key=(os.environ.get("LLM_API_KEY") or os.environ.get("ZAI_API_KEY", "")).strip(),
         base_url=os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/"),
         timeout=60.0, max_retries=0)
 
     async def find_related(bucket: dict) -> list[dict]:
-        """拿这条记忆的标题和正文去检索，捞出可能讲同一件事的旧记忆。"""
+        """粗筛出可能讲同一件事的旧记忆，交给模型细判。
+
+        这里只做便宜的字符重合初筛——目的是把上千次模型调用砍到几十次。
+        真正的判断在模型那边（字符比对判不了「五岁→六岁」）。"""
         meta = bucket.get("metadata") or bucket
-        query = f"{meta.get('name') or ''} {bucket.get('content_preview') or ''}"[:120]
-        hits = _get("/api/buckets")          # 小库直接全捞；大了再换向量检索
-        name_terms = {t for t in str(meta.get("name") or "") if len(t.strip()) == 1}
-        out = []
-        for b in hits:
+        terms = {c for c in str(meta.get("name") or "") if c.strip()}
+        if len(terms) < 2:
+            return []
+        need = max(2, len(terms) // 2)
+        scored = []
+        for b in all_buckets:
             if str(b.get("id")) == str(bucket.get("id")):
                 continue
             blob = f"{b.get('name') or ''}{b.get('content_preview') or ''}"
-            if name_terms and len(name_terms & set(blob)) >= max(2, len(name_terms) // 2):
-                out.append({**b, "metadata": b})
-        return out[:8]
+            hit = len(terms & set(blob))
+            if hit >= need:
+                scored.append((hit, {**b, "metadata": b}))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [b for _s, b in scored[:5]]
+
+    asked = {"n": 0}
 
     async def ask(prompt: str) -> str:
+        if asked["n"] >= args.max_pairs:
+            raise RuntimeError("到达 --max-pairs 上限")
+        asked["n"] += 1
         resp = await llm.chat.completions.create(
             model=JUDGE_MODEL, max_tokens=300,
             messages=[{"role": "system", "content": cd.JUDGE_SYSTEM},
                       {"role": "user", "content": prompt}])
         return resp.choices[0].message.content or ""
 
-    full = []
+    full, thin = [], 0
     for b in fresh:
         d = _detail(str(b.get("id") or ""))
+        if not d:
+            thin += 1
         full.append(d or {**b, "metadata": b})
+    if thin:
+        print(f"[矛盾检测] 其中 {thin} 条取不到完整正文，只按摘要判（可能偏保守）")
 
     hits = await cd.sweep(full, find_related, ask, max_retire=args.max)
+    print(f"[矛盾检测] 问了模型 {asked['n']} 次"
+          + ("（到上限了，--max-pairs 可调）" if asked["n"] >= args.max_pairs else ""))
     if not hits:
         print("[矛盾检测] 没发现被取代的旧记忆。")
         return 0

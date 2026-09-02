@@ -13,7 +13,7 @@ python3 -m py_compile server.py telegram_bot.py personality.py writing_style.py 
     prompt_cache.py utils.py reply_sanitizer.py morning.py \
     claude_provider.py restore_memories.py backup_memories.py \
     scripts/_verify_claude_key.py contradiction.py stale_ledger.py \
-    sweep_contradictions.py || fail=1
+    sweep_contradictions.py env_file.py backfill_embeddings.py || fail=1
 
 echo "▶ 冒烟测试（真的把整条路跑一遍）"
 python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
@@ -22,7 +22,8 @@ python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
 echo "▶ 相关单测"
 python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_personality.py tests/test_writing_style.py \
-    tests/test_contradiction.py tests/test_stale_ledger.py -q || fail=1
+    tests/test_contradiction.py tests/test_stale_ledger.py \
+    tests/test_env_file.py -q || fail=1
 
 echo "▶ 未定义名扫描（抽函数漏依赖专用）"
 python3 - <<'PY' || fail=1

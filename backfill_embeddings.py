@@ -17,6 +17,10 @@ import sys
 import time
 
 sys.path.insert(0, ".")
+import env_file
+# key 在 systemd 的 EnvironmentFile 里，shell 里没有。不先加载就是
+# 「ERROR: missing API key」——她已经撞过一次。
+env_file.load()
 from utils import load_config
 from bucket_manager import BucketManager
 from embedding_engine import EmbeddingEngine

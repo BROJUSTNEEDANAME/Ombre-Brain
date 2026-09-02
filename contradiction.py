@@ -38,11 +38,21 @@ def is_protected(meta: dict) -> bool:
                 or meta.get("type") == "permanent")
 
 
+def _created(bucket: dict) -> str:
+    meta = bucket.get("metadata") or bucket
+    return str(meta.get("created") or "")
+
+
 def candidate_pairs(new_bucket: dict, others: Iterable[dict]) -> list[dict]:
     """挑出「值得拿去问模型」的旧记忆。
 
-    排除：自己、已经沉底的、钉选/保护的、feel 域的。"""
+    排除：自己、已经沉底的、钉选/保护的、feel 域的、**以及比它新的**。
+
+    ⚠️ 最后那条是方向问题，真跑才发现的：两条都在最近几天里时，它们会各自
+    轮流当「新的」，于是新旧互相判成被取代——**当前有效的那条也会被沉底**。
+    只有比它老的才有资格被它取代。取不到时间的一律不碰。"""
     new_id = str(new_bucket.get("id") or "")
+    new_at = _created(new_bucket)
     out = []
     for old in others:
         meta = old.get("metadata") or old
@@ -58,6 +68,9 @@ def candidate_pairs(new_bucket: dict, others: Iterable[dict]) -> list[dict]:
             domains = [domains]
         if SKIP_DOMAINS & {str(d) for d in domains}:
             continue
+        old_at = _created(old)
+        if not new_at or not old_at or old_at >= new_at:
+            continue                       # 只有更老的才可能被取代
         out.append(old)
     return out
 
