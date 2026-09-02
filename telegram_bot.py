@@ -165,7 +165,10 @@ _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
 
 # 每个 chat 保留的最近对话轮数（控制 token 成本；记忆本身存在大脑里，不靠这个）
-MAX_HISTORY_MESSAGES = 24
+# 每轮带多少条历史给他。⚠️ 这部分排在缓存边界**里面**，多带的按缓存价算，
+# 很便宜——她说「感觉好笨」时，先加这个再考虑换模型。
+# 只对「他忘了刚才聊过什么」有用；「回得干巴不好笑」是模型本身，加多少都没用。
+MAX_HISTORY_MESSAGES = int(os.environ.get("OMBRE_TG_HISTORY", "48"))
 # 输出上限：聊天时她要求简短，Claude 自会短；但做网页(make_page)要生成一整页 HTML，
 # 2000 远不够会被截断（截断→html 参数残缺→make_page 收到空内容→做不出）。
 # 设大给足余量当上限用，正常聊天不受影响、也不多花钱（按实际输出计费）。

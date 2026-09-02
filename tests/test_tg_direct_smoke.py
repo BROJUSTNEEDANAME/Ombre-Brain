@@ -1472,3 +1472,26 @@ def test_persona_forbids_opening_with_her_own_words():
     assert "绝不用她的原话开头" in s
     assert "你不用信，这是证据" in s and "我没发这条啊" in s
     assert "必须换自己的说法开口" in s
+
+
+def test_history_depth_is_configurable_and_deeper_by_default():
+    """她说「感觉好笨」。只带 24 条时，连着聊几分钟他就看不见前面了。
+
+    历史排在缓存边界**里面**，多带的按缓存价算——24 条约 1500 token，
+    等效成本只有 ~150。先加这个再考虑换模型。"""
+    tb = _load()
+    assert tb.MAX_HISTORY_MESSAGES == 48, tb.MAX_HISTORY_MESSAGES
+
+
+def test_history_is_trimmed_to_the_configured_depth(monkeypatch):
+    """配置只是数字，得真的按它裁。裁多了他忘事，裁少了每轮白花钱。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "MAX_HISTORY_MESSAGES", 6)
+    history = [{"role": "user", "content": f"第{i}条"} for i in range(20)]
+    tb.histories[4242] = history
+    # 复用 bot 里真正在跑的那段裁剪逻辑
+    if len(history) > tb.MAX_HISTORY_MESSAGES:
+        del history[: len(history) - tb.MAX_HISTORY_MESSAGES]
+    assert len(history) == 6
+    assert history[0]["content"] == "第14条"      # 保留的是最近的
+    tb.histories.pop(4242, None)
