@@ -12,6 +12,7 @@ Free tier: 1500 requests/day, so ~75 batches of 20.
 
 import asyncio
 import argparse
+import os
 import sys
 import time
 
@@ -27,8 +28,15 @@ async def backfill(batch_size: int = 20, dry_run: bool = False):
     engine = EmbeddingEngine(config)
 
     if not engine.enabled:
-        print("ERROR: Embedding engine not enabled (missing API key?)")
-        return
+        # ⚠️ 必须让调用方知道失败了。原来只 print 就 return，退出码仍是 0，
+        # 外面的脚本据此报「补完了」——她看到的是一句假话（踩过）。
+        have = [n for n in ("OMBRE_API_KEY", "OMBRE_EMBED_API_KEY")
+                if os.environ.get(n, "").strip()]
+        print("ERROR: 补向量没跑起来——没读到 embedding 用的 API key。")
+        print("  需要 OMBRE_API_KEY 或 OMBRE_EMBED_API_KEY 其中之一"
+              "（也可以写在 config.yaml 的 embedding.api_key）。")
+        print(f"  当前环境里设了的：{'、'.join(have) if have else '一个都没有'}")
+        return 1
 
     all_buckets = await bucket_mgr.list_all(include_archive=True)
     print(f"Total buckets: {len(all_buckets)}")
@@ -83,6 +91,8 @@ async def backfill(batch_size: int = 20, dry_run: bool = False):
             await asyncio.sleep(2)
 
     print(f"\n=== Done: {success} success, {failed} failed, {total - success - failed} skipped ===")
+    # 一条都没成功、却有该补的 → 别报「补完了」，退出码要红
+    return 1 if (failed and not success) else 0
 
 
 if __name__ == "__main__":
@@ -90,4 +100,4 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    asyncio.run(backfill(batch_size=args.batch_size, dry_run=args.dry_run))
+    sys.exit(asyncio.run(backfill(batch_size=args.batch_size, dry_run=args.dry_run)) or 0)

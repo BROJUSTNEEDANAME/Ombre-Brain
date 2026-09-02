@@ -39,12 +39,23 @@ else
 fi
 
 # ---------------------------------------------------------------- 2. 补向量
+# ⚠️ 只认退出码，不许自己猜。踩过：backfill 打印了 ERROR 却返回 0，
+# 这里报「补完了」——给她看了一句假话。现在 backfill 会正经返回非 0。
 say "给新搬来的记忆补向量（没有向量只能关键词搜，语义联想弱）"
+BACKFILL_OK=0
 if "$PY" backfill_embeddings.py; then
     ok "补完了"
+    BACKFILL_OK=1
 else
-    warn "补向量没成功。不影响记忆本身——他照样记得，只是语义检索弱一点。"
-    warn "把上面几行报错发我，我来查。"
+    warn "补向量没成功（看上面那几行说缺什么）。"
+    warn "记忆本身没事——68 条都在，他照样记得，只是语义联想弱一点。"
+    printf '     这个大脑里设了的相关变量：'
+    got=""
+    for v in OMBRE_API_KEY OMBRE_EMBED_API_KEY OMBRE_EMBED_BASE_URL OMBRE_EMBED_MODEL; do
+        [ -n "${!v:-}" ] && got="$got $v"
+    done
+    printf '%s\n' "${got:- 一个都没有}"
+    warn "把这一行发我，我告诉你从 Render 抄哪个变量过来。"
 fi
 
 # ---------------------------------------------------------------- 3. 重启
@@ -65,13 +76,19 @@ else
 fi
 
 # ---------------------------------------------------------------- 4. 自检
-say "自检"
-sleep 3
-HEALTH="$(curl -fsS --max-time 20 http://127.0.0.1:8000/health 2>/dev/null)"
+# 大脑重启后要加载 embedding、扫记忆目录，3 秒根本不够——等它，别急着报警。
+say "自检（等大脑起来，最多 60 秒）"
+HEALTH=""
+for _ in $(seq 1 20); do
+    HEALTH="$(curl -fsS --max-time 5 http://127.0.0.1:8000/health 2>/dev/null)"
+    [ -n "$HEALTH" ] && break
+    sleep 3
+done
 if [ -n "$HEALTH" ]; then
     ok "大脑活着：$HEALTH"
 else
-    warn "大脑还没应答。再等十几秒跑一次：curl -s http://127.0.0.1:8000/health"
+    warn "等了 60 秒大脑还没应答。跑这条看它为什么起不来："
+    warn "  journalctl -u ombre-brain -n 40 --no-pager"
 fi
 
 for svc in ombre-brain ombre-apibot; do
@@ -79,6 +96,10 @@ for svc in ombre-brain ombre-apibot; do
     if [ "$state" = "active" ]; then ok "$svc 在跑"; else warn "$svc 状态是 $state"; fi
 done
 
-printf '\n\033[1m全部做完了。\033[0m\n'
+if [ "$BACKFILL_OK" = "1" ]; then
+    printf '\n\033[1m全部做完了。\033[0m\n'
+else
+    printf '\n\033[1m记忆搬完了；向量那步还差一个 key（见上面）。\033[0m\n'
+fi
 printf '现在去 Telegram 问他一件「只在电脑端 Claude 聊过、TG 从没提过」的事，\n'
 printf '答得上来就说明 Render 上那 68 条已经进到这个大脑里了。\n\n'
