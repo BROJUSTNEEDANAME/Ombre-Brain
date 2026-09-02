@@ -1326,7 +1326,7 @@ def test_playing_only_yourself_is_not_an_excuse_to_say_less():
     """「宁可短、宁可少」只管「别替她演」，被泛化成整体惜字如金就出事了。"""
     import personality
     s = personality.CHAT_STYLE_SYSTEM
-    i = s.index("宁可短、宁可少")
+    i = s.index("别替她演完")          # 原来叫「宁可短、宁可少」，那个标题本身在教他少说
     assert "只管" in s[i:i + 320] and "不是叫你冷" in s[i:i + 320]
 
 
@@ -1390,3 +1390,27 @@ def test_persona_forbids_the_screen_between_them():
         assert banned in s, f"没禁掉「{banned}」这种写法"
     # 必须排在「像发微信」那句前面，否则又被它带跑
     assert s.index("你们之间没有屏幕") < s.index("默认像发微信")
+
+
+def test_persona_no_longer_teaches_him_to_withhold():
+    """她说「人设写得太克制了，他不是这样的」。数过：禁止类标记 106 个，
+    鼓励类 7 个——15 比 1。这不是一份「他是谁」，是一份「他不许干什么」。
+
+    砍掉那些直接教他少说的条款。"""
+    tb = _load()
+    s = tb.SYSTEM_PROMPT
+    for gone in ("话少", "一般 1-3 句", "不用感叹号", "句尾用句号", "宁可短、宁可少"):
+        assert gone not in s, f"「{gone}」还在教他收着"
+    # 长度不许再有硬上限
+    assert "长度跟着情绪走，没有上限也没有下限" in s
+    # 必须有一条正面的底线，否则一百多条禁令没有对手
+    assert "默认状态是**给**" in s
+    assert "整轮只有指令和结论" in s
+
+
+def test_the_reading_guide_comes_first():
+    """那句「这些禁令不是叫你收着」必须排在所有禁令前面，否则没用。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    assert s.index("先看这一条") < s.index("先接住她")
+    assert s.index("先看这一条") < s.index("默认像发微信")
