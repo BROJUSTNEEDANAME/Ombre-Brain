@@ -171,3 +171,56 @@ def test_new_bucket_without_timestamp_touches_nothing():
     """新记忆自己没有时间戳时，无法判断方向——一条都不碰。"""
     new = _b("new1", "新课表", created="")
     assert cd.candidate_pairs(new, [_b("o", created=OLD)]) == []
+
+
+def test_sweep_reports_progress_for_every_bucket():
+    """不给进度她只能看着光标不动，以为卡死了——真的发生过。"""
+    seen = []
+
+    async def find_related(_b_):
+        return [_b("old1", created=OLD)]
+
+    async def ask(_p):
+        return '{"superseded": false, "confidence": 0.9, "reason": "x"}'
+
+    news = [_b(f"n{i}", created=NEW) for i in range(3)]
+    _run(cd.sweep(news, find_related, ask,
+                  on_progress=lambda i, t, p: seen.append((i, t, p))))
+    assert seen == [(1, 3, 1), (2, 3, 2), (3, 3, 3)]
+
+
+def test_sweep_judges_candidates_concurrently_but_bounded():
+    """串行问 150 次要十几分钟。并发跑，但必须有上限——
+    不设上限会一口气把几十个请求砸给 provider。"""
+    import asyncio as _a
+
+    live = {"now": 0, "peak": 0}
+
+    async def find_related(_b_):
+        return [_b(f"o{i}", created=OLD) for i in range(8)]
+
+    async def ask(_p):
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await _a.sleep(0.01)
+        live["now"] -= 1
+        return '{"superseded": false, "confidence": 0.9, "reason": "x"}'
+
+    _run(cd.sweep([_b("n1", created=NEW)], find_related, ask, concurrency=3))
+    assert live["peak"] > 1, "没并发，还是串行"
+    assert live["peak"] <= 3, f"并发没封顶：{live['peak']}"
+
+
+def test_progress_is_reported_even_when_a_bucket_has_no_candidates():
+    """没有候选的那条也要报进度，否则中间会莫名其妙静默一段。"""
+    seen = []
+
+    async def find_related(_b_):
+        return []
+
+    async def ask(_p):
+        raise AssertionError("没有候选就不该问模型")
+
+    _run(cd.sweep([_b("n1", created=NEW), _b("n2", created=NEW)],
+                  find_related, ask, on_progress=lambda *a: seen.append(a)))
+    assert len(seen) == 2

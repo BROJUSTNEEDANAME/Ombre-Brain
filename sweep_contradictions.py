@@ -157,6 +157,7 @@ async def main() -> int:
         return resp.choices[0].message.content or ""
 
     full, thin = [], 0
+    print(f"[矛盾检测] 正在读取 {len(fresh)} 条的完整正文…", flush=True)
     for b in fresh:
         d = _detail(str(b.get("id") or ""))
         if not d:
@@ -165,7 +166,14 @@ async def main() -> int:
     if thin:
         print(f"[矛盾检测] 其中 {thin} 条取不到完整正文，只按摘要判（可能偏保守）")
 
-    hits = await cd.sweep(full, find_related, ask, max_retire=args.max)
+    def _progress(i: int, total: int, pairs: int) -> None:
+        # 每条都打一行。她盯着不动的光标以为卡死过一次——宁可啰嗦。
+        print(f"  [{i}/{total}] 已判断 {pairs} 对，问了模型 {asked['n']} 次",
+              flush=True)
+
+    print("[矛盾检测] 开始判断（每条一行进度，Ctrl+C 随时可停，预演不写任何东西）")
+    hits = await cd.sweep(full, find_related, ask, max_retire=args.max,
+                          on_progress=_progress)
     print(f"[矛盾检测] 问了模型 {asked['n']} 次"
           + ("（到上限了，--max-pairs 可调）" if asked["n"] >= args.max_pairs else ""))
     if not hits:

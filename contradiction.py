@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Callable, Iterable
@@ -150,27 +151,43 @@ def decide(verdicts: list[dict], *, min_confidence: float = MIN_CONFIDENCE,
 
 async def sweep(new_buckets: list[dict], find_related, ask, *,
                 min_confidence: float = MIN_CONFIDENCE,
-                max_retire: int = MAX_RETIRE_PER_SWEEP) -> list[dict]:
+                max_retire: int = MAX_RETIRE_PER_SWEEP,
+                on_progress=None, concurrency: int = 4) -> list[dict]:
     """跑一轮。find_related(bucket)->候选列表；ask(prompt)->模型原文。
 
-    I/O 全部通过这两个回调注入，所以这一整套逻辑可以脱网真跑测试。"""
+    I/O 全部通过这两个回调注入，所以这一整套逻辑可以脱网真跑测试。
+
+    on_progress(i, total, pairs_done) 每处理完一条新记忆叫一次——不给进度的话
+    她只能看着光标不动，以为卡死了（真的发生过）。
+    concurrency 控制同时问模型几条：串行 150 次要十几分钟。"""
     verdicts: list[dict] = []
-    for new in new_buckets:
-        try:
-            others = await find_related(new)
-        except Exception:  # noqa: BLE001
-            continue                        # 捞不到候选就跳过这条，别让整轮挂掉
-        for old in candidate_pairs(new, others or []):
+    sem = asyncio.Semaphore(max(1, concurrency))
+    total = len(new_buckets)
+
+    async def judge(new: dict, old: dict) -> dict | None:
+        async with sem:
             try:
                 raw = await ask(judge_prompt(new, old))
             except Exception:  # noqa: BLE001
-                continue
-            v = parse_verdict(raw)
-            v["old_id"] = str((old.get("metadata") or old).get("id") or old.get("id") or "")
-            v["new_id"] = str(new.get("id") or (new.get("metadata") or {}).get("id") or "")
-            v["old_name"] = str((old.get("metadata") or {}).get("name")
-                                or old.get("name") or v["old_id"])
-            verdicts.append(v)
+                return None
+        v = parse_verdict(raw)
+        v["old_id"] = str((old.get("metadata") or old).get("id") or old.get("id") or "")
+        v["new_id"] = str(new.get("id") or (new.get("metadata") or {}).get("id") or "")
+        v["old_name"] = str((old.get("metadata") or {}).get("name")
+                            or old.get("name") or v["old_id"])
+        return v
+
+    for i, new in enumerate(new_buckets, 1):
+        try:
+            others = await find_related(new)
+        except Exception:  # noqa: BLE001
+            others = []                     # 捞不到候选就跳过这条，别让整轮挂掉
+        pairs = candidate_pairs(new, others or [])
+        if pairs:
+            got = await asyncio.gather(*(judge(new, old) for old in pairs))
+            verdicts.extend(v for v in got if v)
+        if on_progress:
+            on_progress(i, total, len(verdicts))
     return decide(verdicts, min_confidence=min_confidence, max_retire=max_retire)
 
 
