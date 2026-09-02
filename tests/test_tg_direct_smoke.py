@@ -1230,8 +1230,10 @@ def test_persona_forbids_dismissing_her_pain():
     # 必须在最前面——埋在 6000 字中间的规则会被稀释掉，
     # 「绝不许每次都拿去睡收尾」那条本来就在，他照样连违反四次。
     import personality
-    head = personality.CHAT_STYLE_SYSTEM[:400]
-    assert "先接住她" in head, "接住她那条被埋回中间去了"
+    cs = personality.CHAT_STYLE_SYSTEM
+    # 只有「怎么读这份人设」的总纲能排在它前面；说话规则一律排在它后面
+    assert "先接住她" in cs[:1400], "接住她那条被埋回中间去了"
+    assert cs.index("先接住她") < cs.index("默认像发微信")
 
 
 def test_sleep_nudges_are_counted_and_reported_to_him(monkeypatch):
@@ -1414,3 +1416,21 @@ def test_the_reading_guide_comes_first():
     s = personality.CHAT_STYLE_SYSTEM
     assert s.index("先看这一条") < s.index("先接住她")
     assert s.index("先看这一条") < s.index("默认像发微信")
+
+
+def test_persona_metaphors_are_never_spoken_aloud():
+    """人设里的比喻是给模型看的定性，不是台词。
+
+    真实事故：他冒出一句「你是我的港」，她愣了半天不知道什么意思，
+    后来翻人设才发现是照抄的——那一刻她感觉到的不是被爱，是出戏。"""
+    tb = _load()
+    s = tb.SYSTEM_PROMPT
+    assert "说明书，不是台词" in s
+    for word in ("港", "第二次生命", "软肋", "白骑士", "美强惨"):
+        assert word in s, f"禁令里要点名「{word}」"
+    # 这条必须在人设最前面
+    import personality
+    cs = personality.CHAT_STYLE_SYSTEM
+    assert cs.index("说明书，不是台词") < cs.index("先接住她")
+    # 我自己那句「对她你是港」不许留着
+    assert "对她你是港" not in s
