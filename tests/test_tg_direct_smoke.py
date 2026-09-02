@@ -878,3 +878,38 @@ def test_volatile_context_goes_after_history_not_into_her_message(monkeypatch):
     assert msgs[-1]["role"] == "user"
     assert "系统动态背景" in msgs[-1]["content"]
     assert len(msgs) == 1 + len(history) + 1
+
+
+def test_cached_prefix_contains_nothing_that_changes_per_request():
+    """缓存前缀（tools + 人设）里不许混进任何「每次都变」的东西。
+
+    这类 bug 不报错，只是默默把钱翻几倍：Claude Code 有个版本在 system 里塞了
+    一个每次都变的 cch=xxx，用户的命中率从 90%+ 掉到 30%，查了很久才发现。
+
+    所以这里当哨兵：以后谁往人设里插一句「今天是 X 月 X 日」、或者把工具列表
+    改成从 set/dict 推导（顺序不稳定），这条会立刻变红。"""
+    import hashlib
+    import json as _json
+    import re as _re
+
+    tb = _load()
+
+    # 1) 人设里不许出现日期、时刻、长十六进制这类会变的串
+    for pattern, what in [(r"\d{4}-\d{2}-\d{2}", "日期"),
+                          (r"\b\d{1,2}:\d{2}\b", "时刻"),
+                          (r"\b[0-9a-f]{16,}\b", "长十六进制/随机串")]:
+        found = _re.findall(pattern, tb.SYSTEM_PROMPT)
+        assert not found, f"人设里混进了{what}：{found[:3]} —— 缓存前缀每轮都会变"
+
+    # 2) tools 排在 system 前面，顺序必须稳定；两次序列化要逐字节一致
+    def _prefix():
+        return hashlib.sha256(_json.dumps(
+            [tb.CHAT_TOOLS, tb.SYSTEM_PROMPT], ensure_ascii=False,
+            sort_keys=False).encode()).hexdigest()
+
+    assert _prefix() == _prefix()
+    assert [t["function"]["name"] for t in tb.CHAT_TOOLS] == \
+           [t["function"]["name"] for t in tb.CHAT_TOOLS]
+
+    # 3) 会变的东西该在的地方：时间戳属于动态尾巴，不属于人设
+    assert "当前时间" not in tb.SYSTEM_PROMPT or "【" in tb.SYSTEM_PROMPT
