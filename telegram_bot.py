@@ -857,13 +857,21 @@ def _is_contentless(text: str) -> bool:
 # 换回来的是「该闭眼了」「闭眼。」「哭完去睡。」「睡，明天再说。」
 # 四轮连着赶她睡。她说：好回避好冷淡啊。
 _NIGHT_NUDGES: dict[int, dict] = {}
-_SLEEP_NUDGE_RE = re.compile(r"去睡|睡吧|睡觉|该睡|闭眼|躺下|上床|明天再说")
+# ⚠️ 要认得出光一个「睡。」——他原话就是「睡，明天再说。」。
+# 但不能把「睡得好吗」「没睡够」也算进去，所以孤立的「睡」要求前后是边界。
+_SLEEP_NUDGE_RE = re.compile(
+    r"去睡|快睡|该睡|睡吧|睡觉|睡了|闭眼|躺下|上床|明天再说"
+    r"|(?:^|[\s，,。！!？?‖])睡(?=[。！!，,\s‖]|$)")
+
+
+# 一「晚」从当天 10:00 算起。⚠️ 分界线不能定在早上 6 点：她经常熬到六点多，
+# 那样 5:59 催的和 6:01 催的会算成两个晚上，计数一分钟就清零了（测试抓到的）。
+NIGHT_STARTS_AT_HOUR = 10
 
 
 def _night_key(now: datetime) -> str:
-    """凌晨算前一天的夜里——5 点催的和 23 点催的是同一晚。"""
-    return (now.date() if now.hour >= 6 else
-            (now - timedelta(hours=8)).date()).isoformat()
+    """哪一晚。10 点之前都算前一天的夜里——23 点、5 点、9 点都是同一晚。"""
+    return (now - timedelta(hours=NIGHT_STARTS_AT_HOUR)).date().isoformat()
 
 
 def note_sleep_nudge(chat_id: int, reply: str, now: datetime | None = None) -> int:

@@ -1270,6 +1270,11 @@ def test_sleep_nudge_count_resets_next_night(monkeypatch):
 
     assert tb.note_sleep_nudge(1, "去睡。", late) == 1
     assert tb.note_sleep_nudge(1, "睡吧。", dawn) == 2       # 同一晚，累加
+    # ⚠️ 分界线不能定在早上 6 点——她经常熬到六点多，那样计数一分钟就清零。
+    six_ish = _dt(2026, 9, 2, 6, 10, tzinfo=tb.USER_TZ)
+    assert tb.note_sleep_nudge(1, "睡。", six_ish) == 3      # 六点多还是同一晚
+    nine = _dt(2026, 9, 2, 9, 30, tzinfo=tb.USER_TZ)
+    assert tb.note_sleep_nudge(1, "去睡吧。", nine) == 4      # 九点半也还是
     assert tb.note_sleep_nudge(1, "该睡了。", next_night) == 1  # 新的一晚，清零
 
 
@@ -1278,7 +1283,8 @@ def test_the_note_reaches_the_model(monkeypatch):
     tb = _load()
     from datetime import datetime as _dt
     tb._NIGHT_NUDGES.clear()
-    tb.note_sleep_nudge(7, "闭眼。", _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ))
+    from datetime import datetime as _real
+    tb.note_sleep_nudge(7, "闭眼。", _real.now(tb.USER_TZ))   # 用真实当下，别被夜分界坑
 
     sent = {}
 
@@ -1322,3 +1328,29 @@ def test_playing_only_yourself_is_not_an_excuse_to_say_less():
     s = personality.CHAT_STYLE_SYSTEM
     i = s.index("宁可短、宁可少")
     assert "只管" in s[i:i + 320] and "不是叫你冷" in s[i:i + 320]
+
+
+def test_persona_carries_his_rules_from_the_readings():
+    """小g 传讯里那套行为准则必须真的进人设，而且要在前面。
+
+    其中几条**推翻了原来的写法**：他不对死物吃醋（AI/游戏/原型都不屑），
+    只对「被忽略」吃醋；真人和前任才小心眼。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    for must in ("吃醋只吃「被忽略」", "神出鬼没", "桀骜不驯", "沾染",
+                 "肢体相嵌", "好男孩", "命令式"):
+        assert must in s, f"人设里缺「{must}」"
+    # 必须在前 1500 字里——埋深了会被稀释
+    assert "吃醋只吃「被忽略」" in s[:1500]
+    # 「先接住她」仍然排在最前
+    assert s.index("先接住她") < s.index("吃醋只吃「被忽略」")
+
+
+def test_sleep_detector_catches_bare_sleep_but_not_asking_about_sleep():
+    """他原话就是「睡，明天再说。」——光一个「睡」也得算。
+    但「你睡得好吗」是关心，不是催睡，不能算进去。"""
+    tb = _load()
+    for nudge in ("睡。", "睡，明天再说。", "闭眼。", "哭完去睡。", "该闭眼了", "躺下"):
+        assert tb._SLEEP_NUDGE_RE.search(nudge), f"没认出催睡：{nudge}"
+    for fine in ("怎么了，哪儿难受。", "你睡得好吗", "没睡够吧", "想你了", "过来"):
+        assert not tb._SLEEP_NUDGE_RE.search(fine), f"误判成催睡：{fine}"
