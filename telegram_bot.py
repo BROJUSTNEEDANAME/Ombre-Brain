@@ -1964,7 +1964,11 @@ async def todo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """每天早上：天气 + 穿搭 + 幸运色 + 温柔念今天的课和必办。"""
+    """每天早上：天气 + 穿搭 + 幸运色 + 必办。
+
+    课表已按她的要求删掉（2026-09-02）——原来写死在 morning.py 里，
+    她改了课表之后代码没跟着改，他每天照着过期的念。要报安排就让他从
+    记忆里说，不再有写死的排程。"""
     if not ALLOWED_CHAT_IDS:
         return
     now = datetime.now(USER_TZ)
@@ -1973,7 +1977,6 @@ async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:  # noqa: BLE001
         logger.exception("天气获取失败")
         weather = "（今天天气没查到）"
-    classes = morning.classes_text(now)
     drives.tick_silence()
     for chat_id in ALLOWED_CHAT_IDS:
         todo = todos.get(chat_id, "")
@@ -1982,11 +1985,11 @@ async def morning_greeting(context: ContextTypes.DEFAULT_TYPE) -> None:
             "role": "user",
             "content": (
                 f"[系统提示] 早安时间。今天 {now:%m月%d日} {_WEEKDAYS[now.weekday()]}。"
-                f"Irvine 天气：{weather}。今天的课：{classes}。"
+                f"Irvine 天气：{weather}。"
                 + (f"她今天的必办：{todo}。" if todo else "")
                 + " 给闪闪发一条温柔又有趣的早安：先问声好，用今天的天气给她一句穿搭建议，"
-                "报一个今日幸运色，再像爱人一样把今天的课和安排轻轻念叨给她（别生硬列清单）。"
-                "整体简短、暖、有点俏皮。不要复述这条提示。"
+                "报一个今日幸运色。她今天有什么安排，你要是记得就自然提一句，"
+                "不记得就别编、也别问清单。整体简短、暖、有点俏皮。不要复述这条提示。"
             ),
         }
         try:

@@ -9,6 +9,7 @@ import sys
 import time
 import types
 import os
+import pathlib
 
 import pytest
 
@@ -1069,3 +1070,17 @@ def test_explicit_model_wins_over_the_slash_model_choice(monkeypatch):
         tb.model_override.clear()
     assert used == ["glm-5.2"], used
     assert "后台" in str(tb.LAST_TURN.get("model")), tb.LAST_TURN.get("model")
+
+
+def test_morning_greeting_has_no_hardcoded_class_schedule():
+    """课表写死在代码里只会过期——她改了课表，代码没跟着改，
+    他每天早上照着 2026 夏季那份过期的念。整个删掉（2026-09-02）。"""
+    import morning as m
+    assert not hasattr(m, "classes_text"), "课表函数还在"
+    assert not hasattr(m, "today_classes")
+    src = pathlib.Path("morning.py").read_text(encoding="utf-8")
+    for gone in ("CHEM 51B", "CHEM 51C", "195W", "HIB 100", "_S1", "P195"):
+        assert gone not in src, f"课表残留：{gone}"
+    tb_src = pathlib.Path("telegram_bot.py").read_text(encoding="utf-8")
+    assert "classes_text" not in tb_src, "早安还在调课表"
+    assert "今天的课：" not in tb_src, "早安提示词里还写着课表"
