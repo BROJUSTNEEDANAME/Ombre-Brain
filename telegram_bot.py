@@ -620,6 +620,21 @@ LAST_TURN: dict[str, object] = {}
 # 存 (时刻, 记忆块)；她问到过去时照常重查。
 _MEM_CACHE: dict[str, object] = {}
 MEM_CACHE_SECONDS = float(os.environ.get("OMBRE_TG_MEM_CACHE_SECONDS", "180"))
+# 每轮塞进上下文的记忆上限。⚠️ 这块**永远进不了缓存**（每轮都不一样），
+# 是全价付钱的部分——比整份人设还贵。砍它比砍人设省 16 倍。
+MEM_BLOCK_CHARS = int(os.environ.get("OMBRE_TG_MEM_CHARS", "1000"))
+# 复用上一轮记忆块的相似度门槛。她换话题了还硬塞上一个话题的记忆，
+# 看起来就是「他没在翻记忆」——她的原话。0 = 关掉相似度判断（回到旧行为）。
+MEM_REUSE_OVERLAP = float(os.environ.get("OMBRE_TG_MEM_REUSE_OVERLAP", "0.34"))
+
+
+def _topic_overlap(a: str, b: str) -> float:
+    """两句话讲的是不是同一件事，用字重合度粗判。够用，且不花钱。"""
+    sa = {c for c in str(a or "") if c.strip() and not c.isascii()}
+    sb = {c for c in str(b or "") if c.strip() and not c.isascii()}
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / min(len(sa), len(sb))
 # 她明确问到过去时不能吃缓存，必须现查
 _RECALL_HINT_RE = re.compile(
     r"还记得|记不记得|之前|上次|上回|以前|那天|你忘|忘了吗|说过|提过|当初")
@@ -844,9 +859,14 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     if not _tiny:
         _asks_past = bool(_RECALL_HINT_RE.search(_last_text))
         _cached_at = float(_MEM_CACHE.get("at") or 0)
-        if not _asks_past and time.time() - _cached_at < MEM_CACHE_SECONDS:
+        # ⚠️ 只在「还在聊同一件事」时才复用。以前不管话题，她聊完 A 半分钟后问 B，
+        # 拿到的还是 A 的记忆——一串对话里大部分轮次都在复用，看起来就是
+        # 「他没怎么调用记忆」（她的原话）。
+        _sim = _topic_overlap(_last_text, str(_MEM_CACHE.get("query") or ""))
+        _fresh = time.time() - _cached_at < MEM_CACHE_SECONDS
+        if not _asks_past and _fresh and _sim >= MEM_REUSE_OVERLAP:
             _mem_block = str(_MEM_CACHE.get("block") or "")
-            _mem_how = "复用"
+            _mem_how = f"复用{_sim:.0%}"
         else:
             try:
                 _mem_block = await asyncio.wait_for(
@@ -854,12 +874,18 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                     timeout=8)
                 _MEM_CACHE["at"] = time.time()
                 _MEM_CACHE["block"] = _mem_block
-                _mem_how = "现查"
+                _MEM_CACHE["query"] = _last_text
+                _mem_how = "现查" if not _fresh else f"换话题重查（像{_sim:.0%}）"
             except Exception:  # noqa: BLE001
                 logger.warning("记忆预浮现失败，这轮先不带记忆说话")
                 _mem_how = "失败"
     _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s（{_mem_how}）"
-                  + (f"／{len(str(_mem_block))}字" if _mem_block else ""))
+                  + (f"／捞到{len(str(_mem_block))}字"
+                     f"，实际塞进去{min(len(str(_mem_block)), MEM_BLOCK_CHARS)}字"
+                     if _mem_block else ""))
+    # 她问过「我怎么感觉他没怎么调用记忆」——光有字数看不出捞得准不准，
+    # 把开头几十个字也留下，/debug 里能直接看到浮上来的是什么。
+    LAST_TURN["mem_head"] = re.sub(r"\s+", " ", str(_mem_block or ""))[:120]
     # ⚠️ 这段每轮都在变，必须放在**所有消息之后**，绝不能塞进她那条消息里面：
     # 存进历史的是原文，塞过的是「背景+原文」，同一条消息两轮渲染的字节就不一样，
     # 缓存是前缀匹配，从那儿往后全废——历史对话永远进不了缓存。
@@ -867,7 +893,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
-            + str(_mem_block)[:2000]) if _mem_block else "")
+            + str(_mem_block)[:MEM_BLOCK_CHARS]) if _mem_block else "")
         + "\n\n【这一轮的格式要求·最高优先级】正常打中文标点（逗号、句号、问号），"
           "不许用空格代替标点。一件事一行，自然发两到四条（用换行或 ‖ 隔开），"
           "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"
@@ -1902,6 +1928,8 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines.append(f"你这条 {LAST_TURN.get('input_len')} 字"
                  + ("（判为表情/极短）" if LAST_TURN.get("tiny") else ""))
     lines += [f"· {x}" for x in (LAST_TURN.get("trace") or [])]
+    if LAST_TURN.get("mem_head"):
+        lines.append(f"  浮现的是：{LAST_TURN['mem_head']}")
     if LAST_TURN.get("first_bubble_s") is not None:
         lines.append(f"第一句送达 {LAST_TURN['first_bubble_s']}s")
     if LAST_TURN.get("total_s") is not None:

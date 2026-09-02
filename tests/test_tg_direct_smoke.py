@@ -365,7 +365,9 @@ def test_liveness_rules_present_in_persona():
 
 
 def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
-    """连着聊时复用记忆块，别每句都白等 3~5 秒；问到过去时必须现查。"""
+    """连着聊**同一件事**时复用记忆块，别每句都白等 3~5 秒；
+    问到过去时必须现查。（换话题必须重查，见
+    test_memory_is_refetched_when_she_changes_the_subject。）"""
     tb = _load()
     calls = []
 
@@ -383,10 +385,12 @@ def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
     async def noop(_s):
         return None
 
-    asyncio.run(tb._ask_claude([{"role": "user", "content": "我回来了"}], on_segment=noop))
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天化学实验好累"}],
+                               on_segment=noop))
     assert len(calls) == 1, calls                      # 第一句：现查
-    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天好累"}], on_segment=noop))
-    assert len(calls) == 1, f"紧接着的一句应当复用，实际又查了：{calls}"
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "化学实验真的好累"}],
+                               on_segment=noop))
+    assert len(calls) == 1, f"同话题紧接着的一句应当复用，实际又查了：{calls}"
     asyncio.run(tb._ask_claude([{"role": "user", "content": "你还记得我上次说的吗"}],
                                on_segment=noop))
     assert len(calls) == 2, f"问到过去必须现查，实际没查：{calls}"
@@ -1084,3 +1088,96 @@ def test_morning_greeting_has_no_hardcoded_class_schedule():
     tb_src = pathlib.Path("telegram_bot.py").read_text(encoding="utf-8")
     assert "classes_text" not in tb_src, "早安还在调课表"
     assert "今天的课：" not in tb_src, "早安提示词里还写着课表"
+
+
+def test_memory_is_refetched_when_she_changes_the_subject(monkeypatch):
+    """换话题就要重查记忆。
+
+    她的原话：「我怎么感觉他没怎么调用记忆」。原因是 3 分钟内无条件复用上一轮
+    的记忆块——她聊完 A 半分钟后问 B，拿到的还是 A 的记忆，一串对话里大部分
+    轮次都在复用，看起来就是他没在翻记忆。"""
+    tb = _load()
+    queries = []
+
+    async def fake_brain(name, args):
+        if name == "breath":
+            queries.append(args.get("query"))
+            return f"（关于{args.get('query')[:4]}的记忆）"
+        return "ok"
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    def ask(text):
+        asyncio.run(tb._ask_claude([{"role": "user", "content": text}], on_segment=noop))
+
+    ask("今天化学实验做得好累，试剂洒了一地")
+    assert len(queries) == 1
+
+    ask("化学实验的报告还要写吗，试剂那个")      # 同一件事 → 复用
+    assert len(queries) == 1, f"同话题不该重查：{queries}"
+
+    ask("我妈今天打电话来说外婆住院了")            # 换话题 → 必须重查
+    assert len(queries) == 2, f"换话题必须重查：{queries}"
+    assert "外婆" in queries[1]
+
+
+def test_memory_block_size_is_configurable_and_smaller_by_default(monkeypatch):
+    """记忆块是全价付钱的部分（每轮都不一样，永远进不了缓存），
+    比整份人设还贵——所以要能调，且默认比原来的 2000 小。"""
+    tb = _load()
+    assert tb.MEM_BLOCK_CHARS == 1000, tb.MEM_BLOCK_CHARS
+
+    sent = {}
+
+    async def fake_create(**kw):
+        sent["messages"] = kw["messages"]
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool",
+                        lambda *a, **k: _async_val("囍" * 5000))
+    monkeypatch.setattr(tb, "MEM_BLOCK_CHARS", 300)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天化学实验好累"}],
+                               on_segment=noop))
+    tail = sent["messages"][-1]["content"]
+    assert tail.count("囍") == 300, tail.count("囍")
+
+
+def test_debug_shows_what_actually_surfaced(monkeypatch):
+    """光看字数看不出捞得准不准——她要能直接看到浮上来的是什么。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool",
+                        lambda *a, **k: _async_val("她怕打雷\n打雷时要陪着她"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "外面在打雷"}],
+                               on_segment=noop))
+    assert "她怕打雷" in str(tb.LAST_TURN.get("mem_head")), tb.LAST_TURN.get("mem_head")
+
+
+def test_topic_overlap_is_sane():
+    tb = _load()
+    assert tb._topic_overlap("化学实验试剂洒了", "化学实验报告") > 0.5
+    assert tb._topic_overlap("外婆住院了", "化学实验试剂") < 0.2
+    assert tb._topic_overlap("", "什么") == 0.0
