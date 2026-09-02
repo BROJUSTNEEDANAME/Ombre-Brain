@@ -4,8 +4,13 @@
 Restore buckets produced by backup_memories.py into a local brain.
 
 用法 / Usage:
-    python3 restore_memories.py ombre_backup_20260902            # 先看会做什么
-    python3 restore_memories.py ombre_backup_20260902 --write    # 真的写入
+    python3 restore_memories.py <来源>            # 先看会做什么（预演）
+    python3 restore_memories.py <来源> --write    # 真的写入
+
+<来源> 可以是两种，脚本自己认：
+  1. backup_memories.py 产出的目录（里面有 all_buckets.json）
+  2. /api/export 下下来的 tar.gz 解开后的目录（里面是 permanent/ dynamic/ feel/ 那套 .md）
+     —— 这条路更好：一次请求打包全部，还带着向量，不用重跑 backfill
 
 默认 dry-run：只打印「会新增哪些、会跳过哪些」，一个字都不写。
 加 --write 才真的落盘。
@@ -98,7 +103,58 @@ def load_backup(backup_dir: str) -> list[dict]:
     return [b for b in data if isinstance(b, dict)]
 
 
+_ID_RE = re.compile(r'^id:\s*"?([A-Za-z0-9_-]+)"?\s*$', re.M)
+
+
+def find_md_source(src_dir: str) -> str | None:
+    """认出 /api/export 解包后的数据目录。
+
+    tar 里是 ombre_data/permanent|dynamic|feel|archive/…，但她可能解到任意
+    一层，所以从给的目录往下找「含有 permanent/dynamic/feel 之一」的那层。"""
+    for root, dirs, _ in os.walk(src_dir):
+        if {"permanent", "dynamic", "feel"} & set(dirs):
+            return root
+    return None
+
+
+def restore_from_md(src_root: str, base_dir: str, write: bool) -> dict:
+    """按原样把 .md 拷过来：目录结构、文件名、frontmatter 全部保持不动。
+    只跳过本机已有同 ID 的。非 .md（sqlite 向量库等）一概不碰——
+    两边的向量库不能直接覆盖，本机那份还有 VPS 自己的记忆。"""
+    have = existing_ids(base_dir)
+    added, skipped = [], []
+    for root, _, files in os.walk(src_root):
+        for fn in sorted(files):
+            if not fn.endswith(".md"):
+                continue
+            src = os.path.join(root, fn)
+            try:
+                with open(src, encoding="utf-8") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            m = _ID_RE.search(text[:2000])
+            bid = m.group(1) if m else fn[:-3].rsplit("_", 1)[-1]
+            if bid in have:
+                skipped.append(bid)
+                continue
+            rel = os.path.relpath(src, src_root)
+            dst = os.path.join(base_dir, rel)
+            if not os.path.abspath(dst).startswith(os.path.abspath(base_dir) + os.sep):
+                continue                      # 压缩包里的路径不可信，别写出去
+            if write:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "w", encoding="utf-8") as f:
+                    f.write(text)
+            have.add(bid)
+            added.append(bid)
+    return {"added": added, "skipped": skipped, "bad": 0, "wrote": write}
+
+
 def restore(backup_dir: str, base_dir: str = BUCKETS_DIR, write: bool = False) -> dict:
+    md_root = find_md_source(backup_dir)
+    if md_root and not os.path.exists(os.path.join(backup_dir, "all_buckets.json")):
+        return restore_from_md(md_root, base_dir, write)
     have = existing_ids(base_dir)
     added, skipped, bad = [], [], []
     for bucket in load_backup(backup_dir):
@@ -135,7 +191,8 @@ def main() -> None:
         print("[恢复] 这是预演，什么都没写。确认没问题就加 --write 再跑一次。")
     else:
         print("[恢复] 已写入。记得重启大脑：systemctl restart ombre-brain")
-        print("[恢复] 新记忆还没有向量，跑一下 backfill_embeddings.py 才能被语义检索到。")
+        print("[恢复] 然后跑一下 backfill_embeddings.py 给新记忆补向量，"
+              "不补的话语义检索搜不到它们。")
 
 
 if __name__ == "__main__":

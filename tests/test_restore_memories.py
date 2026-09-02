@@ -70,3 +70,59 @@ def test_domain_name_cannot_escape_the_buckets_dir(tmp_path):
     written = list(base.rglob("*.md"))
     assert len(written) == 1
     assert str(base.resolve()) in str(written[0].resolve())
+
+
+# --------------------------------------------------------------------------
+# /api/export 打包出来的 tar.gz 解开后长这样：ombre_data/{permanent,dynamic,feel}/…
+# 这条路比逐条拉 611 次稳，所以也要真跑一遍。
+# --------------------------------------------------------------------------
+
+def _export_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "ombre_data"
+    (root / "dynamic" / "日常").mkdir(parents=True)
+    (root / "permanent" / "核心").mkdir(parents=True)
+    (root / "feel" / "沉淀物").mkdir(parents=True)
+    (root / "dynamic" / "日常" / "小事_aaa111.md").write_text(
+        '---\nid: "aaa111"\ntype: "dynamic"\n---\n\nRender 上的旧事\n', encoding="utf-8")
+    (root / "permanent" / "核心" / "准则_bbb222.md").write_text(
+        '---\nid: "bbb222"\n---\n\n准则\n', encoding="utf-8")
+    (root / "feel" / "沉淀物" / "ccc333.md").write_text(
+        '---\nid: "ccc333"\n---\n\n沉淀\n', encoding="utf-8")
+    (root / "embeddings.db").write_bytes(b"\x00sqlite-not-md")   # 绝不能被拷过去
+    return root
+
+
+def test_export_tarball_tree_is_copied_structure_intact(tmp_path):
+    base = tmp_path / "buckets"
+    base.mkdir()
+    _export_tree(tmp_path)
+    out = rm.restore(str(tmp_path), str(base), write=True)
+
+    assert sorted(out["added"]) == ["aaa111", "bbb222", "ccc333"]
+    assert (base / "dynamic" / "日常" / "小事_aaa111.md").exists()
+    assert (base / "permanent" / "核心" / "准则_bbb222.md").exists()
+    assert (base / "feel" / "沉淀物" / "ccc333.md").exists()
+    # 向量库是本机自己的，两边不能互相覆盖
+    assert not (base / "embeddings.db").exists()
+
+
+def test_export_tree_never_overwrites_local_version(tmp_path):
+    base = tmp_path / "buckets"
+    live = base / "dynamic" / "日常"
+    live.mkdir(parents=True)
+    f = live / "小事_aaa111.md"
+    f.write_text('---\nid: "aaa111"\n---\n\n本机这份是新的\n', encoding="utf-8")
+    _export_tree(tmp_path)
+
+    out = rm.restore(str(tmp_path), str(base), write=True)
+    assert "aaa111" in out["skipped"] and "aaa111" not in out["added"]
+    assert "本机这份是新的" in f.read_text(encoding="utf-8")
+
+
+def test_export_tree_dry_run_writes_nothing(tmp_path):
+    base = tmp_path / "buckets"
+    base.mkdir()
+    _export_tree(tmp_path)
+    out = rm.restore(str(tmp_path), str(base), write=False)
+    assert len(out["added"]) == 3
+    assert list(base.rglob("*.md")) == []
