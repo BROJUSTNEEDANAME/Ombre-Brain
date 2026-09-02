@@ -423,8 +423,8 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
     tb = _load()
     names = [n for n, *_ in tb.MODEL_CHOICES]
-    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t",
-                     "o4.6", "o4.6t", "s4.6", "s4.6t"], names
+    assert names == ["5.3", "5.2", "5.2t",
+                     "o4.6", "o4.6t", "s4.6", "s4.6t", "haiku"], names
     # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
     assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
 
@@ -823,3 +823,22 @@ def test_cheap_claude_tier_exists_and_is_a_different_model(monkeypatch):
     # 便宜档也要走 Anthropic 那条路，不能掉回 z.ai
     import claude_provider as cp
     assert cp.is_claude_model(tb.CLAUDE_CHEAP_MODEL)
+
+
+def test_haiku_has_no_thinking_tier(monkeypatch):
+    """Haiku 4.5 是 4.6 之前那代，不支持自适应思考——
+    给它开一个 t 档就是一按必崩。所以它只许有「不开思考」这一档。"""
+    tb = _load()
+    assert tb.CLAUDE_FAST_MODEL == "claude-haiku-4-5"
+    haiku = [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES
+             if m == tb.CLAUDE_FAST_MODEL]
+    assert haiku == [("haiku", "claude-haiku-4-5", True)], haiku
+    assert not any(off is False for _n, m, off, _d in tb.MODEL_CHOICES
+                   if m == tb.CLAUDE_FAST_MODEL)
+
+
+def test_glm_51_tiers_are_gone(monkeypatch):
+    """她让关掉 5.1 和 5.1t —— 列表里不许再出现。"""
+    tb = _load()
+    assert not [n for n, m, *_ in tb.MODEL_CHOICES if m == "glm-5.1"]
+    assert "5.1" not in [n for n, *_ in tb.MODEL_CHOICES]

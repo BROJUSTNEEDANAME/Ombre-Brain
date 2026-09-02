@@ -106,6 +106,10 @@ CLAUDE_MODEL = os.environ.get("OMBRE_CLAUDE_MODEL", "claude-opus-4-6")
 # 便宜档。Sonnet 5 更聪明，但换了分词器、同样的中文要多约 30% token——
 # 她的人设每轮就 1.5 万 token，那 30% 会把省下来的钱吃掉一截，所以这里选 4.6。
 CLAUDE_CHEAP_MODEL = os.environ.get("OMBRE_CLAUDE_CHEAP_MODEL", "claude-sonnet-4-6")
+# 最便宜最快的一档。⚠️ Haiku 4.5 是 4.6 之前那代，**不支持自适应思考**
+# （thinking={"type":"adaptive"} 会被拒），所以它只给「不开思考」这一档，
+# 不提供 haikut——给了就是一按必崩。
+CLAUDE_FAST_MODEL = os.environ.get("OMBRE_CLAUDE_FAST_MODEL", "claude-haiku-4-5")
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
 # 可选组合：模型 × 思考开关。
@@ -117,8 +121,6 @@ MODEL_CHOICES = [
     ("5.3", "glm-5.3", True, "最聪明；思考关不掉，开口前要想一轮，最慢"),
     ("5.2", "glm-5.2", True, "关思考，最快"),
     ("5.2t", "glm-5.2", False, "开思考，慢一些，遇到复杂的更稳"),
-    ("5.1", "glm-5.1", True, "关思考，快"),
-    ("5.1t", "glm-5.1", False, "开思考"),
     # Claude 走 Anthropic 官方接口（claude_provider.py），不是 z.ai。
     # 需要在 .env.apibot 里配 OMBRE_ANTHROPIC_KEY；记忆/人设/指令全都一样，
     # 因为大脑是 REST 调的，跟用哪家模型没关系。
@@ -126,6 +128,7 @@ MODEL_CHOICES = [
     ("o4.6t", CLAUDE_MODEL, False, "Opus 4.6 开思考（自适应），复杂的更稳"),
     ("s4.6", CLAUDE_CHEAP_MODEL, True, "Sonnet 4.6，便宜一大截，日常闲聊够用"),
     ("s4.6t", CLAUDE_CHEAP_MODEL, False, "Sonnet 4.6 开思考"),
+    ("haiku", CLAUDE_FAST_MODEL, True, "Haiku 4.5，最快最便宜；没有思考档"),
 ]
 model_override: dict[str, object] = {}
 
@@ -1750,7 +1753,8 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines = [f"现在用的是 {cur}（{current_model()}）", ""]
         lines += [f"/model {n}{'  ← 现在这个' if n == cur else ''}\n   {m} · {d}"
                   for n, m, _o, d in MODEL_CHOICES]
-        lines += ["", "带 t 的是开思考。5.3 没有关思考那档——它的思考关不掉。",
+        lines += ["", "带 t 的是开思考。5.3 没有关思考那档（它关不掉），"
+                      "haiku 没有思考档（这代不支持）。",
                   "换模型不清上下文：这一屏聊的他还记得，记忆库也是同一个。",
                   "人设不受影响，换回来随时。"]
         await update.message.reply_text("\n".join(lines))
