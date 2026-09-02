@@ -62,7 +62,7 @@ from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYS
 from writing_style import WRITING_MODE_SYSTEM
 from reply_sanitizer import visible_cut
 from utils import parse_memory_note
-from prompt_cache import inject_volatile_context
+from prompt_cache import append_volatile_context
 import claude_provider
 from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
@@ -852,6 +852,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 _mem_how = "失败"
     _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s（{_mem_how}）"
                   + (f"／{len(str(_mem_block))}字" if _mem_block else ""))
+    # ⚠️ 这段每轮都在变，必须放在**所有消息之后**，绝不能塞进她那条消息里面：
+    # 存进历史的是原文，塞过的是「背景+原文」，同一条消息两轮渲染的字节就不一样，
+    # 缓存是前缀匹配，从那儿往后全废——历史对话永远进不了缓存。
     dynamic_context = (
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
@@ -862,9 +865,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
           "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"
         + ("\n\n【她这条只是一个表情或一两个字】别分析、别翻记忆、别琢磨含义——"
            "就像人收到一个表情那样，随口接一句就行，一到两条短消息。" if _tiny else "")
-        + "\n【闪闪或系统本轮输入从下面开始】"
+        + "\n【以上是系统背景，不是闪闪说的话，别复述、别回应它本身】"
     )
-    messages = inject_volatile_context(messages, dynamic_context)
+    messages = append_volatile_context(messages, dynamic_context)
     # 这一轮有图片就自动切到识图模型（glm-4.6v），纯文字仍用默认（glm-5.3 等）
     def _has_img(msgs):
         for m in msgs:

@@ -89,6 +89,25 @@ def request_extra_body(
     return body
 
 
+def append_volatile_context(messages: list[dict], context: str) -> list[dict]:
+    """把每轮都在变的东西放到**所有消息之后**，作为独立的一条。
+
+    为什么不能像 inject_volatile_context 那样塞进最后一条 user 里：
+    存进历史的是原文，塞过的是「动态背景 + 原文」。同一条消息这一轮和下一轮
+    渲染出的字节就不一样，缓存是前缀匹配的，从那个位置往后全部失效——
+    历史对话**永远进不了缓存**。（NyraSeithhh/cache 的第 2 条铁律：
+    会变的全部排到断点之后。）
+
+    放在末尾就没这个问题：它只存在于当轮请求里，下一轮不会重现，
+    而它之前的所有消息逐字节不变。
+    """
+    copied = [dict(message) for message in messages]
+    if not context:
+        return copied
+    copied.append({"role": "user", "content": context})
+    return copied
+
+
 def inject_volatile_context(messages: list[dict], context: str) -> list[dict]:
     """Put changing context immediately before the newest user content.
 

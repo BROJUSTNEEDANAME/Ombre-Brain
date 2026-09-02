@@ -69,7 +69,7 @@ def test_build_kwargs_caches_persona_and_maps_tool_choice_none():
         tools=[{"type": "function", "function": {
             "name": "breath", "description": "d", "parameters": {"type": "object"}}}],
         tool_choice="none", thinking=True)
-    assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert kw["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert kw["tools"][0] == {"name": "breath", "description": "d",
                               "input_schema": {"type": "object"}}
     assert kw["tool_choice"] == {"type": "none"}
@@ -251,3 +251,76 @@ def test_thinking_on_never_gets_downgraded():
     assert len(calls) == 1, f"开思考不该重试，实际发了 {len(calls)} 次"
     assert calls[0]["thinking"] == {"type": "adaptive"}
     assert "claude-opus-4-6" not in cp._no_disable   # 这不是「关不掉」，别记错账
+
+
+# --------------------------------------------------------------------------
+# 缓存布局（对着 NyraSeithhh/cache 那份文档校）
+# --------------------------------------------------------------------------
+
+def test_persona_block_uses_one_hour_ttl_by_default(monkeypatch):
+    """她是隔十几二十分钟回一句的节奏，正好落在官方说的「5~60 分钟用 1h」那档。"""
+    monkeypatch.delenv("OMBRE_CLAUDE_CACHE_TTL", raising=False)
+    kw = cp.build_kwargs(model="claude-opus-4-6", max_tokens=10,
+                         messages=[{"role": "system", "content": "人设"},
+                                   {"role": "user", "content": "hi"}])
+    assert kw["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    monkeypatch.setenv("OMBRE_CLAUDE_CACHE_TTL", "5m")
+    kw = cp.build_kwargs(model="claude-opus-4-6", max_tokens=10,
+                         messages=[{"role": "system", "content": "人设"},
+                                   {"role": "user", "content": "hi"}])
+    assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_rolling_breakpoint_lands_on_history_not_on_this_turn():
+    """断点要打在「本轮之前」的 assistant 上。
+
+    打在最后一条（本轮新内容）上等于每轮只写不读——纯多花钱，比不打还糟。"""
+    kw = cp.build_kwargs(model="claude-opus-4-6", max_tokens=10, messages=[
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "u2"},
+        {"role": "assistant", "content": "a2"},
+        {"role": "user", "content": "u3-本轮"},
+    ])
+    marked = [(i, m["role"], b) for i, m in enumerate(kw["messages"])
+              for b in m["content"] if "cache_control" in b]
+    assert len(marked) == 1, marked
+    i, role, block = marked[0]
+    assert role == "assistant" and block["text"] == "a2"
+    assert i < len(kw["messages"]) - 1          # 绝不是最后一条
+    # 短 TTL 的条目必须排在长 TTL 的后面：system 是 1h，这个是默认 5m
+    assert block["cache_control"] == {"type": "ephemeral"}
+
+
+def test_first_turn_has_no_rolling_breakpoint():
+    """第一轮没有历史，打了也读不到，别白写。"""
+    kw = cp.build_kwargs(model="claude-opus-4-6", max_tokens=10, messages=[
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "在吗"},
+    ])
+    assert not [b for m in kw["messages"] for b in m["content"] if "cache_control" in b]
+
+
+def test_build_kwargs_is_idempotent_on_the_same_history():
+    """同一份历史连调两次，出来的必须一模一样。
+
+    断点是渲染期的事。要是它把标记攒进了调用方的历史，第二轮的字节就和第一轮
+    不同了——缓存自己把自己搞废。这条同时钉住「调用方历史不被改写」。
+
+    （说明：目前 convert_messages 本来就会重建每个 block，所以这条我没能造出
+    会让它变红的变异；它是结构性护栏，防以后有人把 block 改成直接复用原对象。）"""
+    history = [{"role": "user", "content": "u1"},
+               {"role": "assistant", "content": "a1"},
+               {"role": "user", "content": "u2"}]
+    snapshot = json.dumps(history, ensure_ascii=False)
+
+    def _build():
+        return json.dumps(cp.build_kwargs(
+            model="claude-opus-4-6", max_tokens=10,
+            messages=[{"role": "system", "content": "人设"}, *history]),
+            ensure_ascii=False, sort_keys=True)
+
+    assert _build() == _build()
+    assert json.dumps(history, ensure_ascii=False) == snapshot

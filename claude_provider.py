@@ -177,6 +177,43 @@ def convert_tool_choice(choice: Any) -> dict | None:
 # 先试着关，被拒就记住这个模型、以后直接不带这个字段（和 GLM 那套档位协商同理）。
 _no_disable: set[str] = set()
 
+# 缓存 TTL。官方给的选法是看「两次请求开头的间隔」：
+#   <5 分钟   → 5m（每次请求都会刷新计时，最便宜）
+#   5~60 分钟 → 1h（唯一值得付 2 倍写入费的区间）
+#   >1 小时   → 都救不了，冷启动
+# 她是隔十几二十分钟回一句的节奏，正好落在中间那档，所以默认 1h。
+# 想改：OMBRE_CLAUDE_CACHE_TTL=5m
+def _ttl() -> str:
+    return "1h" if os.environ.get(
+        "OMBRE_CLAUDE_CACHE_TTL", "1h").strip().lower() != "5m" else "5m"
+
+
+def _cc(ttl: str) -> dict:
+    """5m 是默认值，显式写出来反而多一个字段；1h 才需要带 ttl。"""
+    return {"type": "ephemeral"} if ttl == "5m" else {"type": "ephemeral", "ttl": ttl}
+
+
+def mark_rolling_breakpoint(msgs: list[dict]) -> None:
+    """在「本轮之前」的最后一条 assistant 上打一个断点，把历史纳进缓存。
+
+    默认缓存边界只到 system 末尾，历史对话每轮都按原价重算。这里再打一个标，
+    边界一路下移到包含全部历史——多轮长会话省最多的就是它
+    （NyraSeithhh/cache 的 BP4）。
+
+    ⚠️ 打在 assistant 上、不打在最后一条消息上：最后那条是本轮新内容，
+    下一轮长得不一样，打上去等于每轮只写不读，纯多花钱。
+    ⚠️ 这一步的前提是历史逐字节稳定——所以易变内容必须用
+    append_volatile_context 放到末尾，而不是塞进历史里。
+    """
+    for i in range(len(msgs) - 2, -1, -1):     # 跳过最后一条（本轮的）
+        if msgs[i].get("role") != "assistant":
+            continue
+        blocks = msgs[i].get("content") or []
+        if blocks and isinstance(blocks[-1], dict):
+            blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+            msgs[i] = {**msgs[i], "content": [*blocks[:-1], blocks[-1]]}
+        return
+
 
 def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
                  tools=None, tool_choice=None, thinking: bool = False,
@@ -184,9 +221,12 @@ def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
     system, msgs = convert_messages(messages)
     kw: dict[str, Any] = {"model": model, "max_tokens": int(max_tokens), "messages": msgs}
     if system:
-        # 人设是每轮一模一样的长前缀，缓存下来能省一大笔钱、也更快
+        # 人设是每轮一模一样的长前缀，缓存下来能省一大笔钱、也更快。
+        # tools 排在 system 前面，所以这一个标同时把 tools + system 都缓存了。
         kw["system"] = [{"type": "text", "text": system,
-                         "cache_control": {"type": "ephemeral"}}]
+                         "cache_control": _cc(_ttl())}]
+    # 长 TTL 的条目必须排在短的前面：system 用 1h，历史断点用默认 5m，顺序正确。
+    mark_rolling_breakpoint(msgs)
     tl = convert_tools(tools)
     if tl:
         kw["tools"] = tl

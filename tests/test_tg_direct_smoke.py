@@ -842,3 +842,39 @@ def test_glm_51_tiers_are_gone(monkeypatch):
     tb = _load()
     assert not [n for n, m, *_ in tb.MODEL_CHOICES if m == "glm-5.1"]
     assert "5.1" not in [n for n, *_ in tb.MODEL_CHOICES]
+
+
+def test_volatile_context_goes_after_history_not_into_her_message(monkeypatch):
+    """每轮都在变的东西（时间／记忆／格式要求）必须排在所有消息之后。
+
+    塞进她最后那条消息里会出真事：存进历史的是原文，塞过的是「背景+原文」，
+    同一条消息两轮渲染出的字节不一样 → 缓存是前缀匹配，从那儿往后全废，
+    历史对话永远进不了缓存。（这个 bug 真的存在过。）"""
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        seen["messages"] = kw["messages"]
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    history = [{"role": "user", "content": "u1"},
+               {"role": "assistant", "content": "a1"},
+               {"role": "user", "content": "我今天头疼"}]
+    asyncio.run(tb._ask_claude([dict(m) for m in history], on_segment=noop))
+
+    msgs = seen["messages"]
+    # 历史里的每一条都必须逐字节等于传进来的原文
+    for original, sent in zip(history, msgs[1:1 + len(history)]):
+        assert sent["content"] == original["content"], sent
+
+    # 动态背景单独一条，排在最后
+    assert msgs[-1]["role"] == "user"
+    assert "系统动态背景" in msgs[-1]["content"]
+    assert len(msgs) == 1 + len(history) + 1
