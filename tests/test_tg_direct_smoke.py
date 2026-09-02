@@ -1013,3 +1013,59 @@ def test_stale_cmd_never_deletes(monkeypatch, tmp_path):
     monkeypatch.setattr(tb, "_call_brain_tool", fake_trace)
     asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=["撤销", "old1"])))
     assert all("delete" not in a for a in calls), calls
+
+
+def test_nightly_dream_never_uses_the_expensive_chat_model(monkeypatch):
+    """夜里做梦是他自己在想，她看不到——不该按 /model 选的贵档花钱。
+
+    真实账单：做梦会连着调好几轮工具，每轮重付一遍 1.7 万 token 的完整前缀，
+    而且是一整晚里的第一次调用、缓存早过期。一晚上十万 token 全价。"""
+    tb = _load()
+    used = []
+
+    async def fake_create(**kw):
+        used.append(kw.get("model"))
+        return _fake_stream(["（在想）"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL      # 她把聊天切到了贵档
+    try:
+        asyncio.run(tb.nightly_dream(types.SimpleNamespace()))
+    finally:
+        tb.model_override.clear()
+
+    assert used, "做梦这一轮没发出请求"
+    assert used[0] == tb.BACKGROUND_MODEL, used
+    assert not claude_is(used[0]), f"做梦跑到贵档上去了：{used[0]}"
+
+
+def claude_is(model):
+    import claude_provider as cp
+    return cp.is_claude_model(model)
+
+
+def test_explicit_model_wins_over_the_slash_model_choice(monkeypatch):
+    """显式传 model 的调用点不跟着 /model 走，且 /debug 里要标出来是后台。"""
+    tb = _load()
+    used = []
+
+    async def fake_create(**kw):
+        used.append(kw.get("model"))
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    try:
+        async def noop(_s):
+            return None
+
+        asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                   on_segment=noop, model="glm-5.2"))
+    finally:
+        tb.model_override.clear()
+    assert used == ["glm-5.2"], used
+    assert "后台" in str(tb.LAST_TURN.get("model")), tb.LAST_TURN.get("model")

@@ -111,6 +111,10 @@ CLAUDE_CHEAP_MODEL = os.environ.get("OMBRE_CLAUDE_CHEAP_MODEL", "claude-sonnet-4
 # （thinking={"type":"adaptive"} 会被拒），所以它只给「不开思考」这一档，
 # 不提供 haikut——给了就是一按必崩。
 CLAUDE_FAST_MODEL = os.environ.get("OMBRE_CLAUDE_FAST_MODEL", "claude-haiku-4-5")
+# 后台自言自语（夜里做梦）用的模型：她看不到，不该按聊天的档位花钱。
+# 真实账单：做梦会连着调好几轮工具，每轮重付一遍完整前缀，而且是一整晚里的
+# 第一次调用、缓存早过期——一晚上十万 token 全价。默认退回便宜的 env 模型。
+BACKGROUND_MODEL = os.environ.get("OMBRE_BACKGROUND_MODEL", "") or MODEL
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
 # 可选组合：模型 × 思考开关。
@@ -808,7 +812,8 @@ async def _save_memory_note(note: str) -> None:
             logger.warning("后台存记忆失败：%s", content[:30])
 
 
-async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False) -> str:
+async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False,
+                      model: str | None = None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     # ⚠️ 这三行必须在函数最前面：下面的记忆检索就会往 _trace 里写，
@@ -816,7 +821,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _trace: list[str] = []
     LAST_TURN.clear()
-    LAST_TURN["model"] = f"{current_model()}（{'关思考' if thinking_wanted_off() else '开思考'}）"
+    LAST_TURN["model"] = (f"{model or current_model()}"
+                          f"（{'关思考' if thinking_wanted_off() else '开思考'}"
+                          f"{'／后台' if model else ''}）")
     LAST_TURN["trace"] = _trace
     _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
     messages = [{"role": "system", "content": _sys}] + list(history)
@@ -877,7 +884,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 return True
         return False
     # Claude 自己就能看图，不用切走；GLM 纯文本看不了，这轮换 glm-4.6v。
-    use_model = current_model()
+    # model 显式传进来时优先（后台任务用它退回便宜模型，不跟着 /model 走）。
+    use_model = model or current_model()
     if _has_img(history) and not claude_provider.is_claude_model(use_model):
         use_model = VISION_MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
@@ -2049,8 +2057,10 @@ async def nightly_dream(context: ContextTypes.DEFAULT_TYPE) -> None:
         ),
     }
     try:
-        await _ask_claude([prompt])
-        logger.info("nightly_dream 完成")
+        # ⚠️ 一定要显式指定模型：这是他自己在想，她看不到，不该按 /model 选的
+        # 贵档花钱。做梦会连调好几轮工具，每轮都重付完整前缀。
+        await _ask_claude([prompt], model=BACKGROUND_MODEL)
+        logger.info("nightly_dream 完成（模型 %s）", BACKGROUND_MODEL)
     except Exception:  # noqa: BLE001
         logger.exception("nightly_dream 失败")
 
