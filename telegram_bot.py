@@ -1195,28 +1195,13 @@ async def _maybe_handle_management(update: Update, context: ContextTypes.DEFAULT
     chat_id = update.effective_chat.id
     text = (update.message.text or "").strip()
     task = manage_store.get(chat_id)
-    goal = detect_start(text)
-
-    if not task and not goal:
+    # ⚠️ 只有 /manage 能开启托管，普通聊天绝不自动进入。
+    # 真实事故：她说「一直陪着我好不好呀哥哥」，「陪着我」命中了启动词，
+    # 系统把「好不好呀哥哥」当成要托管的任务名，然后一句撒娇把她卡进了配置流程。
+    # 撒娇、要陪、要抱这些话永远只是话，不是派活。
+    if not task:
         return False
     await _sync_manage_user(update)
-
-    if not task:
-        task = manage_store.begin_setup(chat_id, goal)
-        task = manage_store.configure(
-            chat_id,
-            deadline_at=parse_deadline(text, tz=USER_TZ),
-            interval_minutes=parse_interval_minutes(text),
-        )
-        if task.get("deadline_at") and task.get("interval_minutes"):
-            await _activate_management(context, chat_id, task)
-        else:
-            _setup_misses.pop(chat_id, None)
-            await _send_manage_text(
-                context, chat_id, task,
-                _setup_question(task) + "\n比如「十一点，二十分钟后查我」。不想弄就说「算了」。",
-                "setup")
-        return True
 
     action = detect_control(text)
     if action == "stop":
@@ -1225,7 +1210,7 @@ async def _maybe_handle_management(update: Update, context: ContextTypes.DEFAULT
         return True
 
     if task["status"] == "setup":
-        existing_goal = task.get("goal") or goal
+        existing_goal = task.get("goal")
         if not existing_goal and not parse_deadline(text, tz=USER_TZ) and not parse_interval_minutes(text):
             existing_goal = text
         task = manage_store.configure(

@@ -609,3 +609,35 @@ def test_manage_setup_does_not_repeat_verbatim_and_lets_her_out(monkeypatch):
     assert handled[-1] is False, "问两次还答不上就该放她走，让消息回到正常聊天"
     assert "算了" in sent[1] or "不想弄" in sent[1], sent
     assert "先不弄了" in sent[-1], sent
+
+
+def test_affection_never_starts_management():
+    """撒娇不是派活：只有 /manage 能开托管。
+
+    真实事故：她说「一直陪着我好不好呀哥哥」，「陪着我」命中启动词，系统把
+    「好不好呀哥哥」当成要托管的任务名，一句撒娇把她卡进了配置流程。
+    """
+    from adhd_manager import detect_start
+    for line in (
+        "哥哥，我就是你的小宝宝。万事都顺着我好不好。一直陪着我好不好呀哥哥",
+        "陪我睡觉", "你陪着我好不好", "陪我聊会儿天",
+    ):
+        assert detect_start(line) is None, f"这句不该触发托管：{line}"
+    # /manage 走的还是同一个解析器，必须照常能用
+    assert detect_start("托管我写作业") == "写作业"
+    assert detect_start("盯着我背单词") == "背单词"
+
+
+def test_free_text_cannot_open_management(monkeypatch):
+    """没有已存在的托管任务时，普通聊天一律不进管理流程。"""
+    tb = _load()
+
+    class _Store:
+        def get(self, _c): return None
+
+    monkeypatch.setattr(tb, "manage_store", _Store())
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=1),
+        message=types.SimpleNamespace(text="一直陪着我好不好呀哥哥", message_id=1))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+    assert asyncio.run(tb._maybe_handle_management(upd, ctx)) is False
