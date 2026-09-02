@@ -41,7 +41,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
@@ -851,8 +851,47 @@ def _is_contentless(text: str) -> bool:
     return not re.search(r"[\u4e00-\u9fffa-zA-Z0-9]", t)
 
 
+# 一晚上催她睡了几次。⚠️ 必须用代码记账，不能只写在人设里。
+# 真实事故：人设明明写着「最多一次、不连环催」，但他每轮都能看到「现在是
+# 凌晨 5 点」，于是每轮都重新触发——她说「唉」「苦苦」「哭哭」「喜欢你」，
+# 换回来的是「该闭眼了」「闭眼。」「哭完去睡。」「睡，明天再说。」
+# 四轮连着赶她睡。她说：好回避好冷淡啊。
+_NIGHT_NUDGES: dict[int, dict] = {}
+_SLEEP_NUDGE_RE = re.compile(r"去睡|睡吧|睡觉|该睡|闭眼|躺下|上床|明天再说")
+
+
+def _night_key(now: datetime) -> str:
+    """凌晨算前一天的夜里——5 点催的和 23 点催的是同一晚。"""
+    return (now.date() if now.hour >= 6 else
+            (now - timedelta(hours=8)).date()).isoformat()
+
+
+def note_sleep_nudge(chat_id: int, reply: str, now: datetime | None = None) -> int:
+    now = now or datetime.now(USER_TZ)
+    key = _night_key(now)
+    st = _NIGHT_NUDGES.setdefault(chat_id, {"date": key, "n": 0})
+    if st["date"] != key:
+        st.update(date=key, n=0)
+    if _SLEEP_NUDGE_RE.search(reply or ""):
+        st["n"] += 1
+    return st["n"]
+
+
+def sleep_nudge_note(chat_id: int | None, now: datetime | None = None) -> str:
+    """给这一轮的动态背景加一句：今晚已经催过几次了。"""
+    if chat_id is None:
+        return ""
+    now = now or datetime.now(USER_TZ)
+    st = _NIGHT_NUDGES.get(chat_id)
+    if not st or st.get("date") != _night_key(now) or not st.get("n"):
+        return ""
+    return ("\n\n【今晚你已经催她睡 %d 次了】不许再催第二遍，也不许用"
+            "「去睡」「明天再说」当收尾把话打住。她还醒着是她的事，"
+            "你现在要做的是好好接住她这句话。" % st["n"])
+
+
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False,
-                      model: str | None = None) -> str:
+                      model: str | None = None, chat_id: int | None = None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     # ⚠️ 这三行必须在函数最前面：下面的记忆检索就会往 _trace 里写，
@@ -923,6 +962,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
           "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"
         + ("\n\n【她这条只有表情或语气词，没有具体内容】就像人收到一个表情那样，"
            "随口接住就行，一到两条短消息。但她要是在示弱或撒娇，别冷着她。" if _tiny else "")
+        + sleep_nudge_note(chat_id)
         + "\n【以上是系统背景，不是闪闪说的话，别复述、别回应它本身】"
     )
     messages = append_volatile_context(messages, dynamic_context)
@@ -1511,7 +1551,7 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     try:
         reply = await asyncio.wait_for(
             _ask_claude(history, on_segment=_emit if _stream else None,
-                        writing=bool(writing_mode.get(chat_id))),
+                        writing=bool(writing_mode.get(chat_id)), chat_id=chat_id),
             timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
     except asyncio.CancelledError:
         _typing.cancel()      # 被抢答取消：别把「正在输入」留在她那儿
@@ -1548,6 +1588,9 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     if not segs and not _sent:
         await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
         return
+    # 记账：这一轮有没有催她睡。人设里那句「最多一次、不连环催」靠自觉管不住，
+    # 得让下一轮的动态背景带着「今晚已经催了几次」去。
+    note_sleep_nudge(chat_id, "\n".join(segs))
     history.append({"role": "assistant", "content": "\n".join(segs)})
     if not _sent:                       # 非流式（语音模式）才在这里统一发
         await _send_segments(context, chat_id, segs)

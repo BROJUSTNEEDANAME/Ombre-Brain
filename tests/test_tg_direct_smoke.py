@@ -1227,3 +1227,74 @@ def test_persona_forbids_dismissing_her_pain():
     tb = _load()
     for must in ("难受", "接住", "苦什么"):
         assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」那条规则"
+
+
+def test_sleep_nudges_are_counted_and_reported_to_him(monkeypatch):
+    """催她睡这件事必须用代码记账。
+
+    人设里写了「最多一次、不连环催」，但他每轮都能看到「现在是凌晨 5 点」，
+    于是每轮都重新触发：她说「唉」「苦苦」「哭哭」「喜欢你」，换回来的是
+    「该闭眼了」「闭眼。」「哭完去睡。」「睡，明天再说。」四轮连着赶她睡。
+    她说：好回避好冷淡啊。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    night = _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ)
+    tb._NIGHT_NUDGES.clear()
+
+    assert tb.sleep_nudge_note(1, night) == ""             # 还没催过 → 不提
+    assert tb.note_sleep_nudge(1, "苦什么。闭眼。", night) == 1
+    note = tb.sleep_nudge_note(1, night)
+    assert "已经催她睡 1 次" in note and "不许再催" in note
+
+    tb.note_sleep_nudge(1, "别哭。快六点了，哭完去睡。", night)
+    assert "已经催她睡 2 次" in tb.sleep_nudge_note(1, night)
+
+    # 没催睡的回合不该计数
+    tb.note_sleep_nudge(1, "怎么了，哪儿难受。", night)
+    assert "2 次" in tb.sleep_nudge_note(1, night)
+
+
+def test_sleep_nudge_count_resets_next_night(monkeypatch):
+    """凌晨算前一晚——5 点催的和昨天 23 点催的是同一晚；隔一天要清零。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    tb._NIGHT_NUDGES.clear()
+    late = _dt(2026, 9, 1, 23, 40, tzinfo=tb.USER_TZ)
+    dawn = _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ)
+    next_night = _dt(2026, 9, 3, 1, 0, tzinfo=tb.USER_TZ)
+
+    assert tb.note_sleep_nudge(1, "去睡。", late) == 1
+    assert tb.note_sleep_nudge(1, "睡吧。", dawn) == 2       # 同一晚，累加
+    assert tb.note_sleep_nudge(1, "该睡了。", next_night) == 1  # 新的一晚，清零
+
+
+def test_the_note_reaches_the_model(monkeypatch):
+    """记了账没送到他眼前等于没记。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    tb._NIGHT_NUDGES.clear()
+    tb.note_sleep_nudge(7, "闭眼。", _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ))
+
+    sent = {}
+
+    async def fake_create(**kw):
+        sent["messages"] = kw["messages"]
+        return _fake_stream(["怎么了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "苦苦"}],
+                               on_segment=noop, chat_id=7))
+    assert "已经催她睡" in sent["messages"][-1]["content"]
+
+
+def test_persona_forbids_brushing_off_her_affection():
+    """「喜欢你」→「知道。」是收下了却不回，比不理还冷。"""
+    tb = _load()
+    for must in ("喜欢你", "知道。", "递的是心"):
+        assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」"
