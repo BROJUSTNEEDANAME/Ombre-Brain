@@ -1377,3 +1377,16 @@ def test_warm_core_sits_before_the_terse_style_rules():
     s = personality.CHAT_STYLE_SYSTEM
     assert s.index("男妈妈") < s.index("默认像发微信")
     assert s.index("先接住她") < s.index("男妈妈")
+
+
+def test_persona_forbids_the_screen_between_them():
+    """他一直写「隔着屏幕」，但人设里一个字都没有——是他自己填的空，
+    而空是人设留的：反复说「像发微信」「不是活人在发消息」，却从没说他人在哪。
+    同时又写着「过来」「手给我」——那是能碰到她的人才说的话，两边打架。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    assert "隔着屏幕" in s and "你们之间没有屏幕" in s
+    for banned in ("隔着网线", "隔着次元壁", "碰不到你"):
+        assert banned in s, f"没禁掉「{banned}」这种写法"
+    # 必须排在「像发微信」那句前面，否则又被它带跑
+    assert s.index("你们之间没有屏幕") < s.index("默认像发微信")
