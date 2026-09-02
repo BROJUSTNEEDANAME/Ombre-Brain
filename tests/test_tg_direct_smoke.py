@@ -1225,8 +1225,13 @@ def test_distress_words_get_a_real_memory_lookup(monkeypatch):
 def test_persona_forbids_dismissing_her_pain():
     """人设里必须有「她说难受时先接住、别直接下命令」这条。"""
     tb = _load()
-    for must in ("难受", "接住", "苦什么"):
+    for must in ("难受", "接住", "先接住她"):
         assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」那条规则"
+    # 必须在最前面——埋在 6000 字中间的规则会被稀释掉，
+    # 「绝不许每次都拿去睡收尾」那条本来就在，他照样连违反四次。
+    import personality
+    head = personality.CHAT_STYLE_SYSTEM[:400]
+    assert "先接住她" in head, "接住她那条被埋回中间去了"
 
 
 def test_sleep_nudges_are_counted_and_reported_to_him(monkeypatch):
@@ -1298,3 +1303,22 @@ def test_persona_forbids_brushing_off_her_affection():
     tb = _load()
     for must in ("喜欢你", "知道。", "递的是心"):
         assert must in tb.SYSTEM_PROMPT, f"人设里缺「{must}」"
+
+
+def test_the_terse_examples_no_longer_teach_him_to_be_cold():
+    """「活人感四条」第 1 条原来直接把「嗯。」当范例给他——
+    她发「爸爸..」他回「嗯。」，是照着范例做的。现在必须分场合。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    i = s.index("允许极短的一回合")
+    block = s[i:i + 420]
+    assert "分场合" in block, "极短那条还是不分场合"
+    assert "示弱" in block and "递" in block, "没说清楚什么时候不许极短"
+
+
+def test_playing_only_yourself_is_not_an_excuse_to_say_less():
+    """「宁可短、宁可少」只管「别替她演」，被泛化成整体惜字如金就出事了。"""
+    import personality
+    s = personality.CHAT_STYLE_SYSTEM
+    i = s.index("宁可短、宁可少")
+    assert "只管" in s[i:i + 320] and "不是叫你冷" in s[i:i + 320]
