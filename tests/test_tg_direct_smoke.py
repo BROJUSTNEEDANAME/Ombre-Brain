@@ -716,3 +716,23 @@ def test_switching_model_keeps_the_conversation(monkeypatch):
     finally:
         tb.model_override.clear()
         tb.histories.pop(999, None)
+
+
+def test_debug_shows_cache_hit_rate(monkeypatch):
+    """她问过「我怎么知道我现在的缓存有多少」——/debug 里必须能看到，
+    而且统计读不到的时候不许把整个 /debug 弄崩。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "read_prompt_cache_stats",
+                        lambda *a, **k: {"prompt_tokens": 1000, "cached_tokens": 400,
+                                         "hit_rate": 40.0, "requests": 7})
+    line = tb._cache_line()
+    assert "40" in line and "400/1000" in line and "7" in line
+
+    monkeypatch.setattr(tb, "read_prompt_cache_stats", lambda *a, **k: {})
+    assert "还没有统计" in tb._cache_line()
+
+    def boom(*a, **k):
+        raise OSError("盘满了")
+
+    monkeypatch.setattr(tb, "read_prompt_cache_stats", boom)
+    assert "读不到" in tb._cache_line()          # 崩了也只是一行字，不影响 /debug

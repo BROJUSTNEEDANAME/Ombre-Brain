@@ -64,6 +64,7 @@ from reply_sanitizer import visible_cut
 from utils import parse_memory_note
 from prompt_cache import inject_volatile_context
 import claude_provider
+from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
 from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
@@ -1758,6 +1759,22 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "没有这个。能选的：" + "、".join(n for n, *_ in MODEL_CHOICES))
 
 
+def _cache_line() -> str:
+    """缓存命中率：人设那段长前缀每轮一模一样，命中了就不重复计费。
+    她问过「我怎么知道我现在的缓存有多少」——放进 /debug，不用登服务器翻文件。
+    统计只记 token 总数，不存任何正文。"""
+    try:
+        stats = read_prompt_cache_stats()
+    except Exception:  # noqa: BLE001
+        return "缓存 读不到统计"
+    prompt = int(stats.get("prompt_tokens", 0) or 0)
+    if not prompt:
+        return "缓存 还没有统计（要跑一阵才有数）"
+    cached = int(stats.get("cached_tokens", 0) or 0)
+    return (f"缓存 命中 {stats.get('hit_rate', 0)}%"
+            f"（{cached}/{prompt} token 没重复付钱，共 {stats.get('requests', 0)} 次）")
+
+
 async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/debug：把最近一轮慢在哪儿列出来——她不用开服务器终端翻日志。"""
     chat_id = update.effective_chat.id
@@ -1776,6 +1793,7 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"整轮 {LAST_TURN['total_s']}s")
     if LAST_TURN.get("result"):
         lines.append(f"结果 {LAST_TURN['result']}")
+    lines.append(_cache_line())
     await update.message.reply_text("\n".join(lines))
 
 
