@@ -254,6 +254,42 @@ def visible_cut(text: str) -> int:
     return m.start() if m else len(text or "")
 
 
+_HIDDEN_OPEN = re.compile(r"[\[［【]\s*(?:think|thinking|emo|diary|memory|情绪|心情|记忆)"
+                          r"|<\s*(?:think|thinking)\b[^>]*>", re.I)
+_HIDDEN_CLOSE = re.compile(r"[\[［【]\s*/\s*(?:think|thinking|emo|diary|memory|情绪|心情|记忆)"
+                           r"\s*[\]］】]|<\s*/\s*(?:think|thinking)\s*>", re.I)
+
+
+def strip_hidden_stream(text: str, in_hidden: bool = False) -> tuple[str, bool]:
+    """从一段流式正文里剔掉隐藏块，并把「现在还在不在隐藏块里」带到下一段。
+
+    ⚠️ 必须跨段保持状态。真实事故：visible_cut 是逐段跑的，他的思考被换行切成
+    七八个气泡，只有带 `[think]` 的第一段被切掉，后面那些「她其实是在撒娇，
+    我应该安她的醋」全部原样发到她手机上，最后还跟了一个 `[/think]`
+    ——闭合标签带斜杠，压根不匹配开标签的正则。
+
+    返回 (这一段该显示的内容, 下一段开始时是否仍在隐藏块里)。
+    """
+    value = str(text or "")
+    out = []
+    while value:
+        if in_hidden:
+            m = _HIDDEN_CLOSE.search(value)
+            if not m:
+                return "".join(out), True      # 整段都在隐藏块里，一个字都不发
+            value = value[m.end():]
+            in_hidden = False
+            continue
+        m = _HIDDEN_OPEN.search(value)
+        if not m:
+            out.append(value)
+            break
+        out.append(value[:m.start()])
+        value = value[m.end():]
+        in_hidden = True
+    return "".join(out), in_hidden
+
+
 def _needs_terminal(value: str) -> bool:
     if not value or re.fullmatch(r"https?://\S+", value):
         return False

@@ -60,7 +60,7 @@ import drives  # 本地：Drivesoid 情绪内核
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
-from reply_sanitizer import visible_cut
+from reply_sanitizer import strip_hidden_stream, visible_cut
 from utils import parse_memory_note
 from prompt_cache import append_volatile_context
 import claude_provider
@@ -881,6 +881,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         use_model = VISION_MODEL
     page_url = None  # 若这轮做了网页，记下链接——保底一定发给她
     said: list[str] = []  # 已经通过 on_segment 发到她手机上的段
+    # 隐藏块（[think]/[memory]…）的跨段状态。逐段判断会漏：他的思考被换行切成
+    # 好几个气泡，只有带开标签的第一段会被切掉，后面几段照发（踩过，全发给她了）。
+    _hidden = [False]
     _budget = MAX_TOKENS if writing else CHAT_MAX_TOKENS
     _empty_retried = False  # 空回复只补救一次，别没完没了
     _broke_retried = False  # 被硬墙掐断后的补救也只做一次
@@ -894,7 +897,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
 
         ⚠️ 必须去重：他常在工具轮里先说一句、调完记忆工具后在下一轮把同样的话
         再说一遍（真实事故：「嗯。凶你的这个 也一样。」原样发了两遍）。"""
-        t = (text or "")
+        t, _hidden[0] = strip_hidden_stream(text or "", _hidden[0])
         t = t[:visible_cut(t)].strip()   # 隐藏标签一个字都不外推
         if not writing:
             t = restore_punctuation(t)   # 他不打标点就替他补上（写文模式不动）

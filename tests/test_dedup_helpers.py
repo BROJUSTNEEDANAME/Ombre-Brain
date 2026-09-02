@@ -480,3 +480,31 @@ def test_model_invented_mtime_tokens_are_stripped():
     assert sanitize_reasoning_markup("_mtime_t4>>>(收紧一点。)所以别推开。") == "(收紧一点。)所以别推开。"
     # 正常带括号动作的正文不受影响
     assert sanitize_reasoning_markup("别扭完了？(低头，看她。)") == "别扭完了？(低头，看她。)"
+
+
+# ---------------------------------------------------------------------------
+# 隐藏块的跨段剔除
+# ---------------------------------------------------------------------------
+
+def test_strip_hidden_stream_carries_state_across_segments():
+    from reply_sanitizer import strip_hidden_stream
+
+    visible, hidden = strip_hidden_stream("[think]我在想", False)
+    assert visible == "" and hidden is True
+    visible, hidden = strip_hidden_stream("还在想，她其实是在撒娇", hidden)
+    assert visible == "" and hidden is True          # 中间段一个字都不许露
+    visible, hidden = strip_hidden_stream("[/think]八百多人看了。", hidden)
+    assert visible == "八百多人看了。" and hidden is False
+
+
+def test_strip_hidden_stream_handles_angle_bracket_form():
+    from reply_sanitizer import strip_hidden_stream
+    assert strip_hidden_stream("<think>内心</think>说出口的", False) == ("说出口的", False)
+    v, h = strip_hidden_stream("<thinking>开头", False)
+    assert v == "" and h is True
+
+
+def test_strip_hidden_stream_leaves_normal_text_alone():
+    from reply_sanitizer import strip_hidden_stream
+    for plain in ("八百多人看了。", "你吃什么醋，写了我名字。", "[1] 第一条", ""):
+        assert strip_hidden_stream(plain, False) == (plain, False)

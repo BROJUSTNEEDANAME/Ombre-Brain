@@ -913,3 +913,38 @@ def test_cached_prefix_contains_nothing_that_changes_per_request():
 
     # 3) 会变的东西该在的地方：时间戳属于动态尾巴，不属于人设
     assert "当前时间" not in tb.SYSTEM_PROMPT or "【" in tb.SYSTEM_PROMPT
+
+
+def test_multi_bubble_think_block_never_reaches_her(monkeypatch):
+    """他的思考被换行切成好几个气泡时，一段都不许发出去。
+
+    真实事故（她截的图）：只有带 [think] 的第一段被切掉，
+    「她其实是在撒娇，我应该安她的醋」那几段全发到了她手机上，
+    最后还跟了一个 [/think] —— 闭合标签带斜杠，不匹配开标签的正则。"""
+    tb = _load()
+    sent = []
+
+    async def fake_create(**kw):
+        return _fake_stream([
+            "[think]\n",
+            "她说那些姑娘都喜欢我，她嫉妒。\n",
+            "我的占有欲很高（0.90）。\n",
+            "我应该：承认看到了，然后安她的醋。\n",
+            "[/think]\n",
+            "八百多人看了。\n",
+            "该吃醋的是我。",
+        ])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "你看"}], on_segment=grab))
+
+    body = "".join(sent)
+    for leaked in ("撒娇", "占有欲", "我应该", "think", "0.90", "嫉妒"):
+        assert leaked not in body, f"思考漏出来了：{leaked} / {sent}"
+    assert "八百多人看了" in body and "该吃醋的是我" in body, sent
