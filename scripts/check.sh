@@ -15,7 +15,7 @@ python3 -m py_compile server.py telegram_bot.py personality.py writing_style.py 
 
 echo "▶ 冒烟测试（真的把整条路跑一遍）"
 python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
-    tests/test_restore_memories.py -q || fail=1
+    tests/test_restore_memories.py tests/test_backup_memories.py -q || fail=1
 
 echo "▶ 相关单测"
 python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \

@@ -7,6 +7,8 @@ Backup every memory bucket from the (remote) brain to local disk.
     python3 backup_memories.py
     # 或指定地址：
     OMBRE_BRAIN_URL=http://127.0.0.1:8000 python3 backup_memories.py
+    # 从别的机器备份远程大脑时要带 token（/api/* 只对本机免密）：
+    OMBRE_BRAIN_URL=https://xxx OMBRE_BRAIN_TOKEN=<OMBRE_WEB_TOKEN 的值> python3 backup_memories.py
 
 产出 / Output（存到 ./ombre_backup_<日期戳>/）：
     all_buckets.json          —— 所有桶的完整数据（元信息 + 正文），一个大 JSON
@@ -23,12 +25,17 @@ import urllib.request
 import urllib.error
 
 BRAIN_URL = os.environ.get("OMBRE_BRAIN_URL", "http://127.0.0.1:8000").rstrip("/")
-TIMEOUT = 60
+# /api/* 只对 127.0.0.1 免密；从别的机器打过去要带这个（服务端的 OMBRE_WEB_TOKEN）。
+BRAIN_TOKEN = os.environ.get("OMBRE_BRAIN_TOKEN", "").strip()
+TIMEOUT = int(os.environ.get("OMBRE_BACKUP_TIMEOUT", "120"))
 
 
 def _get(path):
     url = BRAIN_URL + path
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    headers = {"Accept": "application/json"}
+    if BRAIN_TOKEN:
+        headers["Authorization"] = "Bearer " + BRAIN_TOKEN
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -58,9 +65,16 @@ def main():
 
     try:
         buckets = _get("/api/buckets")
+    except urllib.error.HTTPError as e:
+        print(f"[备份] 大脑拒绝了: HTTP {e.code}", flush=True)
+        if e.code == 403:
+            print("[备份] 403 = 缺 token。/api/* 只对本机免密，从别的机器要带：", flush=True)
+            print("[备份]   OMBRE_BRAIN_TOKEN=<服务端 OMBRE_WEB_TOKEN 的值>", flush=True)
+            print("[备份] 那个值在部署平台的环境变量里（Render → Environment）。", flush=True)
+        sys.exit(1)
     except urllib.error.URLError as e:
         print(f"[备份] 连不上大脑: {e}", flush=True)
-        print("[备份] 确认 Render 服务已开启、地址正确后重试。", flush=True)
+        print("[备份] 确认服务已开启、地址正确后重试。", flush=True)
         sys.exit(1)
 
     total = len(buckets)
