@@ -423,7 +423,8 @@ def test_model_choices_cover_thinking_combos(monkeypatch):
     """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
     tb = _load()
     names = [n for n, *_ in tb.MODEL_CHOICES]
-    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t", "o4.6", "o4.6t"], names
+    assert names == ["5.3", "5.2", "5.2t", "5.1", "5.1t",
+                     "o4.6", "o4.6t", "s4.6", "s4.6t"], names
     # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
     assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
 
@@ -808,3 +809,17 @@ def test_claude_choice_is_opus_4_6_and_model_id_is_visible(monkeypatch):
     body = "\n".join(sent)
     assert "claude-opus-4-6" in body, body      # 真实模型名必须露出来
     assert "glm-5.3" in body, body
+
+
+def test_cheap_claude_tier_exists_and_is_a_different_model(monkeypatch):
+    """Opus 4.6 一条 4 美分，得有个便宜档能对比。
+    便宜档必须是**另一个模型**——写成同一个就等于没给她选择。"""
+    tb = _load()
+    assert tb.CLAUDE_CHEAP_MODEL == "claude-sonnet-4-6"
+    assert tb.CLAUDE_CHEAP_MODEL != tb.CLAUDE_MODEL
+    assert [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES if n.startswith("s4.6")] == [
+        ("s4.6", "claude-sonnet-4-6", True),
+        ("s4.6t", "claude-sonnet-4-6", False)]
+    # 便宜档也要走 Anthropic 那条路，不能掉回 z.ai
+    import claude_provider as cp
+    assert cp.is_claude_model(tb.CLAUDE_CHEAP_MODEL)

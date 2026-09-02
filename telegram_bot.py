@@ -103,6 +103,9 @@ OMBRE_MCP_URL = os.environ.get(
 MODEL = os.environ.get("OMBRE_BOT_MODEL", "glm-5.3")
 # 她要的是 Opus 4.6 这一代。换别的版本改这个环境变量就行，代码不用动。
 CLAUDE_MODEL = os.environ.get("OMBRE_CLAUDE_MODEL", "claude-opus-4-6")
+# 便宜档。Sonnet 5 更聪明，但换了分词器、同样的中文要多约 30% token——
+# 她的人设每轮就 1.5 万 token，那 30% 会把省下来的钱吃掉一截，所以这里选 4.6。
+CLAUDE_CHEAP_MODEL = os.environ.get("OMBRE_CLAUDE_CHEAP_MODEL", "claude-sonnet-4-6")
 # 她可以在 Telegram 里用 /model 直接换模型来回对比，不必登服务器改 env 再重启。
 # 覆盖值持久化，重启不丢；没设过就用上面的 MODEL。
 # 可选组合：模型 × 思考开关。
@@ -121,6 +124,8 @@ MODEL_CHOICES = [
     # 因为大脑是 REST 调的，跟用哪家模型没关系。
     ("o4.6", CLAUDE_MODEL, True, "Opus 4.6，不开思考，快；能直接看图"),
     ("o4.6t", CLAUDE_MODEL, False, "Opus 4.6 开思考（自适应），复杂的更稳"),
+    ("s4.6", CLAUDE_CHEAP_MODEL, True, "Sonnet 4.6，便宜一大截，日常闲聊够用"),
+    ("s4.6t", CLAUDE_CHEAP_MODEL, False, "Sonnet 4.6 开思考"),
 ]
 model_override: dict[str, object] = {}
 
