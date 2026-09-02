@@ -589,7 +589,11 @@ SYSTEM_PROMPT += """
 - 这轮没有值得记的（纯口水话、已经记过的同一件事）就写 [memory:不记录]。
 - 系统每轮已经把相关记忆浮现给你了，不用自己 breath；只有她明确问
   「还记得吗／之前说过」而浮现里又没有时，才去 breath 检索。
-- ⛔ 绝不把标签里的内容、或「我去存一下记忆」这类过程说给她听。"""
+- ⛔ 绝不把标签里的内容、或「我去存一下记忆」这类过程说给她听。
+- ⛔⛔ **标签只能跟在正文后面，绝不许单独成为一整条回复。** 你先跟她说话，
+  说完了再另起一行写标签。一个字的正文都没有、只吐一个 [memory:…] 出去，
+  在她那边就是「他没理我」——真发生过。没什么可记的就写 [memory:不记录]，
+  但话照说。"""
 
 # ----------------------------------------------------------------------------
 
@@ -899,6 +903,17 @@ def sleep_nudge_note(chat_id: int | None, now: datetime | None = None) -> str:
             "你现在要做的是好好接住她这句话。" % st["n"])
 
 
+def _visible_only(text: str) -> str:
+    """只留会说给她听的部分：剔掉 [memory:]/[think] 这类隐藏块。
+
+    ⚠️ 流式那条路在 _emit 里已经过滤了，但**返回值以前是模型原文**。
+    真实事故：GLM-5.3 有一轮正文一个字没有、只吐了一个
+    「[memory:事实：闪闪 9月2日凌晨…]」，流式因此什么都没发，
+    代码回落到「把返回值直接发出去」，那个标签就原样上屏了。"""
+    visible, _ = strip_hidden_stream(text or "", False)
+    return visible[:visible_cut(visible)].strip()
+
+
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False,
                       model: str | None = None, chat_id: int | None = None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
@@ -1135,10 +1150,12 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
 
         # 思考把额度吃光 → 正文为空。别直接认输：加大额度重来一轮，
         # 「这次回复没有生成出来」对她来说就是他不理人。
-        if not tool_calls and not (content or "").strip() and not said and not _empty_retried:
+        # 「只吐了一个 [memory:] 标签」和「正文为空」是同一件事：她那边都是没人说话。
+        if not tool_calls and not _visible_only(content) and not said and not _empty_retried:
             _empty_retried = True
             _budget = min(_budget * 3, MAX_TOKENS)
-            logger.warning("正文为空（多半是思考吃光额度），加大到 %d 重来一轮", _budget)
+            _force_next = True              # 这轮不许再调工具，必须开口
+            logger.warning("没有可见正文（空、或整轮只有隐藏标签），加大到 %d 重来一轮", _budget)
             continue
 
         _trace.append(
@@ -1150,7 +1167,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         if not tool_calls:
             # 记忆标签留给发完之后的后台任务，绝不占用她等回复的时间
             LAST_TURN["memory_note"] = _extract_memory_note(content or "")
-            reply = (content or "").strip()
+            reply = _visible_only(content)      # 绝不把隐藏标签当成话发给她
             # 做了网页但话里没带上链接 → 补上，绝不让她收到空手
             if page_url and page_url not in reply:
                 reply = (reply + "\n" + page_url).strip() if reply else page_url

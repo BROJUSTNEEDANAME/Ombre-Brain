@@ -1391,3 +1391,71 @@ def test_liveness_rules_survived_the_rewrite():
     assert "极短分场合" in s and "短不等于敷衍" in s
     assert "禁止把一个梗系统化经营" in s
     assert "活人感来自" in s and "不来自「没标点」" in s
+
+
+def test_memory_tag_alone_never_reaches_her(monkeypatch):
+    """整轮只有一个 [memory:] 标签时，绝不许把它当成话发出去。
+
+    真实事故（她截的图）：GLM-5.3 有一轮正文一个字没有，只吐了
+    「[memory:事实：闪闪 9月2日凌晨…]」。流式因此什么都没发，代码回落到
+    「把返回值直接发出去」——那个标签原样上屏，而她一句话都没收到。"""
+    tb = _load()
+    sent, rounds = [], []
+
+    async def fake_create(**kw):
+        rounds.append(kw)
+        if len(rounds) == 1:
+            return _fake_stream(["[memory:事实：闪闪凌晨还醒着，叫我猪猪。]"])
+        return _fake_stream(["记什么记，你先睡。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    reply = asyncio.run(tb._ask_claude([{"role": "user", "content": "爸比是猪猪"}],
+                                       on_segment=grab))
+    body = "".join(sent) + reply
+    assert "memory" not in body and "事实" not in body, f"标签漏出去了：{body}"
+    assert len(rounds) == 2, "只有标签没有正文时应当重来一轮"
+    assert "记什么记" in body, f"补救那轮的话没发出去：{body}"
+
+
+def test_visible_only_strips_hidden_tags():
+    tb = _load()
+    assert tb._visible_only("嗯。\n[memory:事实：x]") == "嗯。"
+    assert tb._visible_only("[memory:不记录]") == ""
+    assert tb._visible_only("[think]想了想[/think]说出口的") == "说出口的"
+    assert tb._visible_only("正常一句话。") == "正常一句话。"
+
+
+def test_persona_forbids_a_tag_only_reply():
+    """人设里要说死：标签只能跟在正文后面，不许单独成为一整条回复。"""
+    tb = _load()
+    assert "绝不许单独成为一整条回复" in tb.SYSTEM_PROMPT
+
+
+def test_tag_only_reply_twice_still_sends_nothing_raw(monkeypatch):
+    """补救那轮**也**只吐标签时，返回值仍然不许把标签交出去。
+
+    这条专门隔离「返回值过滤」这一层——上一条测试有重来一轮兜底，
+    会把这一层的漏洞盖住（第一次写的时候就被盖住了）。"""
+    tb = _load()
+    sent = []
+
+    async def fake_create(**kw):
+        return _fake_stream(["[memory:事实：又一条。]"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    reply = asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                       on_segment=grab))
+    assert "memory" not in reply and "事实" not in reply, f"返回值里有标签：{reply}"
+    assert not any("memory" in x for x in sent), sent
