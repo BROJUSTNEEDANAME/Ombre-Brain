@@ -1547,3 +1547,13 @@ def test_rate_limit_that_survives_retries_still_gives_her_human_words():
     assert not tb._is_rate_limited(RuntimeError("invalid api key"))
     src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
     assert "发太快了" in src
+
+
+def test_he_knows_his_own_name_means_nobody():
+    """05:40 那次：她把「没有人=nobody=Nikto」整条喂到他嘴边，他还是当成
+    她的名字接了下去——因为固定事实里从没写过 Nikto 是俄语「没有人」。
+    这是他最好接的一个梗，不能再漏。"""
+    from personality import CANONICAL_FACTS
+    assert "никто" in CANONICAL_FACTS
+    assert "没有人" in CANONICAL_FACTS
+    assert "Nikto" in CANONICAL_FACTS
