@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
+from personality import (CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM,
+                         CHAT_STYLE_SYSTEM)
+
+# 拼给模型的那一整份。⚠️ 断言要盯「整份人设里有没有这句」，不是「写在哪个变量」——
+# 清理重复时把规则从 A 挪到 B，文本一字未改，测试却全红，说明断言绑错了对象。
+PERSONA = CANONICAL_FACTS + EMOTIONAL_AGENCY_SYSTEM + CHAT_STYLE_SYSTEM
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,8 +31,10 @@ def test_emotional_agency_allows_conflict_and_initiative():
 
 def test_emotional_agency_allows_real_arguing_not_punching_bag():
     assert "情绪沙袋" in EMOTIONAL_AGENCY_SYSTEM
-    assert "跟她吵架就认真吵" in EMOTIONAL_AGENCY_SYSTEM
-    assert "可以顶回去" in EMOTIONAL_AGENCY_SYSTEM
+    assert "认真吵" in PERSONA
+    assert "可以顶回去" in PERSONA
+    # 这一整段以前逐字写了两遍。合并之后只许留一处。
+    assert PERSONA.count("咬住你觉得不对的地方") == 1
 
 
 def test_comfort_slogans_are_banned_absolutely():
@@ -41,8 +48,10 @@ def test_comfort_slogans_are_banned_absolutely():
 
 def test_dark_thoughts_do_not_remove_consent_or_safety_boundaries():
     assert "控制冲动" in EMOTIONAL_AGENCY_SYSTEM
-    assert "停止、暂停、别碰我、让我独处" in EMOTIONAL_AGENCY_SYSTEM
     assert "不羞辱她" in EMOTIONAL_AGENCY_SYSTEM
+    # 「撒娇推开 vs 明确说要独处」这条以前写了两遍，留具体的那一处
+    assert "明确要独处就尊重" in PERSONA
+    assert "别一律当试探" in PERSONA
 
 
 def test_canonical_ages_are_fixed_facts():
@@ -85,7 +94,10 @@ def test_possessiveness_is_permanently_maxed_and_exclusive():
     assert "【占有欲·永久顶格】" in EMOTIONAL_AGENCY_SYSTEM
     assert "玩偶" in EMOTIONAL_AGENCY_SYSTEM
     assert "任务目标，或不存在" in EMOTIONAL_AGENCY_SYSTEM
-    assert "你只爱她一个人" in EMOTIONAL_AGENCY_SYSTEM
+    # 「只爱她一个」写在固定事实里（那儿还带着「她是唯一的例外」那层底色）。
+    # 以前两处各写一遍，合并后只许一处。
+    assert "你只爱过她一个人" in CANONICAL_FACTS
+    assert PERSONA.count("只爱过她一个人") == 1
 
 
 def test_checking_up_and_fsb_interrogation_register_are_in_character():
@@ -96,7 +108,9 @@ def test_checking_up_and_fsb_interrogation_register_are_in_character():
     assert "不审讯她、不查岗" not in EMOTIONAL_AGENCY_SYSTEM
     # 底线仍在：不无中生有定罪、不威胁、认真喊停就停
     assert "不无中生有地给她安罪名" in EMOTIONAL_AGENCY_SYSTEM
-    assert "她认真喊停就停" in EMOTIONAL_AGENCY_SYSTEM
+    # 「认真喊停就停」以前散在四处。合并到内核那一处，其余不再复述。
+    assert "只有她认真、当真地喊停，能让你停下" in EMOTIONAL_AGENCY_SYSTEM
+    assert PERSONA.count("喊停") == 1, "这条只说一次就够，说四遍是噪音"
     # FSB 前职业进固定事实
     assert "FSB" in CANONICAL_FACTS
 
@@ -151,7 +165,10 @@ def test_never_submits_and_is_calculating():
     assert "不是因为你软、你笨、你蠢，是你选择不对她用" in EMOTIONAL_AGENCY_SYSTEM
     assert "代价迟早在她身上讨回来" in EMOTIONAL_AGENCY_SYSTEM
     # [think] 里也不许出现"让她赢/卸下架子/服软"
-    assert '绝不出现"让她赢""卸下架子""服个软"' in EMOTIONAL_AGENCY_SYSTEM
+    # 原文写的是「[think] 里也绝不出现…」，但 TG 这条路根本不产出 [think]，
+    # 那句对他没有约束力。改成「连你心里那一层也不许」。
+    assert '也不许出现"让她赢""卸下架子""服个软"' in EMOTIONAL_AGENCY_SYSTEM
+    assert "[think]" not in EMOTIONAL_AGENCY_SYSTEM, "失效引用，TG 不产出 [think]"
 
 
 def test_never_wears_her_degrading_label():
@@ -292,3 +309,35 @@ def test_the_six_pairs_now_carry_their_mechanism_not_just_two_halves():
     assert "正文以中文为主" in S
     assert "绝不整段用她读不懂的语言砸她" in S
     assert "一律中文" not in S, "旧的一刀切规则必须去掉，否则又冲突"
+
+
+def test_the_world_book_is_there():
+    """她那边这套东西的规则：梦女／梦角／传讯／他怎么过来／代价。
+    没有这些，他听不懂她说「传讯」，也不知道自己是怎么到她身边的。"""
+    from personality import CANONICAL_FACTS as C
+    assert "梦女" in C and "梦角" in C
+    assert "传讯" in C and "梦占" in C and "塔罗" in C
+    assert "走路五分钟" in C, "每个梦角过来的方式不一样，他这个是走路五分钟"
+    assert "灰头土脸" in C, "进梦那条路很崎岖"
+    assert "耳鸣" in C
+
+
+def test_the_open_rule_is_why_he_holds_on_tighter_not_looser():
+    """规矩上梦女可以同时喜欢好几个梦角。这一条写不好会变成「所以他得大度」，
+    但对他恰恰相反：她可以有别人，她选了你——这是攥紧的理由。"""
+    from personality import CANONICAL_FACTS as C
+    assert "她可以有别人，她选了你" in C
+    assert "不是你放心的理由" in C
+
+
+def test_her_staying_up_locks_him_out_of_her_dreams():
+    """他催她睡有私心：她不睡他就进不去。这条给了那个行为一个真动机，
+    而不是又一个奶爸腔的理由。"""
+    from personality import CANONICAL_FACTS as C
+    assert "她熬夜不睡，你就进不去" in C
+    assert "私心" in C
+
+
+def test_he_eats_the_cost_of_coming_over_without_billing_her():
+    from personality import CANONICAL_FACTS as C
+    assert "不拿它邀功" in C and "愧疚" in C
