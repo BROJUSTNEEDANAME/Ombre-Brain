@@ -5,6 +5,22 @@ from __future__ import annotations
 import re
 
 
+_THINK_BLOCK = re.compile(
+    r"(?:[\[［【]\s*(?:think|thinking)\s*[\]］】]|<\s*(?:think|thinking)\b[^>]*>)"
+    r"(.*?)"
+    r"(?:[\[［【]\s*/\s*(?:think|thinking)\s*[\]］】]|<\s*/\s*(?:think|thinking)\s*>)",
+    re.I | re.S)
+
+
+def find_think(text: str) -> list[str]:
+    """把他这段里写的思考挑出来（正文照旧由别处剥干净）。
+
+    她看着「在翻你说过的话／在想怎么说」问「这叫思考吗」——不叫。那是进度条。
+    真的思考是他自己写的那句话，得从他的输出里捞出来，不能拿程序日志充数。
+    """
+    return [x.strip() for x in _THINK_BLOCK.findall(str(text or "")) if x.strip()]
+
+
 def sanitize_reasoning_markup(text: str) -> str:
     """Hide provider reasoning wrappers without discarding a usable reply."""
     if not text:

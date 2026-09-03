@@ -62,7 +62,7 @@ import web_search  # 本地：联网搜索（z.ai 自带）
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
-from reply_sanitizer import strip_hidden_stream, visible_cut
+from reply_sanitizer import strip_hidden_stream, visible_cut, find_think
 from utils import parse_memory_note
 from prompt_cache import append_volatile_context
 import claude_provider
@@ -657,6 +657,28 @@ MEM_BLOCK_CHARS = int(os.environ.get("OMBRE_TG_MEM_CHARS", "1000"))
 MEM_REUSE_OVERLAP = float(os.environ.get("OMBRE_TG_MEM_REUSE_OVERLAP", "0.34"))
 
 
+THINK_MAX_CHARS = int(os.environ.get("OMBRE_TG_THINK_CHARS", "700"))
+
+
+def _reasoning_of(obj) -> str:
+    """把供应商放思考的那个字段取出来。
+
+    OpenAI 兼容口子上各家名字不一样（reasoning_content / reasoning），而且
+    openai 的 SDK 会把没见过的字段丢进 model_extra，直接 getattr 拿不到。
+    """
+    for key in ("reasoning_content", "reasoning"):
+        value = getattr(obj, key, None)
+        if isinstance(value, str) and value:
+            return value
+    extra = getattr(obj, "model_extra", None)
+    if isinstance(extra, dict):
+        for key in ("reasoning_content", "reasoning"):
+            value = extra.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
 # 她要的是「他在想什么」的人话版，不是原始思维链——那个又长又出戏，
 # 她自己骂过「你自己看看这是人吗」。这里每一条都对应一个真实发生的动作，
 # 一个字都不许编：报的是代码此刻正在做的事。
@@ -1078,7 +1100,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     # 定义晚了会 UnboundLocalError，每一条消息都必崩（踩过，全线挂掉）。
     _t0 = time.time()
     _trace: list[str] = []
-    LAST_TURN.clear()
+    LAST_TURN.clear()   # 含上一轮的 think——绝不能张冠李戴挂到这一轮
     LAST_TURN["model"] = (f"{model or current_model()}"
                           f"（{'关思考' if thinking_wanted_off() else '开思考'}"
                           f"{'／后台' if model else ''}）")
@@ -1223,12 +1245,16 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             resp = await _create()
             msg = resp.choices[0].message
             content, tool_calls = msg.content or "", list(msg.tool_calls or [])
+            _rc = _reasoning_of(msg) or "\n".join(find_think(content))
+            if _rc:
+                LAST_TURN["think"] = _rc[:THINK_MAX_CHARS]
         else:
             # 流式：正文攒到一个气泡边界（‖）就立刻发；工具轮结束时把这轮说的话
             # 也立刻发出去——「回来了就好」这种工具前的正经话，她当场就该收到。
             st = await _create(stream=True)
             _stream_usage = None    # 流式这条路以前完全没统计，/cache 里日常聊天是空白的
             buf, pending, tc_acc = "", "", {}
+            _reason = ""
             _broke = False
             _checked = 0
             _round_t0 = time.time()   # ⚠️ 每轮重新计时：从整通调用起算会把多轮对话误砍
@@ -1263,6 +1289,13 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                             slot["name"] = tc.function.name
                         if tc.function.arguments:
                             slot["args"] += tc.function.arguments
+                # ⚠️ glm-5.3 的思考关不掉（传 disabled 会被 1210 拒），
+                # 那些 token 她本来就在付钱——以前直接扔掉，等于花钱买了不看。
+                # 她自己说的：「不是说 5.3 思考无法取消吗，那我就看那个呗」。
+                _rc = _reasoning_of(d)
+                if _rc:
+                    _reason += _rc
+                    LAST_TURN["think"] = _reason[:THINK_MAX_CHARS]
                 c = getattr(d, "content", None)
                 if c:
                     buf += c
@@ -1731,7 +1764,22 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     # 那是 <blockquote expandable>，Bot API 7.0 就有，我说错了。
     _status_box: dict = {"mid": None, "text": ""}
 
-    _thought: list[str] = []          # 这一轮他真的做了哪几步，给可展开小块用
+    _thought: list[str] = []          # 这一轮他真的做了哪几步（兜底用）
+
+    def _folded_lines() -> list[str] | None:
+        """折叠块里放什么。
+
+        她看着「在翻你说过的话／在想怎么说」问「这叫思考吗」——不叫，那是进度条。
+        真思考优先：glm-5.3 的思考本来就关不掉，那些 token 她已经付过钱了，
+        以前直接扔掉等于花钱买了不看。他真没输出思考时（比如关了思考的模型），
+        才退回那几行进度——总比空着强，但绝不假装那是思考。
+        """
+        if not status_on.get(chat_id, True):
+            return None
+        think = str(LAST_TURN.get("think") or "").strip()
+        if think:
+            return [x.strip() for x in think.splitlines() if x.strip()]
+        return _thought or None
 
     async def _status(text: str) -> None:
         if text not in _thought:
@@ -1774,8 +1822,7 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         _typing.cancel()                           # 第一句已经发出，不再显示输入中
         # 只有第一条挂那个折叠块——每条都挂就成了刷屏。
         await _send_reply(context, chat_id, seg,
-                          quote_lines=_thought if not _sent and status_on.get(
-                              chat_id, True) else None)
+                          quote_lines=(_folded_lines() if not _sent else None))
         _sent.append(seg)
         if len(_sent) == 1:
             LAST_TURN["first_bubble_s"] = round(time.time() - t0, 1)

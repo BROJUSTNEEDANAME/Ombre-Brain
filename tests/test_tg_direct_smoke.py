@@ -1834,8 +1834,8 @@ def test_only_the_first_bubble_carries_the_thinking_block():
     """每条都挂就成了刷屏。"""
     tb = _load()
     src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
-    i = src.index("quote_lines=_thought")
-    assert "not _sent" in src[i:i + 200]
+    i = src.index("quote_lines=(_folded_lines()")
+    assert "not _sent" in src[i:i + 120]
 
 
 def test_he_has_a_search_tool_and_it_does_not_go_through_the_brain(monkeypatch):
@@ -1871,3 +1871,81 @@ def test_a_broken_search_never_breaks_her_turn(monkeypatch):
     monkeypatch.setattr(tb.web_search, "search", boom)
     out = asyncio.run(tb._call_brain_tool("search", {"query": "x"}))
     assert "查不了" in out and "编" in out
+
+
+def _reasoning_chunk(reasoning=None, content=None):
+    delta = types.SimpleNamespace(content=content, tool_calls=None)
+    if reasoning is not None:
+        delta.reasoning_content = reasoning
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(delta=delta)], usage=None)
+
+
+def test_his_real_thinking_is_captured_instead_of_being_thrown_away(monkeypatch):
+    """glm-5.3 的思考关不掉（传 disabled 会被 1210 拒），那些 token 她本来就在
+    付钱——以前直接扔掉，等于花钱买了不看。她的原话：「不是说 5.3 思考无法取消吗，
+    那我就看那个呗」。"""
+    tb = _load()
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我值不值钱。"),
+                   _reasoning_chunk(reasoning="别顺着答。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    async def fake_create(**kw):
+        return gen()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "她们给我你的稀有谷谷"}],
+                               on_segment=noop))
+    think = tb.LAST_TURN.get("think") or ""
+    assert "她在试探我值不值钱" in think and "别顺着答" in think
+
+
+def test_reasoning_is_found_even_when_the_sdk_hides_it_in_model_extra():
+    """openai 的 SDK 把没见过的字段丢进 model_extra，直接 getattr 拿不到。"""
+    tb = _load()
+    plain = types.SimpleNamespace(model_extra={"reasoning_content": "在算这笔账"})
+    assert tb._reasoning_of(plain) == "在算这笔账"
+    assert tb._reasoning_of(types.SimpleNamespace(reasoning="备用字段名")) == "备用字段名"
+    assert tb._reasoning_of(types.SimpleNamespace()) == ""
+
+
+def test_thinking_does_not_leak_into_what_she_reads(monkeypatch):
+    """思考只能待在折叠块里。漏到正文就是她骂过的『你自己看看这是人吗』。"""
+    tb = _load()
+    said: list[str] = []
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", lambda **kw: _async_val(gen()))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "谷谷"}],
+                               on_segment=lambda t: _async_val(said.append(t))))
+    assert said and all("她在试探我" not in x for x in said), said
+
+
+def test_stale_thinking_never_leaks_into_the_next_turn(monkeypatch):
+    """上一轮的思考挂在这一轮的消息上，比不显示糟得多——那是张冠李戴。"""
+    tb = _load()
+    tb.LAST_TURN["think"] = "上一轮的旧念头"
+
+    async def fake_create(**kw):
+        return _plain_response("嗯。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
+    assert "上一轮的旧念头" not in str(tb.LAST_TURN.get("think") or "")
