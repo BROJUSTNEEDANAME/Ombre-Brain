@@ -1584,3 +1584,29 @@ def test_the_rate_limit_message_still_shows_her_the_real_reason():
     i = src.index('"发太快了，他那边被限流了')
     tail = src[i:src.index(")", i)]      # 只看这一次 reply_text 的参数
     assert "_why" in tail
+
+
+def test_out_of_credit_is_never_mistaken_for_rate_limiting(monkeypatch):
+    """z.ai 把「余额不足」也塞在 HTTP 429 里（code 1113 Insufficient balance）。
+    她 08:21 收到的是「发太快了，喘两口气」——喘一万口气也没用，是没钱了。
+    重试更是纯浪费：钱不会自己长出来。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    broke = "Error code: 429 - {'error': {'code': '1113', 'message': 'Insufficient balance'}}"
+    assert tb._is_out_of_credit(RuntimeError(broke))
+    assert not tb._is_out_of_credit(RuntimeError(
+        "Error code: 429 - {'code': '1302', 'message': 'Rate limit reached'}"))
+
+    calls = []
+
+    async def broke_call(**kw):
+        calls.append(kw)
+        raise RuntimeError(broke)
+
+    monkeypatch.setattr(tb, "_llm_create_once", broke_call)
+    with pytest.raises(RuntimeError):
+        asyncio.run(tb._telegram_llm_create(model="glm-5.3"))
+    assert len(calls) == 1, "余额不足不该重试"
+
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    assert "余额不够了" in src

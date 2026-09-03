@@ -766,6 +766,15 @@ def _authorized(chat_id: int) -> bool:
 _RATE_LIMIT_BACKOFF = (1.5, 4.0)
 
 
+def _is_out_of_credit(exc) -> bool:
+    """z.ai 把「余额不足」也塞在 HTTP 429 里发回来（code 1113 Insufficient
+    balance），跟真限流同一个状态码。她 08:21 那次就是这个：重试再多次也没用，
+    钱不会自己长出来。必须先于限流判定。"""
+    text = str(exc or "").lower()
+    return any(w in text for w in (
+        "1113", "insufficient", "balance", "余额", "欠费", "quota exceeded"))
+
+
 def _is_rate_limited(exc) -> bool:
     """⚠️ 必须严格。第一版写成「报错里出现 429 或 1302 就算限流」，结果把别的
     故障也认成了限流——她 07:49 和 08:02 各发两条、隔了 13 分钟，两次都收到
@@ -784,7 +793,7 @@ async def _telegram_llm_create(**kwargs):
         try:
             return await _llm_create_once(**kwargs)
         except Exception as e:  # noqa: BLE001
-            if wait is None or not _is_rate_limited(e):
+            if wait is None or _is_out_of_credit(e) or not _is_rate_limited(e):
                 raise
             logger.warning("被限流，等 %.1fs 再试一次：%s", wait, str(e)[:120])
             await asyncio.sleep(wait)
@@ -1644,6 +1653,11 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         # 不是一串英文报错。
         # ⚠️ 原因永远要带上。第一版把 /debug 指引删了，等到误判发生时，
         # 她屏幕上只剩一句「发太快了」，真正的故障被我盖得干干净净。
+        if _is_out_of_credit(_exc):
+            await update.message.reply_text(
+                "不是他不理你——API 账户余额不够了，得去 z.ai 充值。\n"
+                "（充完他立刻就回来：" + _why[:80] + "）")
+            return
         if _is_rate_limited(_exc):
             await update.message.reply_text(
                 "发太快了，他那边被限流了，喘两口气再说一句。\n"
