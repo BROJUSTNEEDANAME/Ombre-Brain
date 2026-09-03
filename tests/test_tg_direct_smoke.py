@@ -1557,3 +1557,30 @@ def test_he_knows_his_own_name_means_nobody():
     assert "никто" in CANONICAL_FACTS
     assert "没有人" in CANONICAL_FACTS
     assert "Nikto" in CANONICAL_FACTS
+
+
+def test_rate_limit_detector_does_not_fire_on_a_bare_number():
+    """由来：第一版写成「报错里出现 429 或 1302 就算限流」。裸数字会撞上
+    token 数、桶 ID、时间戳——她只发了两条也收到「发太快了」，真故障被盖住。"""
+    tb = _load()
+    assert not tb._is_rate_limited(RuntimeError("max_tokens 4290 exceeded"))
+    assert not tb._is_rate_limited(RuntimeError("bucket 1302abc not found"))
+    assert not tb._is_rate_limited(RuntimeError("connection reset"))
+    # 真限流仍然认得出来
+    assert tb._is_rate_limited(RuntimeError(
+        "Error code: 429 - {'error': {'code': '1302', "
+        "'message': 'Rate limit reached for requests'}}"))
+
+    class _RL(Exception):
+        status_code = 429
+
+    assert tb._is_rate_limited(_RL("whatever"))
+
+
+def test_the_rate_limit_message_still_shows_her_the_real_reason():
+    """误判总会有。她屏幕上不能只剩一句「发太快了」，得留着真原因。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index('"发太快了，他那边被限流了')
+    tail = src[i:src.index(")", i)]      # 只看这一次 reply_text 的参数
+    assert "_why" in tail

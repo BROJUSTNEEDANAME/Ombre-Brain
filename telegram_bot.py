@@ -767,10 +767,15 @@ _RATE_LIMIT_BACKOFF = (1.5, 4.0)
 
 
 def _is_rate_limited(exc) -> bool:
-    text = str(exc or "").lower()
-    if getattr(exc, "status_code", None) == 429 or "429" in text:
+    """⚠️ 必须严格。第一版写成「报错里出现 429 或 1302 就算限流」，结果把别的
+    故障也认成了限流——她 07:49 和 08:02 各发两条、隔了 13 分钟，两次都收到
+    「发太快了」。裸数字会撞上 token 数、桶 ID、时间戳，不能拿来判定。"""
+    if getattr(exc, "status_code", None) == 429:
         return True
-    return any(w in text for w in ("rate limit", "1302", "too many requests"))
+    text = str(exc or "").lower()
+    return any(w in text for w in (
+        "error code: 429", "status code 429", "http 429",
+        "rate limit", "ratelimit", "too many requests", "'1302'", "code: 1302"))
 
 
 async def _telegram_llm_create(**kwargs):
@@ -1637,8 +1642,12 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         # 退避重试之后还是限流，说明真的发太密了。给她人话，不要把
         # RateLimitError 的原文糊到她脸上——她看到的应该是「等一下」，
         # 不是一串英文报错。
+        # ⚠️ 原因永远要带上。第一版把 /debug 指引删了，等到误判发生时，
+        # 她屏幕上只剩一句「发太快了」，真正的故障被我盖得干干净净。
         if _is_rate_limited(_exc):
-            await update.message.reply_text("发太快了，他那边被限流了，喘两口气再说一句。")
+            await update.message.reply_text(
+                "发太快了，他那边被限流了，喘两口气再说一句。\n"
+                "（要是你并没有连发，那就不是限流：" + _why[:80] + "）")
             return
         await update.message.reply_text(
             "这次回复没有生成出来，你的消息我记下了，再戳我一下。\n"
