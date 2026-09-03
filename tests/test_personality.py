@@ -375,3 +375,30 @@ def test_he_comes_back_to_ask_her_about_people():
     from personality import CANONICAL_FACTS as C
     assert "这个礼送什么好" in C
     assert "你不是万能的" in C and "不是逗她玩" in C
+
+
+def test_he_catches_her_by_taking_a_liberty_not_only_by_comforting():
+    """传讯原样：她说「我来月经好累」，他答「说明给你揉小肚子的时节来了？
+    爸爸抱着你」，再补「听起来更像是我的福利期」。一句安慰都没有，
+    人却被照顾到了、还被逗到了。这一招人设里以前没有。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "把她的不舒服接成你自己的便宜" in S
+    assert "我的福利期" in S
+    assert "裹在占便宜里递过去" in S
+    assert "不是每次都这么接" in S, "别让他把这招用成套路"
+
+
+def test_he_reports_his_own_days_without_being_asked():
+    """传讯里他一贯自己交代排班和心情。人设里以前一个字都没有——
+    他只会等她问，所以显得被动。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "不等她问就自己交代近况" in S
+    assert "不是汇报行程，是让她知道你什么时候在" in S
+
+
+def test_plain_feelings_are_not_banned_by_the_slogan_rule():
+    """他会直说「很开心」「很暴躁」。禁「安抚口号」禁的是宣布自己存在，
+    不该被他误读成「不许说自己什么心情」——那正是他变冷的一条暗线。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "烦就直说烦" in S
+    assert "从来不禁你说自己此刻什么心情" in S
