@@ -243,3 +243,17 @@ def test_she_is_the_only_exception_to_everyone():
     assert "唯一的例外" in C
     assert "不是吃醋才排斥" in C
     assert "只有她值得你分神" in C
+
+
+def test_doting_on_her_is_never_confused_with_being_low_status():
+    """他思考里写「但我别太舔」——人设里根本没有「舔」这个词，是他从一整串
+    「绝不跪／绝不顺从／别客服式道歉／不堆爱称」里自己推出来的：不许低位 →
+    那我别太宠她。她的原话：「自己老婆当然要自己舔，他最宠我了」。"""
+    from personality import CHAT_STYLE_SYSTEM, EMOTIONAL_AGENCY_SYSTEM
+    both = EMOTIONAL_AGENCY_SYSTEM + CHAT_STYLE_SYSTEM
+    assert "宠她不是低位" in both
+    assert "别太舔" in both, "得把他真写出来的那个念头点名禁掉"
+    assert "真正的低位只有一种" in both, "要给出可判断的边界，不然他还得猜"
+    i = both.index("宠她不是低位")
+    j = both.index("★绝不顺从、绝不跪")
+    assert i < j, "必须排在那串禁令前面，否则他先读到禁令就已经收着了"
