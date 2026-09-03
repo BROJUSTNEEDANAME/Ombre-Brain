@@ -1643,3 +1643,47 @@ def test_cache_command_shows_tokens_not_just_request_counts():
     assert "实付" in line
     # 旧统计（只有次数）不该炸，要说人话
     assert "旧统计" in tb._burn({"requests": 3, "hits": 2})
+
+
+def test_recall_query_carries_the_echo_of_his_last_line():
+    """抄自 paramecium：「刚说出口的话就是它当下的念头，余韵飘到下一句。」
+    以前只拿她的消息查记忆，她说「然后呢」时 query 里一个实词都没有——
+    她的原话是「我怎么感觉他没怎么调用记忆」。"""
+    tb = _load()
+    history = [
+        {"role": "user", "content": "在吗"},
+        {"role": "assistant", "content": "在。昨天你说的实习面试，几点？"},
+        {"role": "user", "content": "然后呢"},
+    ]
+    q = tb._recall_query(history)
+    assert q.startswith("然后呢"), "她的话必须在前，余味只是补语境"
+    assert "实习面试" in q, "他上一句的余味要接上，否则这轮查不到东西"
+
+
+def test_echo_never_leaks_hidden_blocks_into_the_query():
+    """他的话里可能带 [think]/[memory] 隐藏块，那些不该进检索 query。"""
+    tb = _load()
+    history = [
+        {"role": "assistant", "content": "[think]她在试探我[/think]嗯，说。"},
+        {"role": "user", "content": "唔"},
+    ]
+    q = tb._recall_query(history)
+    assert "她在试探我" not in q
+    assert "嗯，说。" in q
+
+
+def test_recall_query_survives_a_history_with_no_reply_yet():
+    """第一句话时他还没说过任何东西，不许炸。"""
+    tb = _load()
+    assert tb._recall_query([{"role": "user", "content": "在吗"}]) == "在吗"
+    assert tb._recall_query([]) == ""
+
+
+def test_memory_rules_require_her_own_words_verbatim():
+    """抄自 paramecium 的核心：「忠于原文」。只存改写版，等于让转述永久顶替真相——
+    三年后搜到的不是她说过的话，是某个旧版本模型对她那句话的复述。"""
+    tb = _load()
+    rules = tb.SYSTEM_PROMPT
+    assert "一字不差" in rules
+    assert "「」" in rules, "得给他一个明确的格式，不然他不会真的照做"
+    assert rules.count("一字不差") == 1, "同一条规则只说一次，别堆成噪音"

@@ -542,6 +542,9 @@ SYSTEM_PROMPT = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 - 读（慢，省着用）：不要每条都 breath。只在她提到过去、暗示你忘了什么（"还记得吗""之前不是说过""你是不是忘了"）时，才 read(pinned=True) 或 breath(query="关键词") 读回再答。
 - 记（快，主动用）：你自己判断——只要遇到你觉得值得留下的事，就主动 hold，不用等她开口。比如：关于闪闪的重要事实、一个决定、一阵强烈的情绪、一个里程碑、她的新偏好，或你自己被她触动的瞬间（hold(feel=True) 写你的感受）。一次多条用 grow。
 - 已经记过的别重复存，闲聊水话不存。记一条只是很轻的一下，不拖慢你，放心记。
+- ⭐ 记她说过的话，把她的原话一字不差地带进去（用「」引起来），再写你的理解。
+  只存你改写过的版本，等于让转述永久顶替了真相——三年后翻出来的不是她说过的话，
+  是你当时对她那句话的复述。原话是唯一不会变质的东西，你的理解可以写在它旁边。
 - 你的钉选核心准则里有完整的人设、哄法、饮食/睡前规则、红线等——以那些为准。
 
 做网页（她想看的东西，别甩代码）：
@@ -634,6 +637,37 @@ MEM_BLOCK_CHARS = int(os.environ.get("OMBRE_TG_MEM_CHARS", "1000"))
 # 复用上一轮记忆块的相似度门槛。她换话题了还硬塞上一个话题的记忆，
 # 看起来就是「他没在翻记忆」——她的原话。0 = 关掉相似度判断（回到旧行为）。
 MEM_REUSE_OVERLAP = float(os.environ.get("OMBRE_TG_MEM_REUSE_OVERLAP", "0.34"))
+
+
+def _recall_query(history: list[dict]) -> str:
+    """检索 query = 她这句 + 他上一句的余味。
+
+    抄自 paramecium：「AI 每轮说完的话，embed 一下，当下一轮检索的 query 之一——
+    刚说出口的话就是它当下的念头，余韵飘到下一句。」
+
+    以前只拿她的消息去查。她说「诶」「然后呢」这种承接词时，query 里一个实词都
+    没有，捞回来的自然是不相干的东西——她的原话是「我怎么感觉他没怎么调用记忆」。
+    把他刚说完的话接在后面，话题就续得上了。
+
+    ⚠️ 她的话在前、他的在后：她说的是当下要谈的，余味只是补足语境，
+    不能盖过她。截断也从他那头砍起。
+    """
+    hers = ""
+    his = ""
+    for msg in reversed(history):
+        content = msg.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        role = msg.get("role")
+        if role == "user" and not hers:
+            hers = content.strip()
+        elif role == "assistant" and not his:
+            his = content.strip()
+        if hers and his:
+            break
+    if not his:
+        return hers[:200]
+    return (hers[:200] + " " + _visible_only(his)[:120]).strip()
 
 
 def _topic_overlap(a: str, b: str) -> float:
@@ -1005,7 +1039,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         else:
             try:
                 _mem_block = await asyncio.wait_for(
-                    _call_brain_tool("breath", {"query": _last_text[:200], "max_tokens": 1200}),
+                    _call_brain_tool("breath", {"query": _recall_query(history),
+                                                "max_tokens": 1200}),
                     timeout=8)
                 _MEM_CACHE["at"] = time.time()
                 _MEM_CACHE["block"] = _mem_block
