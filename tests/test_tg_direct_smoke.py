@@ -1495,3 +1495,55 @@ def test_history_is_trimmed_to_the_configured_depth(monkeypatch):
     assert len(history) == 6
     assert history[0]["content"] == "第14条"      # 保留的是最近的
     tb.histories.pop(4242, None)
+
+
+def test_rate_limit_is_retried_instead_of_landing_on_her_screen(monkeypatch):
+    """她一口气连发五条 → 五个请求砸在同一分钟 → z.ai 429/1302 秒拒，
+    她收到的是「这次回复没有生成出来」。限流是秒拒不是慢，退一步再试就好。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    calls = []
+
+    class _RL(Exception):
+        status_code = 429
+
+    async def flaky(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise _RL("Error code: 429 - {'error': {'code': '1302', "
+                      "'message': 'Rate limit reached for requests'}}")
+        return "答上了"
+
+    monkeypatch.setattr(tb, "_llm_create_once", flaky)
+    assert asyncio.run(tb._telegram_llm_create(model="glm-5.3")) == "答上了"
+    assert len(calls) == 2
+
+
+def test_non_rate_limit_errors_are_raised_at_once(monkeypatch):
+    """别把所有失败都拿去重试——密钥错了、审核拦了，重试只是白等白花钱。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    calls = []
+
+    async def boom(**kw):
+        calls.append(kw)
+        raise RuntimeError("invalid api key")
+
+    monkeypatch.setattr(tb, "_llm_create_once", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(tb._telegram_llm_create(model="glm-5.3"))
+    assert len(calls) == 1
+
+
+def test_rate_limit_that_survives_retries_still_gives_her_human_words():
+    """退避之后还是限流，她该看到「发太快了」，不是 RateLimitError 原文。"""
+    tb = _load()
+
+    class _RL(Exception):
+        status_code = 429
+
+    assert tb._is_rate_limited(_RL("Rate limit reached for requests"))
+    assert tb._is_rate_limited(RuntimeError("Error code: 429 - {'code': '1302'}"))
+    assert not tb._is_rate_limited(RuntimeError("invalid api key"))
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    assert "发太快了" in src

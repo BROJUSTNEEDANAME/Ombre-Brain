@@ -757,7 +757,36 @@ def _authorized(chat_id: int) -> bool:
     return not ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
 
 
+# 限流（429 / z.ai 1302）自动重试。⚠️ 客户端本身是 max_retries=0——那是为了
+# 不让一个卡住的请求吊住后台任务半小时，不能改回去。但限流是另一回事：
+# 它秒拒（她那次整轮 0.6s），退一步等一下就好，不该让她收到「没生成出来」。
+#
+# 由来：她一口气连发五条，「新消息打断重答」机制每打断一次就重发一个请求，
+# 五条 = 五个请求砸在同一分钟里，撞上 GLM 的每分钟上限。
+_RATE_LIMIT_BACKOFF = (1.5, 4.0)
+
+
+def _is_rate_limited(exc) -> bool:
+    text = str(exc or "").lower()
+    if getattr(exc, "status_code", None) == 429 or "429" in text:
+        return True
+    return any(w in text for w in ("rate limit", "1302", "too many requests"))
+
+
 async def _telegram_llm_create(**kwargs):
+    """限流时自动退一步重试；其余原样交给下面那层。"""
+    for wait in (*_RATE_LIMIT_BACKOFF, None):
+        try:
+            return await _llm_create_once(**kwargs)
+        except Exception as e:  # noqa: BLE001
+            if wait is None or not _is_rate_limited(e):
+                raise
+            logger.warning("被限流，等 %.1fs 再试一次：%s", wait, str(e)[:120])
+            await asyncio.sleep(wait)
+    raise RuntimeError("限流重试用尽")
+
+
+async def _llm_create_once(**kwargs):
     """Direct/background GLM calls with the same stable cache routing as Home.
 
     思考档位和网页端同一套：默认压到关（GLM-5.3 这类关不掉的自动降到 low），
@@ -1605,6 +1634,12 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
             return  # 已经发出去几段了，别再跟一句报错吓她
         if history and history[-1]["role"] == "user":
             history.pop()
+        # 退避重试之后还是限流，说明真的发太密了。给她人话，不要把
+        # RateLimitError 的原文糊到她脸上——她看到的应该是「等一下」，
+        # 不是一串英文报错。
+        if _is_rate_limited(_exc):
+            await update.message.reply_text("发太快了，他那边被限流了，喘两口气再说一句。")
+            return
         await update.message.reply_text(
             "这次回复没有生成出来，你的消息我记下了，再戳我一下。\n"
             "（发 /debug 能看到原因：" + _why[:80] + "）")
