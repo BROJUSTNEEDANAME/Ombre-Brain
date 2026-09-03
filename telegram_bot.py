@@ -679,9 +679,10 @@ def _reasoning_of(obj) -> str:
     return ""
 
 
-# 她要的是「他在想什么」的人话版，不是原始思维链——那个又长又出戏，
-# 她自己骂过「你自己看看这是人吗」。这里每一条都对应一个真实发生的动作，
-# 一个字都不许编：报的是代码此刻正在做的事。
+# 等他的时候那条小字：只报「他真的在做一件要花时间的事」。
+# ⚠️ 「在想怎么说」「在翻你说过的话」这类待机话已经删掉——她的原话是
+# 「这种待机的话可以删除了，没什么用」。每轮必现的状态等于没有状态：
+# 它不带任何信息，只是在她眼前晃。留下的只有工具调用，那才是真的在等的东西。
 _TOOL_STATUS = {
     "breath": "又去翻了一遍记忆",
     "read": "在把那条记忆读完",
@@ -1133,7 +1134,6 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             _mem_block = str(_MEM_CACHE.get("block") or "")
             _mem_how = f"复用{_sim:.0%}"
         else:
-            await _say_status(on_status, "在翻你说过的话")
             try:
                 _mem_block = await asyncio.wait_for(
                     _call_brain_tool("breath", {"query": _recall_query(history),
@@ -1225,9 +1225,6 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
         _kw = {"model": use_model, "max_tokens": _budget, "messages": messages,
                "tools": (BRAIN_TOOLS if writing else CHAT_TOOLS)}
-        await _say_status(on_status,
-                          "想太久了，先说话" if _force_speak else
-                          ("在想怎么说" if _round == 0 else "还在想"))
         if _force_speak:
             _kw["tool_choice"] = "none"
             logger.info("tool_choice=none 逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)

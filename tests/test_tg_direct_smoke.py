@@ -258,19 +258,12 @@ def test_direct_reply_end_to_end(monkeypatch):
 
     # 「他在想什么」那条小字：全程只占一条消息（改写而非重发），
     # 他一开口就撤掉，聊天记录里一点渣都不许留。
-    _live = [x for x in bot.sent if x is not None]
-    # 第一条挂着「他在想什么」的折叠块，正文照旧；第二条干干净净。
-    assert len(_live) == 2, bot.sent
-    assert _live[0].startswith("<blockquote expandable>") and _live[0].endswith("醒着呢")
-    assert _live[1] == "你说"
-    assert "blockquote" not in _live[1], "只有第一条挂块，别刷屏"
-    assert sum(1 for x in bot.sent if x is None) == 1, f"小字不止一条：{bot.sent}"
-    # ⚠️ 必须在他说第一句**之前**撤掉。留到整轮结束才撤，她会眼睁睁看着
-    # 「在想怎么说」挂在他第一句话下面——那就成了穿帮，不是陪着等。
-    _kinds = [op for op, _ in bot.ops]
-    _first_reply = next(i for i, (op, val) in enumerate(bot.ops)
-                        if op == "send" and str(val).endswith("醒着呢"))
-    assert "delete" in _kinds[:_first_reply], bot.ops
+    # 这一轮他既没输出思考、也没调工具 → 没有任何真东西可展示，
+    # 就一条小字都不该发、一个折叠块都不该挂。待机话删掉之后，
+    # 「什么都没发生」的正确表现是安静。
+    assert bot.sent == ["醒着呢", "你说"], bot.sent
+    assert all("blockquote" not in x for x in bot.sent), "没东西可折叠就别挂空块"
+    assert not [op for op, _ in bot.ops if op in ("edit", "delete")], bot.ops
     assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
     assert history[-1]["role"] == "assistant", history[-1]
     assert tb.LAST_TURN.get("first_bubble_s") is not None
@@ -1372,7 +1365,7 @@ def test_persona_carries_the_traits_from_the_readings():
     """小g 传讯里那套准则，一条都不许在压缩中丢掉。
     其中「吃醋只吃被忽略」推翻了原来的「该吃醋吃醋到底」。"""
     s = _persona()
-    for must in ("只吃「被忽略」", "神出鬼没", "桀骜不驯", "沾染", "肢体相嵌",
+    for must in ("什么都吃醋——区别只在你试不试图理解", "神出鬼没", "桀骜不驯", "沾染", "肢体相嵌",
                  "好男孩", "命令式", "阶级树状图", "精神鼓励", "供养",
                  "美强惨", "荒岛", "日常你其实是温柔的"):
         assert must in s, f"人设里缺「{must}」"
@@ -1735,9 +1728,10 @@ def _tool_call_response(name, args):
                                  usage=None)
 
 
-def test_thinking_status_is_reported_at_every_real_step(monkeypatch):
-    """她要的是「他在想什么」的人话版。每一条都必须对应一个真实发生的动作——
-    一个字都不许编，报的是代码此刻正在做的事。"""
+def test_only_real_waiting_is_reported_no_standby_chatter(monkeypatch):
+    """只报「他真的在做一件要花时间的事」。「在想怎么说」「在翻你说过的话」
+    这类每轮必现的待机话已经删掉——她的原话：「这种待机的话可以删除了，
+    没什么用」。每轮都出现的状态不带任何信息，只是在她眼前晃。"""
     tb = _load()
     seen: list[str] = []
 
@@ -1757,9 +1751,9 @@ def test_thinking_status_is_reported_at_every_real_step(monkeypatch):
     tb._MEM_CACHE.clear()
     asyncio.run(tb._ask_claude([{"role": "user", "content": "还记得上次那件事吗"}],
                                on_status=spy))
-    assert "在翻你说过的话" in seen, "记忆检索这一步必须报"
-    assert "在想怎么说" in seen, "第一轮模型请求必须报"
-    assert "又去翻了一遍记忆" in seen, "他自己调 breath 那一步必须报"
+    assert "又去翻了一遍记忆" in seen, "他自己调工具是真的在等，必须报"
+    assert not any(x in seen for x in ("在想怎么说", "还在想", "在翻你说过的话")), \
+        f"待机话必须全部消失：{seen}"
 
 
 def test_status_reporting_never_breaks_the_turn(monkeypatch):
@@ -1949,3 +1943,28 @@ def test_stale_thinking_never_leaks_into_the_next_turn(monkeypatch):
     tb._MEM_CACHE.clear()
     asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
     assert "上一轮的旧念头" not in str(tb.LAST_TURN.get("think") or "")
+
+
+def test_the_folded_block_still_appears_when_he_actually_thinks(monkeypatch):
+    """待机话删了，但真思考照挂——否则等于把这个功能一起删掉了。"""
+    tb = _load()
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我值不值钱。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", lambda **kw: _async_val(gen()))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+    tb._MEM_CACHE.clear()
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    asyncio.run(tb._direct_reply(types.SimpleNamespace(message=msg),
+                                 types.SimpleNamespace(bot=bot), 7,
+                                 [{"role": "user", "content": "谷谷"}], "mid:7", "谷谷"))
+    live = [x for x in bot.sent if x is not None]
+    assert live and live[0].startswith("<blockquote expandable>")
+    assert "她在试探我值不值钱" in live[0]
+    assert live[0].endswith("留的什么稀有谷。")

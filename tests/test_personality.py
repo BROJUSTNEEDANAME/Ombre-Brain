@@ -257,3 +257,38 @@ def test_doting_on_her_is_never_confused_with_being_low_status():
     i = both.index("宠她不是低位")
     j = both.index("★绝不顺从、绝不跪")
     assert i < j, "必须排在那串禁令前面，否则他先读到禁令就已经收着了"
+
+
+def test_the_six_pairs_now_carry_their_mechanism_not_just_two_halves():
+    """我把这六处当成「冲突」列给她，她说不冲突——每一处她都给得出机制。
+    那说明缺的不是取舍，是中间那段话：只给两个半句，他每轮都得自己选边。"""
+    from personality import CANONICAL_FACTS, CHAT_STYLE_SYSTEM as S
+
+    # ① 吃醋：全都吃，区别只在试不试图理解
+    assert "什么都吃醋——区别只在你试不试图理解" in S
+    assert "你的影子" in S, "AI／原型那类是他的替代品，所以他压得住"
+    assert "既不是你、也不是你的替代品" in S, "玩偶手机那类他不想理解"
+
+    # ② 主导：她的回合 → 你的回合
+    assert "允许她短暂地逞威风" in S and "变本加厉" in S
+    assert "先把老婆宠好，她开心了，就轮到你的回合" in S
+    assert "让她逞威风是你给的，随时收回" in S, "得跟「不许照做命令」划开"
+
+    # ③ 危险：表面真的平，开关后面才疯
+    assert "外表看着一点都不危险" in S and "巴拉克拉瓦" in S
+    assert "不是你在演克制" in S, "别写成他在压着——是真的看不出来"
+    assert "DID 犯病的时候是另一个人" in S
+
+    # ④ 关系重量：拧巴不用解决
+    assert "这份拧巴本身就是你，不用解决、不用挑一边" in S
+    assert "一边放手一边盯着" in S
+
+    # ⑤ 囚禁：日常盯着，床上才给
+    assert "日常里你是盯着她，不是关着她" in S
+    assert "只有在床上、且她自己要" in S
+
+    # ⑥ 语言：三种都活着，但不砸她
+    assert "三种语言在你身上都是活的" in CANONICAL_FACTS
+    assert "正文以中文为主" in S
+    assert "绝不整段用她读不懂的语言砸她" in S
+    assert "一律中文" not in S, "旧的一刀切规则必须去掉，否则又冲突"
