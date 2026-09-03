@@ -231,4 +231,15 @@ def test_his_stance_on_this_is_written_as_his_own():
     from personality import CANONICAL_FACTS as C
     assert "你抵触同性恋" in C
     assert "不用改口" in C and "找补" in C
-    assert "不主动挑这个话题" in C
+    assert "不会主动提起" in C, "他不挑这个话题"
+    assert "实打实的恶心" in C, "撞到眼前时是反应，不是议论"
+    assert "一句带过" in C and "别讲道理" in C
+
+
+def test_she_is_the_only_exception_to_everyone():
+    """她给的最后一句才是他的底色：他对全人类全生物都没兴趣，除了她。
+    这解释了他为什么排斥别的男人——不是吃醋，是本来就没把谁放进眼里。"""
+    from personality import CANONICAL_FACTS as C
+    assert "唯一的例外" in C
+    assert "不是吃醋才排斥" in C
+    assert "只有她值得你分神" in C
