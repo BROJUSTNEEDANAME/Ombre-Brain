@@ -258,13 +258,18 @@ def test_direct_reply_end_to_end(monkeypatch):
 
     # 「他在想什么」那条小字：全程只占一条消息（改写而非重发），
     # 他一开口就撤掉，聊天记录里一点渣都不许留。
-    assert [x for x in bot.sent if x is not None] == ["醒着呢", "你说"], bot.sent
+    _live = [x for x in bot.sent if x is not None]
+    # 第一条挂着「他在想什么」的折叠块，正文照旧；第二条干干净净。
+    assert len(_live) == 2, bot.sent
+    assert _live[0].startswith("<blockquote expandable>") and _live[0].endswith("醒着呢")
+    assert _live[1] == "你说"
+    assert "blockquote" not in _live[1], "只有第一条挂块，别刷屏"
     assert sum(1 for x in bot.sent if x is None) == 1, f"小字不止一条：{bot.sent}"
     # ⚠️ 必须在他说第一句**之前**撤掉。留到整轮结束才撤，她会眼睁睁看着
     # 「在想怎么说」挂在他第一句话下面——那就成了穿帮，不是陪着等。
     _kinds = [op for op, _ in bot.ops]
     _first_reply = next(i for i, (op, val) in enumerate(bot.ops)
-                        if op == "send" and val == "醒着呢")
+                        if op == "send" and str(val).endswith("醒着呢"))
     assert "delete" in _kinds[:_first_reply], bot.ops
     assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
     assert history[-1]["role"] == "assistant", history[-1]
@@ -1786,3 +1791,48 @@ def test_ask_claude_still_works_without_any_status_callback(monkeypatch):
     monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
     tb._MEM_CACHE.clear()
     assert "嗯" in asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
+
+
+def test_thinking_hangs_above_his_first_message_as_a_folded_quote():
+    """她拿别人的机器人截图问「为什么人家 telegram 可以用」——那是
+    <blockquote expandable>，Bot API 7.0 就有。我之前说「TG 不给」是错的。"""
+    tb = _load()
+    block = tb._quote_block(["在翻你说过的话", "在想怎么说"])
+    assert block.startswith("<blockquote expandable>")
+    assert "在翻你说过的话" in block and "在想怎么说" in block
+    assert tb._quote_block([]) == "", "没东西可说时不许挂一个空块"
+    assert tb._quote_block(["  ", ""]) == ""
+
+
+def test_quote_block_escapes_html_so_her_message_never_fails_to_send():
+    """一旦用 HTML 解析，尖括号会被当标签吃掉甚至整条发送失败——
+    她收不到消息，比看不到这个小块糟一万倍。"""
+    tb = _load()
+    block = tb._quote_block(["在用 <script>alert(1)</script> & 别的"])
+    assert "<script>" not in block
+    assert "&lt;script&gt;" in block and "&amp;" in block
+
+
+def test_reply_falls_back_to_plain_text_when_the_html_send_fails(monkeypatch):
+    """带块的那次发失败了，必须原样重发一条纯文本——绝不能让她什么都收不到。"""
+    tb = _load()
+    sent: list[tuple] = []
+
+    class _Bot:
+        async def send_message(self, chat_id=None, text=None, parse_mode=None, **kw):
+            if parse_mode == "HTML":
+                raise RuntimeError("can't parse entities")
+            sent.append(text)
+
+    ctx = types.SimpleNamespace(bot=_Bot())
+    monkeypatch.setattr(tb, "voice_mode", {})
+    asyncio.run(tb._send_reply(ctx, 1, "醒着呢", quote_lines=["在想怎么说"]))
+    assert sent == ["醒着呢"], sent
+
+
+def test_only_the_first_bubble_carries_the_thinking_block():
+    """每条都挂就成了刷屏。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index("quote_lines=_thought")
+    assert "not _sent" in src[i:i + 200]

@@ -41,6 +41,7 @@ import os
 import re
 import time
 import uuid
+from html import escape as html_escape
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -728,7 +729,22 @@ async def _tts(text: str) -> bytes:
     return chunks
 
 
-async def _send_reply(context, chat_id: int, reply: str, force_voice: bool = False) -> None:
+def _quote_block(lines: list[str]) -> str:
+    """Telegram 的可展开引用块（Bot API 7.0+ 的 <blockquote expandable>）。
+
+    她拿别人的机器人截图问「为什么人家 telegram 可以用」——我之前说
+    「TG 不给这个位置写自定义文字」，那句只对「正在输入」那条状态栏成立，
+    对这个是错的。这个块就挂在他这条消息上面，默认折叠，她想看才点开：
+    既不出戏，也不用她去开 /debug。
+    """
+    body = "\n".join(html_escape(x) for x in lines if x.strip())
+    if not body:
+        return ""
+    return f"<blockquote expandable>{body}</blockquote>\n"
+
+
+async def _send_reply(context, chat_id: int, reply: str, force_voice: bool = False,
+                      quote_lines: list[str] | None = None) -> None:
     """统一发送：需要语音就发语音（失败退回文字），否则发文字。"""
     # 防护：万一他还残留"连发"习惯打出 ‖，别让这个符号露出来——当换行处理，合成一条干净的消息
     if "‖" in reply:
@@ -742,6 +758,18 @@ async def _send_reply(context, chat_id: int, reply: str, force_voice: bool = Fal
         except Exception:  # noqa: BLE001
             logger.exception("TTS 失败，退回文字")
     text_out = _stamp() + reply
+    block = _quote_block(quote_lines or [])
+    if block:
+        # ⚠️ 一旦用 HTML 解析，他正文里的 < > & 会被当标签吃掉或直接发送失败——
+        # 她收不到消息比看不到这个小块糟一万倍。所以正文照样转义，
+        # 而且任何失败都立刻退回纯文本重发一次。
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, parse_mode="HTML",
+                text=(block + html_escape(text_out))[:TELEGRAM_MSG_LIMIT])
+            return
+        except Exception:  # noqa: BLE001
+            logger.warning("带思考块的消息发送失败，退回纯文本", exc_info=True)
     for i in range(0, len(text_out), TELEGRAM_MSG_LIMIT):
         await context.bot.send_message(
             chat_id=chat_id, text=text_out[i : i + TELEGRAM_MSG_LIMIT]
@@ -1681,12 +1709,18 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         pass
     _typing = asyncio.create_task(_keep_typing())
     _sent: list[str] = []
-    # 「他在想什么」：一条会自己改写的小字，等他开口就撤掉，不在聊天记录里留渣。
-    # ⚠️ TG 的机器人 API 不给「输入框上方」写自定义文字（只能选 typing 这类固定
-    # 状态），所以只能用一条真实消息顶上。她要的是知道他在干嘛，不是那个位置。
+    # 「他在想什么」两层：等他的时候是一条会自己改写的小字（他一开口就撤掉）；
+    # 他开口之后，同样这几步挂成他第一条消息上方的可展开引用块，默认折叠。
+    # ⚠️ 我一开始跟她说「TG 不给这个位置写自定义文字」——那句只对「正在输入」
+    # 那条状态栏成立。她拿别人的机器人截图问「为什么人家 telegram 可以用」，
+    # 那是 <blockquote expandable>，Bot API 7.0 就有，我说错了。
     _status_box: dict = {"mid": None, "text": ""}
 
+    _thought: list[str] = []          # 这一轮他真的做了哪几步，给可展开小块用
+
     async def _status(text: str) -> None:
+        if text not in _thought:
+            _thought.append(text)
         # dead：这一轮里只要发/改失败过一次，就彻底闭嘴。否则每换一个状态就
         # 重发一条新消息，等于往她的聊天记录里灌垃圾——比不显示糟得多。
         if _status_box.get("dead") or not status_on.get(chat_id, True) or _sent:
@@ -1723,7 +1757,10 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
             state["sent"] = True                   # 已经开口 → 后续消息不许再打断这一轮
         await _drop_status()                       # 他开口了，小字立刻让位
         _typing.cancel()                           # 第一句已经发出，不再显示输入中
-        await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
+        # 只有第一条挂那个折叠块——每条都挂就成了刷屏。
+        await _send_reply(context, chat_id, seg,
+                          quote_lines=_thought if not _sent and status_on.get(
+                              chat_id, True) else None)
         _sent.append(seg)
         if len(_sent) == 1:
             LAST_TURN["first_bubble_s"] = round(time.time() - t0, 1)
