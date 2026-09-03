@@ -324,3 +324,67 @@ def test_build_kwargs_is_idempotent_on_the_same_history():
 
     assert _build() == _build()
     assert json.dumps(history, ensure_ascii=False) == snapshot
+
+
+def _count_breakpoints(kw):
+    n = 0
+    for block in kw.get("system") or []:
+        if isinstance(block, dict) and block.get("cache_control"):
+            n += 1
+    for msg in kw["messages"]:
+        for block in msg.get("content") or []:
+            if isinstance(block, dict) and block.get("cache_control"):
+                n += 1
+    return n
+
+
+def _tool_loop_messages():
+    return [
+        {"role": "system", "content": "人设"},
+        {"role": "user", "content": "在吗"},
+        {"role": "assistant", "content": "在。"},
+        {"role": "user", "content": "翻一下我们上次说的"},
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function",
+             "function": {"name": "breath", "arguments": '{"query":"上次"}'}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "（记忆正文）"},
+    ]
+
+
+def test_tool_result_gets_a_breakpoint_on_the_existing_block():
+    """工具循环最多 12 轮，工具结果拿不到断点＝每轮按原价重算。
+    抄自 tool_result 缓存 postmortem §05。"""
+    kw = cp.build_kwargs(
+        model="claude-opus-4-6", messages=_tool_loop_messages(), max_tokens=100)
+    last = kw["messages"][-1]["content"]
+    marked = [b for b in last if b.get("cache_control")]
+    assert len(marked) == 1
+    assert marked[0]["type"] == "tool_result", "标必须挂在工具结果本身上"
+    assert marked[0]["content"] == "（记忆正文）", "不许改动块的内容"
+
+
+def test_no_ghost_text_is_invented_to_carry_the_marker():
+    """postmortem §04 的根因：为了挂断点临时插一句说明文字，那句只存在于当次
+    请求副本，下一轮消失 → 前缀对不上 → 写得进、永远读不回来。"""
+    msgs = _tool_loop_messages()
+    kw = cp.build_kwargs(
+        model="claude-opus-4-6", messages=msgs, max_tokens=100)
+    last = kw["messages"][-1]["content"]
+    assert [b["type"] for b in last] == ["tool_result"], "不许凭空多出一个 text 块"
+    # 原始 messages 不能被就地污染——下一轮是拿它重建的
+    assert msgs[-1] == {"role": "tool", "tool_call_id": "c1", "content": "（记忆正文）"}
+
+
+def test_never_exceeds_anthropics_four_breakpoint_limit():
+    """Anthropic 最多接受四个显式断点，超了就是报错。"""
+    kw = cp.build_kwargs(
+        model="claude-opus-4-6", messages=_tool_loop_messages(), max_tokens=100)
+    assert _count_breakpoints(kw) <= 4
+    long_history = [{"role": "system", "content": "人设"}]
+    for i in range(30):
+        long_history += [{"role": "user", "content": f"u{i}"},
+                         {"role": "assistant", "content": f"a{i}"}]
+    long_history += _tool_loop_messages()[1:]
+    kw2 = cp.build_kwargs(
+        model="claude-opus-4-6", messages=long_history, max_tokens=100)
+    assert _count_breakpoints(kw2) <= 4

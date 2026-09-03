@@ -215,6 +215,34 @@ def mark_rolling_breakpoint(msgs: list[dict]) -> None:
         return
 
 
+def mark_tool_result_breakpoint(msgs: list[dict]) -> None:
+    """把断点挂在最后一个 tool_result 上——工具循环里最贵的一段。
+
+    由来（tool_result 缓存 postmortem）：滚动断点只跳过最后一条消息，于是它落在
+    带 tool_use 的 assistant 上，工具结果本身永远进不了可复用前缀。我们的工具
+    循环最多跑 12 轮，等于每轮的工具结果都在按原价重算。
+
+    ⚠️ 绝不为了挂断点去追加一段说明文字。那段文字只存在于当次请求的副本里，
+    下一轮重建时消失 → 前缀对不上 → 写得进、永远读不回来（postmortem §04 的
+    根因）。所以只往「本来就存在、且会跨轮保留」的 tool_result 块上挂。
+    ⚠️ 用默认 5m：工具结果是一轮之内几次迭代要复用的东西，不是跨小时的。
+    长 TTL 必须排在短的前面——system 用 1h，这个在最后，顺序正确。
+    """
+    if not msgs:
+        return
+    last = msgs[-1]
+    blocks = last.get("content") or []
+    if not isinstance(blocks, list):
+        return
+    for i in range(len(blocks) - 1, -1, -1):
+        block = blocks[i]
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            blocks = list(blocks)
+            blocks[i] = {**block, "cache_control": {"type": "ephemeral"}}
+            msgs[-1] = {**last, "content": blocks}
+            return
+
+
 def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
                  tools=None, tool_choice=None, thinking: bool = False,
                  allow_disable: bool = True) -> dict:
@@ -227,6 +255,7 @@ def build_kwargs(*, model: str, messages: list[dict], max_tokens: int,
                          "cache_control": _cc(_ttl())}]
     # 长 TTL 的条目必须排在短的前面：system 用 1h，历史断点用默认 5m，顺序正确。
     mark_rolling_breakpoint(msgs)
+    mark_tool_result_breakpoint(msgs)
     tl = convert_tools(tools)
     if tl:
         kw["tools"] = tl
