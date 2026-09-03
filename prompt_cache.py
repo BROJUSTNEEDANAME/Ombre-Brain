@@ -165,16 +165,49 @@ def read_stats(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     return data
 
 
+def _completion_tokens(usage: Any) -> int:
+    """输出 token 通常比输入贵好几倍，以前一个字都没记，算账时等于瞎了半只眼。"""
+    def get(obj, key):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+    for key in ("completion_tokens", "output_tokens"):
+        value = get(usage, key)
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def _bump(bucket: dict, prompt: int, cached: int, completion: int) -> None:
+    bucket["requests"] = int(bucket.get("requests", 0) or 0) + 1
+    bucket["hits"] = int(bucket.get("hits", 0) or 0) + (1 if cached > 0 else 0)
+    bucket["prompt_tokens"] = int(bucket.get("prompt_tokens", 0) or 0) + prompt
+    bucket["cached_tokens"] = int(bucket.get("cached_tokens", 0) or 0) + cached
+    bucket["completion_tokens"] = int(bucket.get("completion_tokens", 0) or 0) + completion
+
+
 def record_usage(
     usage: Any,
     channel: str,
     path: str | os.PathLike[str] | None = None,
+    model: str = "",
 ) -> dict[str, Any] | None:
-    """Persist aggregate token counts only; prompts and replies are never stored."""
+    """Persist aggregate token counts only; prompts and replies are never stored.
+
+    ⚠️ 按来源和按模型分别记 token，不只是记次数。由来：她问「$5 怎么没的」，
+    统计只答得出「4287 次请求」，答不出这些请求分别烧了多少、烧在哪个模型上——
+    于是只能靠猜。参考 relay-cache-where-it-breaks §6：「哪一轮」和「哪个模型」
+    对不上号，是判错的共同原因；记 usage 时把 model 一起记进去。"""
     values = cache_usage(usage)
     if values is None:
         return None
     prompt, cached = values
+    completion = _completion_tokens(usage)
     target = _stats_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK:
@@ -183,16 +216,16 @@ def record_usage(
             os.chmod(lock_path, 0o600)
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             data = read_stats(target)
-            data["requests"] = int(data.get("requests", 0) or 0) + 1
-            data["hits"] = int(data.get("hits", 0) or 0) + (1 if cached > 0 else 0)
-            data["prompt_tokens"] = int(data.get("prompt_tokens", 0) or 0) + prompt
-            data["cached_tokens"] = int(data.get("cached_tokens", 0) or 0) + cached
-            channels = data.setdefault("channels", {})
-            item = channels.setdefault(channel, {"requests": 0, "hits": 0})
-            item["requests"] = int(item.get("requests", 0) or 0) + 1
-            item["hits"] = int(item.get("hits", 0) or 0) + (1 if cached > 0 else 0)
+            _bump(data, prompt, cached, completion)
+            _bump(data.setdefault("channels", {}).setdefault(channel, {}),
+                  prompt, cached, completion)
+            if model:
+                _bump(data.setdefault("models", {}).setdefault(model, {}),
+                      prompt, cached, completion)
             data["last"] = {
                 "channel": channel,
+                "model": model,
+                "completion_tokens": completion,
                 "prompt_tokens": prompt,
                 "cached_tokens": cached,
                 "hit_rate": round(cached / prompt * 100, 2) if prompt else 0.0,

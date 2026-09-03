@@ -757,7 +757,7 @@ def test_streamed_turn_records_cache_usage(monkeypatch):
     monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
     monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
     monkeypatch.setattr(tb, "record_prompt_cache_usage",
-                        lambda usage, channel: seen.append((usage, channel)))
+                        lambda usage, channel, **kw: seen.append((usage, channel, kw.get("model"))))
     tb._MEM_CACHE.clear()
 
     async def noop(_s):
@@ -765,8 +765,9 @@ def test_streamed_turn_records_cache_usage(monkeypatch):
 
     asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
     assert seen, "流式这轮的 token 用量必须被记下来"
-    usage, channel = seen[0]
+    usage, channel, model = seen[0]
     assert channel == "telegram-chat"
+    assert model, "模型必须一起记下来，否则算不清哪个模型烧的钱"
     from prompt_cache import cache_usage
     assert cache_usage(usage) == (4200, 4000)
 
@@ -1610,3 +1611,35 @@ def test_out_of_credit_is_never_mistaken_for_rate_limiting(monkeypatch):
 
     src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
     assert "余额不够了" in src
+
+
+def test_usage_is_recorded_per_channel_and_per_model(tmp_path):
+    """她问「$5 花哪了」，统计只答得出「4287 次请求」——没记 token、没记模型，
+    只能靠猜。抄自 relay-cache-where-it-breaks §6：记 usage 时把 model 一起记。"""
+    import prompt_cache
+    p = tmp_path / "stats.json"
+    usage = {"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 900},
+             "completion_tokens": 300}
+    prompt_cache.record_usage(usage, "telegram-chat", path=p, model="glm-5.3")
+    prompt_cache.record_usage(usage, "brain", path=p, model="claude-opus-4-6")
+    data = prompt_cache.read_stats(p)
+
+    ch = data["channels"]["telegram-chat"]
+    assert ch["prompt_tokens"] == 1000 and ch["cached_tokens"] == 900
+    assert ch["completion_tokens"] == 300, "输出 token 通常最贵，不能不记"
+
+    assert set(data["models"]) == {"glm-5.3", "claude-opus-4-6"}
+    assert data["models"]["glm-5.3"]["prompt_tokens"] == 1000
+    assert data["prompt_tokens"] == 2000 and data["completion_tokens"] == 600
+
+
+def test_cache_command_shows_tokens_not_just_request_counts():
+    """只报次数答不了「钱去哪了」——每一行都得带上烧了多少。"""
+    tb = _load()
+    item = {"requests": 3, "hits": 2, "prompt_tokens": 20000,
+            "cached_tokens": 10000, "completion_tokens": 5000}
+    line = tb._burn(item)
+    assert "20k" in line and "出 5k" in line
+    assert "实付" in line
+    # 旧统计（只有次数）不该炸，要说人话
+    assert "旧统计" in tb._burn({"requests": 3, "hits": 2})

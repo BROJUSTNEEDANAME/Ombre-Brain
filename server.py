@@ -2268,7 +2268,8 @@ async def _llm_create(client, **kw):
                 if _body else await client.chat.completions.create(**kw)
             )
             if not kw.get("stream"):
-                record_prompt_cache_usage(getattr(_response, "usage", None), "brain")
+                record_prompt_cache_usage(getattr(_response, "usage", None), "brain",
+                                          model=str(kw.get("model") or ""))
             return _response
         except Exception as e:  # noqa: BLE001
             if not _thinking or not note_thinking_error(_model, e):
@@ -3941,7 +3942,7 @@ async def api_chat(request):
                                         await _q.put({"t": "d", "x": _chunk})
                                         shown += _chunk
                                         flushed = vis
-                        record_prompt_cache_usage(stream_usage, "brain-stream")
+                        record_prompt_cache_usage(stream_usage, "brain-stream", model=model)
                         if not tc_acc:
                             _vis = visible_cut(buf)
                             if not saw_tc and _vis > flushed:

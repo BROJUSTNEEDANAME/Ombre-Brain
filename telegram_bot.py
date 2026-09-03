@@ -812,7 +812,8 @@ async def _llm_create_once(**kwargs):
         # Anthropic 原生接口：thinking 档位、user_id 那套是 z.ai 专有的，不往这边传。
         response = await claude_provider.create(thinking=not want_off, **kwargs)
         if not kwargs.get("stream"):
-            record_prompt_cache_usage(getattr(response, "usage", None), "telegram-claude")
+            record_prompt_cache_usage(getattr(response, "usage", None), "telegram-claude",
+                                      model=model)
         return response
     if level in ("low", "high", "max"):
         preset_thinking_level(model, level)
@@ -825,7 +826,8 @@ async def _llm_create_once(**kwargs):
                 if extra else await llm.chat.completions.create(**kwargs)
             )
             if not kwargs.get("stream"):
-                record_prompt_cache_usage(getattr(response, "usage", None), "telegram-background")
+                record_prompt_cache_usage(getattr(response, "usage", None), "telegram-background",
+                                          model=model)
             return response
         except Exception as e:  # noqa: BLE001
             if not thinking or not note_thinking_error(model, e):
@@ -1183,7 +1185,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 return "（我这轮卡住了，你再说一句。）"
             _u = _stream_usage or getattr(st, "usage", None)   # Claude 的挂在 st 上
             if _u is not None:
-                record_prompt_cache_usage(_u, "telegram-chat")
+                record_prompt_cache_usage(_u, "telegram-chat", model=use_model)
             if pending.strip():  # 本轮剩下的尾巴：不管是不是工具轮，都当场发
                 await _emit(pending)
                 pending = ""
@@ -1973,6 +1975,23 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "没有这个。能选的：" + "、".join(n for n, *_ in MODEL_CHOICES))
 
 
+def _k(n: int) -> str:
+    return f"{n / 1_000_000:.1f}M".replace(".0M", "M") if n >= 1_000_000 else (
+        f"{n / 1000:.0f}k" if n >= 1000 else str(n))
+
+
+def _burn(item: dict) -> str:
+    """一个来源/模型实际烧掉的量。命中的部分只按一折左右计费，
+    所以「实付」比 prompt 总数更能说明钱去哪了。"""
+    prompt = int((item or {}).get("prompt_tokens", 0) or 0)
+    cached = int((item or {}).get("cached_tokens", 0) or 0)
+    out = int((item or {}).get("completion_tokens", 0) or 0)
+    if not prompt and not out:
+        return "（旧统计没记 token）"
+    billed = (prompt - cached) + cached * 0.1
+    return f"入 {_k(prompt)}（实付约 {_k(int(billed))}）出 {_k(out)}"
+
+
 def _cache_line() -> str:
     """缓存命中率：人设那段长前缀每轮一模一样，命中了就不重复计费。
     她问过「我怎么知道我现在的缓存有多少」——放进 /debug，不用登服务器翻文件。
@@ -2019,11 +2038,23 @@ async def cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _name = {"telegram-chat": "TG 聊天", "telegram-claude": "TG·Claude",
                  "telegram-background": "TG 后台", "brain": "网页", "brain-stream": "网页流式"}
         lines.append("")
-        for key, item in sorted(channels.items()):
+        # ⚠️ 一定要带 token，不能只报次数。她问「$5 花哪了」那次，这里只答得出
+        # 「4287 次请求」，答不出这些请求分别烧了多少，最后只能靠猜。
+        for key, item in sorted(channels.items(),
+                                key=lambda kv: -int((kv[1] or {}).get("prompt_tokens", 0) or 0)):
             req = int((item or {}).get("requests", 0) or 0)
             hit = int((item or {}).get("hits", 0) or 0)
             if req:
-                lines.append(f"{_name.get(key, key)} {hit}/{req} 次命中")
+                lines.append(f"{_name.get(key, key)} {hit}/{req} 次命中"
+                             f"　{_burn(item)}")
+    models = stats.get("models") or {}
+    if models:
+        lines.append("")
+        lines.append("按模型：")
+        for key, item in sorted(models.items(),
+                                key=lambda kv: -int((kv[1] or {}).get("prompt_tokens", 0) or 0)):
+            if int((item or {}).get("requests", 0) or 0):
+                lines.append(f"{key} {item.get('requests', 0)} 次　{_burn(item)}")
     last = stats.get("last") or {}
     if last.get("prompt_tokens"):
         lines += ["", f"最近一次 {last.get('hit_rate', 0)}%"
