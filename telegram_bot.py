@@ -625,6 +625,9 @@ voice_mode: dict[int, bool] = {}  # 这个 chat 是否连文字消息也用语�
 # 走 WRITING_MODE_SYSTEM——长段正文、不拆气泡、不受日常「空格断句/少动作
 # 括号」那套限制。日常聊天默认关。
 writing_mode: dict[int, bool] = {}
+# 「他在想什么」那条小字的开关。默认开——她问过「我怎么没看到」，
+# 但她的 TG 是每天在用的东西，得随时能关掉。
+status_on: dict[int, bool] = {}
 # 最近一轮的耗时明细：/debug 直接给她看，省得每次都要开服务器终端翻日志。
 LAST_TURN: dict[str, object] = {}
 # 记忆块短期复用：连着聊的那几分钟里记忆几乎不变，每句都重查等于白等 3~5 秒。
@@ -637,6 +640,31 @@ MEM_BLOCK_CHARS = int(os.environ.get("OMBRE_TG_MEM_CHARS", "1000"))
 # 复用上一轮记忆块的相似度门槛。她换话题了还硬塞上一个话题的记忆，
 # 看起来就是「他没在翻记忆」——她的原话。0 = 关掉相似度判断（回到旧行为）。
 MEM_REUSE_OVERLAP = float(os.environ.get("OMBRE_TG_MEM_REUSE_OVERLAP", "0.34"))
+
+
+# 她要的是「他在想什么」的人话版，不是原始思维链——那个又长又出戏，
+# 她自己骂过「你自己看看这是人吗」。这里每一条都对应一个真实发生的动作，
+# 一个字都不许编：报的是代码此刻正在做的事。
+_TOOL_STATUS = {
+    "breath": "又去翻了一遍记忆",
+    "read": "在把那条记忆读完",
+    "pulse": "在数自己都记得些什么",
+    "hold": "在把这个记下来",
+    "grow": "在把这些都记下来",
+    "trace": "在改一条记错的",
+    "dream": "在消化最近的事",
+    "make_page": "在给你做那个网页",
+}
+
+
+async def _say_status(on_status, text: str) -> None:
+    """状态播报永远不许拖慢或搞崩这一轮——她要的是他说话，不是这条小字。"""
+    if on_status is None:
+        return
+    try:
+        await on_status(text)
+    except Exception:  # noqa: BLE001
+        logger.debug("状态播报失败，忽略", exc_info=True)
 
 
 def _recall_query(history: list[dict]) -> str:
@@ -759,6 +787,7 @@ def _save_state() -> None:
                     "nudge_count": {str(k): v for k, v in nudge_count.items()},
                     "voice_mode": {str(k): v for k, v in voice_mode.items()},
                     "writing_mode": {str(k): v for k, v in writing_mode.items()},
+                    "status_on": {str(k): v for k, v in status_on.items()},
                     "model_override": dict(model_override),
                     "todos": {str(k): v for k, v in todos.items()},
                 },
@@ -780,6 +809,7 @@ def _load_state() -> None:
         nudge_count.update({int(k): v for k, v in data.get("nudge_count", {}).items()})
         voice_mode.update({int(k): v for k, v in data.get("voice_mode", {}).items()})
         writing_mode.update({int(k): v for k, v in data.get("writing_mode", {}).items()})
+        status_on.update({int(k): v for k, v in data.get("status_on", {}).items()})
         model_override.update(dict(data.get("model_override", {})))
         todos.update({int(k): v for k, v in data.get("todos", {}).items()})
         logger.info("已载回 %d 段对话", len(histories))
@@ -997,7 +1027,8 @@ def _visible_only(text: str) -> str:
 
 
 async def _ask_claude(history: list[dict], on_segment=None, writing: bool = False,
-                      model: str | None = None, chat_id: int | None = None) -> str:
+                      model: str | None = None, chat_id: int | None = None,
+                      on_status=None) -> str:
     """调 LLM（OpenAI 兼容 function calling）。bot 自己调大脑 REST API 执行工具。
     函数名保留 _ask_claude 只为少改调用处；实际接的是 GLM / 任意兼容 API。"""
     # ⚠️ 这三行必须在函数最前面：下面的记忆检索就会往 _trace 里写，
@@ -1037,6 +1068,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             _mem_block = str(_MEM_CACHE.get("block") or "")
             _mem_how = f"复用{_sim:.0%}"
         else:
+            await _say_status(on_status, "在翻你说过的话")
             try:
                 _mem_block = await asyncio.wait_for(
                     _call_brain_tool("breath", {"query": _recall_query(history),
@@ -1128,6 +1160,9 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
         _kw = {"model": use_model, "max_tokens": _budget, "messages": messages,
                "tools": (BRAIN_TOOLS if writing else CHAT_TOOLS)}
+        await _say_status(on_status,
+                          "想太久了，先说话" if _force_speak else
+                          ("在想怎么说" if _round == 0 else "还在想"))
         if _force_speak:
             _kw["tool_choice"] = "none"
             logger.info("tool_choice=none 逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
@@ -1273,6 +1308,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 args = json.loads(tc.function.arguments or "{}")
             except Exception:  # noqa: BLE001
                 args = {}
+            await _say_status(on_status, _TOOL_STATUS.get(
+                tc.function.name, f"在用 {tc.function.name}"))
             try:
                 result = await _call_brain_tool(tc.function.name, args)
             except Exception as e:  # noqa: BLE001
@@ -1644,10 +1681,47 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         pass
     _typing = asyncio.create_task(_keep_typing())
     _sent: list[str] = []
+    # 「他在想什么」：一条会自己改写的小字，等他开口就撤掉，不在聊天记录里留渣。
+    # ⚠️ TG 的机器人 API 不给「输入框上方」写自定义文字（只能选 typing 这类固定
+    # 状态），所以只能用一条真实消息顶上。她要的是知道他在干嘛，不是那个位置。
+    _status_box: dict = {"mid": None, "text": ""}
+
+    async def _status(text: str) -> None:
+        # dead：这一轮里只要发/改失败过一次，就彻底闭嘴。否则每换一个状态就
+        # 重发一条新消息，等于往她的聊天记录里灌垃圾——比不显示糟得多。
+        if _status_box.get("dead") or not status_on.get(chat_id, True) or _sent:
+            return
+        if text == _status_box["text"]:
+            return
+        _status_box["text"] = text
+        body = "…… " + text
+        try:
+            if _status_box["mid"] is None:
+                msg = await context.bot.send_message(chat_id=chat_id, text=body)
+                _status_box["mid"] = getattr(msg, "message_id", None)
+                if _status_box["mid"] is None:
+                    raise RuntimeError("发出去了但拿不到 message_id，改不动也撤不掉")
+            else:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id, message_id=_status_box["mid"], text=body)
+        except Exception:  # noqa: BLE001
+            _status_box["dead"] = True
+            logger.debug("状态小字失败，本轮不再显示", exc_info=True)
+
+    async def _drop_status() -> None:
+        mid_ = _status_box["mid"]
+        if mid_ is None:
+            return
+        _status_box["mid"] = None
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=mid_)
+        except Exception:  # noqa: BLE001
+            logger.debug("状态小字撤回失败，忽略", exc_info=True)
 
     async def _emit(seg: str) -> None:
         if state is not None:
             state["sent"] = True                   # 已经开口 → 后续消息不许再打断这一轮
+        await _drop_status()                       # 他开口了，小字立刻让位
         _typing.cancel()                           # 第一句已经发出，不再显示输入中
         await _send_reply(context, chat_id, seg)   # 说完一句立刻发，不等整场
         _sent.append(seg)
@@ -1660,13 +1734,16 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     try:
         reply = await asyncio.wait_for(
             _ask_claude(history, on_segment=_emit if _stream else None,
-                        writing=bool(writing_mode.get(chat_id)), chat_id=chat_id),
+                        writing=bool(writing_mode.get(chat_id)), chat_id=chat_id,
+                        on_status=_status),
             timeout=float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200")))
     except asyncio.CancelledError:
         _typing.cancel()      # 被抢答取消：别把「正在输入」留在她那儿
+        await _drop_status()  # 小字也一样，绝不能留在她屏幕上
         raise
     except asyncio.TimeoutError:
         _typing.cancel()
+        await _drop_status()
         LAST_TURN["total_s"] = round(time.time() - t0, 1)
         LAST_TURN["result"] = "硬超时"
         logger.warning("整轮硬超时（%.1fs），已发 %d 段", time.time() - t0, len(_sent))
@@ -1675,6 +1752,7 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         return
     except Exception as _exc:  # noqa: BLE001
         _typing.cancel()
+        await _drop_status()
         # ⚠️ 失败原因必须留在 /debug 里：探针只记成功路径，等于失败时全瞎——
         # 她「每条都没生成出来」那次，/debug 只显示记忆检索、一行报错都没有。
         _why = f"{type(_exc).__name__}: {str(_exc)}"
@@ -1705,6 +1783,7 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
             "（发 /debug 能看到原因：" + _why[:80] + "）")
         return
     _typing.cancel()
+    await _drop_status()      # 非流式（语音模式）走到这儿才收口，小字也得撤
     LAST_TURN["total_s"] = round(time.time() - t0, 1)
     logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
     segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
@@ -1958,6 +2037,7 @@ BOT_COMMANDS = [
     ("model", "看／换模型 · 5.3 聪明 5.2 快"),
     ("debug", "上一轮慢在哪儿"),
     ("cache", "缓存命中率 · 省了多少钱"),
+    ("status", "他在想什么 · 等他的时候显示他正在干嘛"),
     ("stale", "哪些记忆因为过期被沉底了 · 可撤销"),
     ("help", "看所有指令"),
     ("id", "拿到本机 chat id"),
@@ -2041,6 +2121,24 @@ def _cache_line() -> str:
     cached = int(stats.get("cached_tokens", 0) or 0)
     return (f"缓存 命中 {stats.get('hit_rate', 0)}%"
             f"（{cached}/{prompt} token 没重复付钱，共 {stats.get('requests', 0)} 次）")
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/status：开关「他在想什么」那条小字。她的 TG 是每天在用的，得能关。"""
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    arg = (context.args or [""])[0].strip().lower()
+    if arg in ("on", "开"):
+        status_on[chat_id] = True
+    elif arg in ("off", "关"):
+        status_on[chat_id] = False
+    else:
+        status_on[chat_id] = not status_on.get(chat_id, True)
+    _save_state()
+    await update.message.reply_text(
+        "他在想什么：开着——等他的时候你能看到他正在干嘛，他一开口就撤掉。"
+        if status_on[chat_id] else "他在想什么：关了。")
 
 
 async def cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2365,6 +2463,7 @@ def main() -> None:
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("cache", cache_cmd))
+    app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("stale", stale_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CommandHandler("drives", mood_cmd))

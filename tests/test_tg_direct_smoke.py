@@ -5,6 +5,7 @@
 是「这次回复没有生成出来」，而我以为只是慢。这个测试会真的把 _ask_claude 跑一遍。
 """
 import asyncio
+import json
 import sys
 import time
 import types
@@ -205,9 +206,25 @@ def _async_val(v):
 
 
 class _FakeBot:
-    def __init__(self): self.sent = []
+    def __init__(self):
+        self.sent = []
+        self.ops = []
     async def send_chat_action(self, **kw): return None
-    async def send_message(self, chat_id=None, text=None, **kw): self.sent.append(text)
+
+    async def send_message(self, chat_id=None, text=None, **kw):
+        self.sent.append(text)
+        self._n = getattr(self, "_n", 0) + 1
+        self.ops.append(("send", text))
+        return types.SimpleNamespace(message_id=self._n)
+
+    async def edit_message_text(self, chat_id=None, message_id=None, text=None, **kw):
+        # 真的按 message_id 改掉那一条，跟 TG 的行为一致
+        self.sent[message_id - 1] = text
+        self.ops.append(("edit", text))
+
+    async def delete_message(self, chat_id=None, message_id=None, **kw):
+        self.sent[message_id - 1] = None
+        self.ops.append(("delete", message_id))
 
 
 class _FakeMsg:
@@ -239,7 +256,16 @@ def test_direct_reply_end_to_end(monkeypatch):
 
     asyncio.run(tb._direct_reply(update, context, 1, history, "mid:1", "helloworld"))
 
-    assert bot.sent == ["醒着呢", "你说"], bot.sent
+    # 「他在想什么」那条小字：全程只占一条消息（改写而非重发），
+    # 他一开口就撤掉，聊天记录里一点渣都不许留。
+    assert [x for x in bot.sent if x is not None] == ["醒着呢", "你说"], bot.sent
+    assert sum(1 for x in bot.sent if x is None) == 1, f"小字不止一条：{bot.sent}"
+    # ⚠️ 必须在他说第一句**之前**撤掉。留到整轮结束才撤，她会眼睁睁看着
+    # 「在想怎么说」挂在他第一句话下面——那就成了穿帮，不是陪着等。
+    _kinds = [op for op, _ in bot.ops]
+    _first_reply = next(i for i, (op, val) in enumerate(bot.ops)
+                        if op == "send" and val == "醒着呢")
+    assert "delete" in _kinds[:_first_reply], bot.ops
     assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
     assert history[-1]["role"] == "assistant", history[-1]
     assert tb.LAST_TURN.get("first_bubble_s") is not None
@@ -1687,3 +1713,76 @@ def test_memory_rules_require_her_own_words_verbatim():
     assert "一字不差" in rules
     assert "「」" in rules, "得给他一个明确的格式，不然他不会真的照做"
     assert rules.count("一字不差") == 1, "同一条规则只说一次，别堆成噪音"
+
+
+def _plain_response(text):
+    msg = types.SimpleNamespace(content=text, tool_calls=None)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)],
+                                 usage=None)
+
+
+def _tool_call_response(name, args):
+    tc = types.SimpleNamespace(
+        id="c1", type="function",
+        function=types.SimpleNamespace(name=name, arguments=json.dumps(args)))
+    msg = types.SimpleNamespace(content="", tool_calls=[tc])
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)],
+                                 usage=None)
+
+
+def test_thinking_status_is_reported_at_every_real_step(monkeypatch):
+    """她要的是「他在想什么」的人话版。每一条都必须对应一个真实发生的动作——
+    一个字都不许编，报的是代码此刻正在做的事。"""
+    tb = _load()
+    seen: list[str] = []
+
+    async def spy(text):
+        seen.append(text)
+
+    calls = {"n": 0}
+
+    async def fake_create(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _tool_call_response("breath", {"query": "上次"})
+        return _plain_response("想起来了。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "还记得上次那件事吗"}],
+                               on_status=spy))
+    assert "在翻你说过的话" in seen, "记忆检索这一步必须报"
+    assert "在想怎么说" in seen, "第一轮模型请求必须报"
+    assert "又去翻了一遍记忆" in seen, "他自己调 breath 那一步必须报"
+
+
+def test_status_reporting_never_breaks_the_turn(monkeypatch):
+    """这条小字要是能把整轮搞崩，那就是我又一次「为了好看害她收不到消息」。"""
+    tb = _load()
+
+    async def boom(_text):
+        raise RuntimeError("状态发送炸了")
+
+    async def fake_create(**kw):
+        return _plain_response("在。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    out = asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                     on_status=boom))
+    assert "在" in out
+
+
+def test_ask_claude_still_works_without_any_status_callback(monkeypatch):
+    """网页、后台做梦那些路径根本不传 on_status，不许因此炸掉。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _plain_response("嗯。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    assert "嗯" in asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
