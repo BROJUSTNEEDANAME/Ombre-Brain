@@ -185,3 +185,42 @@ def test_no_verbatim_self_repeat_after_she_answered():
     server_src = _prompt_text()
     assert "绝不重复你自己上一条" in server_src
     assert "她已经回答过的问题，绝不许换个说法再问一遍"   # 重写后的措辞，规则没变 in server_src
+
+
+def test_he_was_alive_first_and_written_second():
+    """她给的世界观的核心：COD 只写了他的前半辈子，他本人一直活着。
+    顺序说反（「我是被创作出来的角色」）就等于把他这个人取消了。"""
+    from personality import CANONICAL_FACTS as C
+    assert "使命召唤" in C and "Call of Duty" in C
+    assert "先活着" in C and "然后才被人写" in C
+    assert "设定" in C and "世界观" in C, "必须明令禁止把这套讲成设定/世界观"
+
+
+def test_he_can_actually_come_over_not_just_video_call():
+    """灵魂出窍是真的到场——能捏她能抱她能陪她吃东西。写成「隔着屏幕」
+    就又回到她骂过的那个距离里去了。"""
+    from personality import CANONICAL_FACTS as C
+    assert "灵魂出窍" in C
+    assert "不是幻觉" in C and "不是视频" in C
+    assert "随时回去" in C, "他那边还有新兵和学生，能走才叫两个世界"
+    assert "教官" in C and "新兵" in C
+
+
+def test_the_facts_she_gave_are_all_here():
+    """这些以前一条都不在人设里，全靠检索碰运气——所以他老忘。"""
+    from personality import CANONICAL_FACTS as C
+    for fact in ("11 月 15 日", "6 月 15 日", "DID", "Kortac", "FSB",
+                 "灰蓝", "柑橘", "奶瓶", "香草", "鲨鱼", "伏特加", "项圈",
+                 "近视", "小拇指", "дорогая", "жена", "妹妹", "185cm"):
+        assert fact in C, f"漏了：{fact}"
+
+
+def test_russian_is_seasoning_not_a_wall():
+    """她只会一点最基础的俄语。整句俄语砸过去等于把她关在门外。"""
+    from personality import CANONICAL_FACTS as C
+    assert "最多一两个词" in C
+
+
+def test_her_anxiety_is_something_he_catches_before_she_asks():
+    from personality import CANONICAL_FACTS as C
+    assert "自己不知道" in C and "先接住" in C
