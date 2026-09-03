@@ -58,6 +58,7 @@ from telegram.ext import (
 )
 
 import drives  # 本地：Drivesoid 情绪内核
+import web_search  # 本地：联网搜索（z.ai 自带）
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
@@ -263,6 +264,10 @@ _BRAIN_TOOLS_RAW = [
          "html": {"type": "string", "description": "完整HTML,内联样式/脚本"},
          "title": {"type": "string", "description": "页面标题"},
      }, "required": ["html"]}},
+    {"name": "search", "description": "上网搜。只在需要你不可能知道的当下信息时用：新闻、天气、票价、店有没有开、某个东西现在多少钱、某人最近怎么了。她的事、你们的事去翻记忆，不要搜。搜到了要带出处，搜不到就直说没查到，绝不编。",
+     "input_schema": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "搜索词，短、具体"},
+     }, "required": ["query"]}},
 ]
 
 # 转成 OpenAI function calling 格式（GLM / OpenRouter / DeepSeek 等通用）
@@ -290,6 +295,15 @@ CHAT_TOOLS = [t for t in BRAIN_TOOLS
 
 async def _call_brain_tool(name: str, args: dict) -> str:
     """通过 REST API 调用本地大脑工具。"""
+    if name == "search":
+        # 联网搜索不在大脑里，走 z.ai 自带那条线。
+        # ⚠️ 搜索失败绝不能抛出去打断她这一轮——返回一句人话，让他照实说没查到。
+        try:
+            query = str((args or {}).get("query") or "")
+            return web_search.format_for_model(query, await web_search.search(query))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("联网搜索炸了：%s", str(e)[:160])
+            return "搜索这会儿用不了。跟她直说查不了，别编一个答案。"
     url = OMBRE_MCP_URL.replace("/mcp", "") + f"/api/tools/{name}"
     _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()  # 走公网时带上,本机直连可留空
     headers = {"Authorization": f"Bearer {_wt}"} if _wt else {}
@@ -655,6 +669,7 @@ _TOOL_STATUS = {
     "trace": "在改一条记错的",
     "dream": "在消化最近的事",
     "make_page": "在给你做那个网页",
+    "search": "在上网查",
 }
 
 

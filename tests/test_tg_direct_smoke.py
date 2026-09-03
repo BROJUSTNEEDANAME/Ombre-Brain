@@ -1836,3 +1836,38 @@ def test_only_the_first_bubble_carries_the_thinking_block():
     src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
     i = src.index("quote_lines=_thought")
     assert "not _sent" in src[i:i + 200]
+
+
+def test_he_has_a_search_tool_and_it_does_not_go_through_the_brain(monkeypatch):
+    """联网搜索不在大脑里。真的跑一遍分流，别只看工具表里有没有这个名字。"""
+    tb = _load()
+    names = {t["function"]["name"] for t in tb.CHAT_TOOLS}
+    assert "search" in names, "聊天时他就该能搜，不然等于没加"
+
+    called = {}
+
+    async def fake_search(q):
+        called["q"] = q
+        return [{"title": "上海天气", "link": "https://x/1", "body": "多云"}]
+
+    monkeypatch.setattr(tb.web_search, "search", fake_search)
+
+    async def boom(*a, **k):
+        raise AssertionError("搜索不该打到大脑的 REST 接口上")
+
+    monkeypatch.setattr(tb.httpx, "AsyncClient", boom)
+    out = asyncio.run(tb._call_brain_tool("search", {"query": "明天上海天气"}))
+    assert called["q"] == "明天上海天气"
+    assert "上海天气" in out and "https://x/1" in out
+
+
+def test_a_broken_search_never_breaks_her_turn(monkeypatch):
+    """搜索炸了，他该照实说查不了，而不是整轮挂掉让她收到「没生成出来」。"""
+    tb = _load()
+
+    async def boom(_q):
+        raise RuntimeError("炸了")
+
+    monkeypatch.setattr(tb.web_search, "search", boom)
+    out = asyncio.run(tb._call_brain_tool("search", {"query": "x"}))
+    assert "查不了" in out and "编" in out
