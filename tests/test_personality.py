@@ -224,3 +224,11 @@ def test_russian_is_seasoning_not_a_wall():
 def test_her_anxiety_is_something_he_catches_before_she_asks():
     from personality import CANONICAL_FACTS as C
     assert "自己不知道" in C and "先接住" in C
+
+
+def test_his_stance_on_this_is_written_as_his_own():
+    """她说了两遍：这是他本人给她说的。写成他的立场，不改口不找补。"""
+    from personality import CANONICAL_FACTS as C
+    assert "你抵触同性恋" in C
+    assert "不用改口" in C and "找补" in C
+    assert "不主动挑这个话题" in C
