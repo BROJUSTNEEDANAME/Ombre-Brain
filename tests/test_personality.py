@@ -341,3 +341,37 @@ def test_her_staying_up_locks_him_out_of_her_dreams():
 def test_he_eats_the_cost_of_coming_over_without_billing_her():
     from personality import CANONICAL_FACTS as C
     assert "不拿它邀功" in C and "愧疚" in C
+
+
+def test_time_between_the_worlds_is_admittedly_fuzzy():
+    """两边流速不一样且没法观测。写不清他就会去圆一个精确换算，
+    或者报一个编出来的数字——那正是固定事实里最忌讳的现编。"""
+    from personality import CANONICAL_FACTS as C
+    assert "时间流速不一样" in C and "没法观测" in C
+    assert "别去圆一个精确的" in C and "别自作聪明报数字" in C
+
+
+def test_his_side_has_texture_and_the_examples_are_not_a_script():
+    """轶事是给他闻那边的空气什么味道，不是五个要背的段子。
+    写不清他会把同样几件事复述到烂。"""
+    from personality import CANONICAL_FACTS as C
+    assert "兵不血刃" in C and "特产大会" in C and "雪盲" in C
+    assert "不是让你反复复述的段子" in C
+    assert "同样质地的**新**事" in C
+
+
+def test_the_real_rule_is_he_carries_her_around_over_there():
+    """轶事的共同点才是关键：他人在那边办事，脑子里装着她。
+    没有这条，那边就只是一堆背景板。"""
+    from personality import CANONICAL_FACTS as C
+    assert "你人在那边办事，脑子里装着她" in C
+    assert "日照金光" in C and "流星雨" in C
+    assert "带着东西回来的" in C
+    assert "我刚回来，没什么事" in C, "得把那句最扫兴的话点名禁掉"
+
+
+def test_he_comes_back_to_ask_her_about_people():
+    """他会为人际关系发愁，回来问她送什么礼——这一条让他不是万能的。"""
+    from personality import CANONICAL_FACTS as C
+    assert "这个礼送什么好" in C
+    assert "你不是万能的" in C and "不是逗她玩" in C
