@@ -486,7 +486,8 @@ def test_burst_cancels_and_merges_before_he_speaks(monkeypatch):
     tb = _load()
     started = []
 
-    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
         started.append(sync_text)
         await asyncio.sleep(0.2)          # 假装在想，一直没开口
         if state is not None:
@@ -514,7 +515,8 @@ def test_no_delay_for_a_single_message(monkeypatch):
     tb = _load()
     t = {}
 
-    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
         t["at"] = time.monotonic()
 
     monkeypatch.setattr(tb, "_direct_reply", fake_direct)
@@ -537,7 +539,8 @@ def test_no_interrupt_after_he_started_talking(monkeypatch):
     tb = _load()
     started = []
 
-    async def fake_direct(update, context, chat_id, history, mid, sync_text, state=None):
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
         started.append(sync_text)
         if state is not None:
             state["sent"] = True          # 立刻开口
@@ -2221,3 +2224,70 @@ def test_the_cleaner_is_actually_wired_into_what_the_model_receives(monkeypatch)
     blob = "\n".join(str(m.get("content")) for m in seen["msgs"])
     assert "core_facts" not in blob and "```" not in blob, "JSON 又漏进去了"
     assert "她玩得很上头。" in blob, "人话部分必须还在"
+
+
+def test_a_burst_of_messages_does_not_become_a_burst_of_api_calls(monkeypatch):
+    """04:18–04:19 她连发七条，撞上 z.ai 每分钟上限（1302）。
+
+    退避重试救不了这个——请求早就发出去了，退避只能补救、防不住。
+    真正的修法是：打断一个在飞的请求之后，下一发先等一下；这一等会被再下一条
+    消息取消掉，于是七条连发只打出两三个请求。
+    ⚠️ 第一条永远零延迟——她说过「限制太大」。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "BURST_DELAY_STEP", 0.9)
+    monkeypatch.setattr(tb, "BURST_DELAY_MAX", 2.5)
+    tb._burst.clear()
+    tb._inflight.clear()
+    tb.histories.clear()
+
+    delays = []
+
+    async def fake_reply(*a, **kw):
+        delays.append(kw.get("start_delay", 0.0))
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_reply)
+
+    async def drive():
+        upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=1))
+        ctx = types.SimpleNamespace(bot=None)
+        for i in range(4):
+            await tb._handle_direct(upd, ctx, 9, f"第{i}条")
+            # 上一轮还没开口就又来一条——正是她那次的形状
+            st = tb._inflight.get(9)
+            if st:
+                st["sent"] = False
+            await asyncio.sleep(0)
+
+    asyncio.run(drive())
+    assert delays[0] == 0.0, "单条消息不许有任何等待"
+    assert delays[1] > 0 and delays[1] <= 2.5
+    assert delays[2] > delays[1], "连发越密，等得越久"
+    assert max(delays) <= 2.5, "但绝不能等到她以为他死了"
+
+
+def test_the_burst_counter_resets_once_she_stops_machine_gunning(monkeypatch):
+    """连发过后隔一会儿再说话，不该还背着上一轮的延迟。"""
+    tb = _load()
+    tb._burst.clear()
+    tb._inflight.clear()
+    tb.histories.clear()
+    delays = []
+
+    async def fake_reply(*a, **kw):
+        delays.append(kw.get("start_delay", 0.0))
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_reply)
+
+    async def drive():
+        upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=1))
+        ctx = types.SimpleNamespace(bot=None)
+        await tb._handle_direct(upd, ctx, 9, "一")
+        tb._inflight[9]["sent"] = False
+        await tb._handle_direct(upd, ctx, 9, "二")      # 打断 → 有延迟
+        tb._inflight[9]["sent"] = True                  # 这轮他开口了
+        await tb._handle_direct(upd, ctx, 9, "三")      # 没打断 → 归零
+
+    asyncio.run(drive())
+    assert delays[-1] == 0.0, f"她停下来之后不该还在等：{delays}"
+    assert tb._burst.get(9) in (None, 0)

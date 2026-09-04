@@ -1772,11 +1772,28 @@ def _take_pending(chat_id: int) -> list[str]:
     return [st["text"]]
 
 
+# 连发时的「等一下再开火」。⚠️ 第一条永远零延迟——她说过「限制太大」，
+# 日常单条不许有任何等待。只有在**确实打断了一个在飞的请求**之后才等：
+# 那时已经能确定她在连发。等的这一下会被下一条消息取消掉，所以七条连发
+# 只会真正打出两三个请求，而不是七个。
+# 由来：04:18–04:19 她连发七条，撞上 z.ai 每分钟上限（1302），退避重试也救不回来
+# ——因为请求早就发出去了，退避只能补救，防不住。
+BURST_DELAY_STEP = float(os.environ.get("OMBRE_TG_BURST_DELAY", "0.9"))
+BURST_DELAY_MAX = float(os.environ.get("OMBRE_TG_BURST_DELAY_MAX", "2.5"))
+_burst: dict[int, int] = {}
+
+
 async def _handle_direct(update, context, chat_id: int, text: str) -> None:
     merged = _take_pending(chat_id)
+    start_delay = 0.0
     if merged:
         text = merged[0] + "\n" + text
-        logger.info("她又发了一条，合并重来 chat=%s", chat_id)
+        n = _burst[chat_id] = _burst.get(chat_id, 0) + 1
+        start_delay = min(BURST_DELAY_STEP * n, BURST_DELAY_MAX)
+        logger.info("她又发了一条（连发第 %d 次），等 %.1fs 再开火 chat=%s",
+                    n, start_delay, chat_id)
+    else:
+        _burst.pop(chat_id, None)
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": text})
     if len(history) > MAX_HISTORY_MESSAGES:
@@ -1785,12 +1802,13 @@ async def _handle_direct(update, context, chat_id: int, text: str) -> None:
     state["task"] = asyncio.create_task(
         _direct_reply(update, context, chat_id, history,
                       f"telegram:{chat_id}:{update.message.message_id}", text,
-                      state=state))
+                      state=state, start_delay=start_delay))
     _inflight[chat_id] = state
 
 
 async def _direct_reply(update, context, chat_id: int, history: list[dict],
-                        mid: str, sync_text: str, state: dict | None = None) -> None:
+                        mid: str, sync_text: str, state: dict | None = None,
+                        start_delay: float = 0.0) -> None:
     """直连快线：说一句发一句。文字消息和图片消息共用同一条路。
 
     图片以前只能走网页大脑那条线，而那条线有 60 秒超时，GLM-5.3 在上面动辄
@@ -1808,6 +1826,9 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
         except Exception:  # noqa: BLE001
             pass
 
+    if start_delay > 0:
+        # 她还在连发就再等一下——这一等会被下一条消息直接取消掉，等于没等。
+        await asyncio.sleep(start_delay)
     asyncio.create_task(_sync_main_line("me", sync_text, mid))
     t0 = time.time()
     try:
