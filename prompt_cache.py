@@ -67,6 +67,23 @@ def note_thinking_error(model: str | None, error: object) -> bool:
     return True
 
 
+def thinking_state(model: str | None, want_off: bool = True) -> str:
+    """给她看的那行字：这一轮思考到底是开是关。
+
+    ⚠️ /debug 以前一律照她的选择写「关思考」，可 glm-5.3 的思考关不掉——
+    她那次看到「模型 glm-5.3（关思考）／整轮 195.4s」，两句话自相矛盾，
+    等于把真原因藏起来了。显示要照实际生效的档位说。
+    """
+    if not want_off:
+        return "开思考"
+    mode = _thinking_mode.get(model or "", "disabled")
+    if mode == "disabled":
+        return "关思考"
+    if mode == "none":
+        return "思考按模型默认（这家不认这个参数）"
+    return f"想关但关不掉，已压到最低档（{mode}）"
+
+
 def preset_thinking_level(model: str | None, level: str) -> None:
     """让 env 直接指定档位（OMBRE_GLM_THINKING=low/high/max）。"""
     if level in _THINKING_LEVELS:

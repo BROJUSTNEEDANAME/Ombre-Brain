@@ -70,7 +70,8 @@ import stale_ledger
 from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
-from prompt_cache import thinking_request, note_thinking_error, preset_thinking_level
+from prompt_cache import (thinking_request, note_thinking_error,
+                          preset_thinking_level, thinking_state)
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -663,6 +664,32 @@ MEM_CACHE_SECONDS = float(os.environ.get("OMBRE_TG_MEM_CACHE_SECONDS", "180"))
 # 每轮塞进上下文的记忆上限。⚠️ 这块**永远进不了缓存**（每轮都不一样），
 # 是全价付钱的部分——比整份人设还贵。砍它比砍人设省 16 倍。
 MEM_BLOCK_CHARS = int(os.environ.get("OMBRE_TG_MEM_CHARS", "1000"))
+
+# 记忆桶里存着大段 JSON／代码（比如跑团存档）。原样塞进去有两个害处：
+# ①占满额度却一句人话都没有；②按字数硬切会把 JSON 断在半截，他对着一段
+# 没有结尾的结构体死磕。她那次 16 个字的消息换来整轮 195 秒、一个字没说，
+# /debug 里浮现的就是 ```json { "core_facts": [ …（截断）。
+_FENCE_RE = re.compile(r"```.*?```", re.S)
+_OPEN_FENCE_RE = re.compile(r"```.*\Z", re.S)
+_JSONISH_RE = re.compile(r'[\{\[][^\n]*"[^"]+"\s*:.*', re.S)
+
+
+def _clean_memory_block(text: str, limit: int) -> str:
+    """把记忆块里的数据块换成一句说明，再按行边界截断。
+
+    ⚠️ 只做减法：不改写正文、不总结、不重排。记忆是原文，动不得——
+    这里删掉的只是「机器写给机器看」的部分。
+    """
+    value = str(text or "")
+    value = _FENCE_RE.sub("（存档数据，略）", value)
+    value = _OPEN_FENCE_RE.sub("（存档数据，略）", value)   # 没闭合的也算
+    value = _JSONISH_RE.sub("（存档数据，略）", value)
+    value = re.sub(r"\n{3,}", "\n\n", value).strip()
+    if len(value) <= limit:
+        return value
+    cut = value[:limit]
+    nl = cut.rfind("\n")
+    return (cut[:nl] if nl > limit * 0.5 else cut).rstrip() + "…"
 # 复用上一轮记忆块的相似度门槛。她换话题了还硬塞上一个话题的记忆，
 # 看起来就是「他没在翻记忆」——她的原话。0 = 关掉相似度判断（回到旧行为）。
 MEM_REUSE_OVERLAP = float(os.environ.get("OMBRE_TG_MEM_REUSE_OVERLAP", "0.34"))
@@ -1113,8 +1140,8 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     _t0 = time.time()
     _trace: list[str] = []
     LAST_TURN.clear()   # 含上一轮的 think——绝不能张冠李戴挂到这一轮
-    LAST_TURN["model"] = (f"{model or current_model()}"
-                          f"（{'关思考' if thinking_wanted_off() else '开思考'}"
+    _m = model or current_model()
+    LAST_TURN["model"] = (f"{_m}（{thinking_state(_m, thinking_wanted_off())}"
                           f"{'／后台' if model else ''}）")
     LAST_TURN["trace"] = _trace
     _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
@@ -1159,7 +1186,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 _mem_how = "失败"
     _trace.append(f"记忆检索 {time.time() - _mem_t:.1f}s（{_mem_how}）"
                   + (f"／捞到{len(str(_mem_block))}字"
-                     f"，实际塞进去{min(len(str(_mem_block)), MEM_BLOCK_CHARS)}字"
+                     f"，实际塞进去{len(_clean_memory_block(_mem_block, MEM_BLOCK_CHARS))}字"
                      if _mem_block else ""))
     # 她问过「我怎么感觉他没怎么调用记忆」——光有字数看不出捞得准不准，
     # 把开头几十个字也留下，/debug 里能直接看到浮上来的是什么。
@@ -1171,7 +1198,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         "【系统动态背景·不是闪闪说的话，不要复述】\n"
         + _now_line() + "\n\n" + drives.block()
         + (("\n\n【已自动浮现的相关记忆·够用就别再调 breath，直接开口】\n"
-            + str(_mem_block)[:MEM_BLOCK_CHARS]) if _mem_block else "")
+            + _clean_memory_block(_mem_block, MEM_BLOCK_CHARS)) if _mem_block else "")
         + "\n\n【这一轮的格式要求·最高优先级】正常打中文标点（逗号、句号、问号），"
           "不许用空格代替标点。一件事一行，自然发两到四条（用换行或 ‖ 隔开），"
           "绝不把几件事堆进一大段。长度要参差——该一个字就只发一个字，别条条一样长。"

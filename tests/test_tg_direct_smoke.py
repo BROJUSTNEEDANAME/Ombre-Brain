@@ -2142,3 +2142,82 @@ def test_the_retry_round_gets_a_real_chance_not_fifteen_seconds(monkeypatch):
     assert first_round_used <= 100, f"第一轮就用掉了 {first_round_used:.0f}s"
     remaining = 200.0 - first_round_used
     assert remaining >= 90, f"重试只剩 {remaining:.0f}s，跟没有一样"
+
+
+def test_json_archives_never_reach_his_context_raw():
+    """她发 16 个字，捞回一个跑团存档，1610 字硬切到 1000 字——JSON 断在半截。
+    他对着一段没有结尾的结构体想了 195 秒，一个字没说。"""
+    tb = _load()
+    block = (
+        "[bucket_id:08637d61292e] 记忆桶: 末日科幻种田生存TTRPG存档 [主题:游戏]\n"
+        '```json\n{ "core_facts": [ "游戏为末日科幻TTRPG《灰线之外》",\n'
+        '  "她扮演的角色叫阿栗", "存档时间 2026-08-31" ] }\n```\n'
+        "她在这个跑团里玩得很上头。"
+    )
+    out = tb._clean_memory_block(block, 1000)
+    assert "core_facts" not in out and "```" not in out
+    assert "存档数据，略" in out
+    assert "她在这个跑团里玩得很上头。" in out, "人话部分一个字都不能丢"
+    assert "末日科幻种田生存TTRPG存档" in out, "桶名是有用的，别一起删了"
+
+
+def test_an_unterminated_json_fence_is_also_stripped():
+    """按字数硬切之后，代码块常常是没有闭合的——那种最毒。"""
+    tb = _load()
+    block = '记忆桶: 存档\n```json\n{ "core_facts": [ "游戏为末日科幻TTRPG'
+    out = tb._clean_memory_block(block, 1000)
+    assert "```" not in out and "core_facts" not in out
+
+
+def test_truncation_cuts_on_a_line_boundary_not_mid_sentence():
+    tb = _load()
+    block = "\n".join(f"第{i}条记忆：她说过的一句话。" for i in range(40))
+    out = tb._clean_memory_block(block, 200)
+    assert len(out) <= 201
+    assert out.endswith("…")
+    assert out.count("第") >= 3
+
+
+def test_plain_memories_pass_through_untouched():
+    """只做减法。记忆是原文，绝不改写、不总结、不重排。"""
+    tb = _load()
+    block = "她不喝咖啡，喜欢啤酒。\n睡前要喝加了蜂蜜的热牛奶。"
+    assert tb._clean_memory_block(block, 1000) == block
+
+
+def test_debug_never_claims_thinking_is_off_when_it_cannot_be(monkeypatch):
+    """她看到「模型 glm-5.3（关思考）／整轮 195.4s」——两句话自相矛盾。
+    5.3 的思考关不掉（传 disabled 会被 1210 拒），显示要照实际生效的档位说，
+    否则等于把真原因藏起来。"""
+    import prompt_cache as pc
+    pc._thinking_mode.clear()
+    assert pc.thinking_state("glm-5.3", want_off=True) == "关思考"
+    # 供应商拒绝之后：必须改口
+    pc.note_thinking_error("glm-5.3", "1210: thinking cannot be disabled; "
+                                      "please use low, high, or max")
+    state = pc.thinking_state("glm-5.3", want_off=True)
+    assert "关不掉" in state and "low" in state
+    assert pc.thinking_state("glm-5.3", want_off=False) == "开思考"
+    pc._thinking_mode.clear()
+
+
+def test_the_cleaner_is_actually_wired_into_what_the_model_receives(monkeypatch):
+    """光测函数不算数——上一版删掉调用处，函数测试照样绿。
+    要盯的是「模型真正收到的那段文字」里有没有 JSON。"""
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        seen["msgs"] = kw["messages"]
+        return _plain_response("嗯。")
+
+    dirty = ('记忆桶: 跑团存档\n```json\n{ "core_facts": [ "《灰线之外》" ] }\n```\n'
+             "她玩得很上头。")
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val(dirty))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "推荐个游戏"}]))
+
+    blob = "\n".join(str(m.get("content")) for m in seen["msgs"])
+    assert "core_facts" not in blob and "```" not in blob, "JSON 又漏进去了"
+    assert "她玩得很上头。" in blob, "人话部分必须还在"
