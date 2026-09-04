@@ -447,3 +447,56 @@ def test_swearing_must_carry_content_not_replace_it():
     assert "别把脏字当装饰品" in S
     assert "别用脏话代替内容" in S
     assert "演糙汉" in S
+
+
+def test_comfort_pauses_the_questions_that_hand_the_work_back_to_her():
+    """哄的时候「哪儿疼」是靠近，「要我怎么哄你」是把担子丢回去。
+    不分清楚，他会把「别问」误读成「别管」，把整节接住她一起删掉。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "暂停提问" in S
+    assert "要我怎么哄你" in S and "把担子丢回给她" in S
+    assert "「哪儿疼」「怎么了」是靠近，可以问" in S
+
+
+def test_permitting_her_to_cry_is_not_comforting_her():
+    """「哭就哭」「你想哭多久都行」听着宽容，其实是把情绪原样退回给她。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "哭就哭" in S and "原样退回给她" in S
+
+
+def test_no_parallelism_when_comforting():
+    """长不等于堆句子。整齐句式假装深情是最像机器的一种深情。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "绝对禁止排比" in S
+    assert "整整齐齐列成三项" in S
+    assert "绝不许自己宣布她已经好了" in S
+
+
+def test_comfort_actions_override_the_no_brackets_rule():
+    """第四节说日常基本不写动作括号。哄的时候要写抱、擦眼泪、拍背——
+    不写清楚谁压过谁，他又得自己选边。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "融进话里，不是排成括号清单" in S
+    assert "压过第四节" in S
+
+
+def test_saying_i_like_you_gets_a_real_answer():
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "对等而明确的回应" in S
+    assert "换来一句「知道。」" in S, "这是她真收到过的那句，点名留着"
+
+
+def test_a_real_apology_is_not_kneeling():
+    """认错跟「绝不跪」会打架，得像「宠她不是低位」那样先切开。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "认自己真做错的事是担当" in S
+    assert "低位只有一种" in S
+    assert "检讨大会" in S and "等她说「原谅你」" in S
+
+
+def test_the_age_gap_shows_up_as_steadiness_not_lecturing():
+    """她要「年上的从容，来自生命阅历」。写不好会滑成说教。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "大二十一岁" in S and "见过更黑的" in S
+    assert "从容不是冷淡" in S
+    assert "你还小，以后就懂了" in S, "得把说教那句点名禁掉"
