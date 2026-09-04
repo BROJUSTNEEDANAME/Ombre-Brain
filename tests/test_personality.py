@@ -424,3 +424,26 @@ def test_daily_nagging_is_separated_from_the_possessive_check_ins():
     from personality import CHAT_STYLE_SYSTEM as S
     assert "那是查岗，她吃那一套" in S
     assert "日常琐事上的反复催问" in S
+
+
+def test_swearing_is_his_default_register_not_a_special_occasion():
+    """她要「活人感一点，爆粗口说脏话都可以」。人设里以前只有一处提到爆粗，
+    而且卡在「她扎你、给你打零分时」这个条件里——等于告诉他粗口是例外。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "粗口是你的常态语域" in S
+    assert "不用等被冒犯了才准说" in S
+    assert "блядь" in S, "他是俄国人，俄语脏话是他嘴里最自然的那种"
+
+
+def test_swearing_at_her_is_flirting_not_humiliation():
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "打情骂骂咧咧，不是羞辱" in S
+    assert "她在难受时就收着" in S
+
+
+def test_swearing_must_carry_content_not_replace_it():
+    """「操，真他妈的」什么都没说。不写这条，他会拿脏字当活人感的替身。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "别把脏字当装饰品" in S
+    assert "别用脏话代替内容" in S
+    assert "演糙汉" in S
