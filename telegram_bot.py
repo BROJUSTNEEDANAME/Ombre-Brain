@@ -188,6 +188,13 @@ SOFT_DEADLINE = float(os.environ.get("OMBRE_TG_SOFT_DEADLINE", "40"))
 # 单轮流式的硬墙：软时限只在每轮开始时检查，救不了「一轮就跑了九分钟」的复读
 # 死循环（真实事故：首句 525 秒，满屏乱码，systemd 最后 SIGKILL）。
 STREAM_MAX_SECONDS = float(os.environ.get("OMBRE_TG_STREAM_MAX_SECONDS", "150"))
+# 整轮硬墙。⚠️ 这个数以前只有 _direct_reply 那边知道，_ask_claude 自己不知道，
+# 于是单轮上限（150s）+ 工具调用（30s）加起来就能吃掉 180s——第二轮刚开口就撞墙。
+# 她那次让他去查记忆，等来的是「我这轮卡住了」。现在两边用同一个数算预算。
+HARD_TIMEOUT = float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200"))
+# 给「必须开口」那一轮留的时间。一个字都没说就撞墙，对她来说就是他不理人；
+# 宁可少查一次记忆，也要留够让他把话说出来的余量。
+SPEAK_RESERVE = float(os.environ.get("OMBRE_TG_SPEAK_RESERVE", "45"))
 
 
 def _looks_degenerate(text: str) -> bool:
@@ -293,8 +300,12 @@ CHAT_TOOLS = [t for t in BRAIN_TOOLS
               if t["function"]["name"] not in _MEMORY_WRITE_TOOLS]
 
 
-async def _call_brain_tool(name: str, args: dict) -> str:
-    """通过 REST API 调用本地大脑工具。"""
+async def _call_brain_tool(name: str, args: dict, timeout: float = 30) -> str:
+    """通过 REST API 调用本地大脑工具。
+
+    ⚠️ timeout 要由调用方按「整轮还剩多少」算出来传进来。写死 30 秒时，
+    一次慢查询就能把留给他开口的余量吃光——她那次的「我这轮卡住了」就是这么来的。
+    """
     if name == "search":
         # 联网搜索不在大脑里，走 z.ai 自带那条线。
         # ⚠️ 搜索失败绝不能抛出去打断她这一轮——返回一句人话，让他照实说没查到。
@@ -307,7 +318,7 @@ async def _call_brain_tool(name: str, args: dict) -> str:
     url = OMBRE_MCP_URL.replace("/mcp", "") + f"/api/tools/{name}"
     _wt = os.environ.get("OMBRE_WEB_TOKEN", "").strip()  # 走公网时带上,本机直连可留空
     headers = {"Authorization": f"Bearer {_wt}"} if _wt else {}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=max(3.0, float(timeout))) as client:
         resp = await client.post(url, json=args, headers=headers)
         data = resp.json()
         return data.get("result", data.get("error", str(data)))
@@ -1217,8 +1228,12 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     for _round in range(12):  # 最多 12 轮工具循环
         # 工具轮用尽、或总时间超了却还一个字没说 → 这轮摘掉工具，他就必须开口。
         _round_start = time.time()
+        # ⚠️ 三个条件缺一不可：轮数用尽、软线到了、**或者剩下的时间只够说话了**。
+        # 最后那条是她那次卡住的直接原因：前面几轮吃光预算，等轮到该开口时
+        # 墙就在眼前，怎么算都来不及。
+        _left = HARD_TIMEOUT - (time.time() - _t0)
         _force_speak = _force_next or _round >= CHAT_TOOL_ROUNDS or (
-            not said and time.time() - _t0 > SOFT_DEADLINE)
+            not said and time.time() - _t0 > SOFT_DEADLINE) or _left <= SPEAK_RESERVE
         _force_next = False
         # ⚠️ 绝不能把 tools 整个摘掉：历史里还留着之前的 tool_calls / tool 结果，
         # 请求里没有 tools 就自相矛盾，模型会 decode 崩掉、吐出满屏乱码（踩过）。
@@ -1255,10 +1270,16 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             _broke = False
             _checked = 0
             _round_t0 = time.time()   # ⚠️ 每轮重新计时：从整通调用起算会把多轮对话误砍
+            # 这一轮最多能跑多久：既不超过单轮上限，也绝不吃掉留给「开口」的余量。
+            # 已经说过话了就不用留——那时候超时最多是话没说完，不是一句没有。
+            _round_cap = STREAM_MAX_SECONDS if said else max(
+                15.0, min(STREAM_MAX_SECONDS,
+                          HARD_TIMEOUT - (time.time() - _t0) - SPEAK_RESERVE))
             async for ch in st:
                 # 硬墙：单轮流式绝不允许无限跑下去
-                if time.time() - _round_t0 > STREAM_MAX_SECONDS:
-                    logger.warning("单轮流式超过 %.0fs，掐断", STREAM_MAX_SECONDS)
+                if time.time() - _round_t0 > _round_cap:
+                    logger.warning("单轮流式超过 %.0fs，掐断（整轮已用 %.0fs）",
+                                   _round_cap, time.time() - _t0)
                     _broke = True
                     break
                 # 复读死循环：每多 200 字查一次，崩了就立刻掐，绝不把乱码发给她
@@ -1383,8 +1404,12 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
                 args = {}
             await _say_status(on_status, _TOOL_STATUS.get(
                 tc.function.name, f"在用 {tc.function.name}"))
+            # 工具再重要也不能把「开口」的余量吃掉。已经说过话了就宽松些。
+            _tool_cap = 30.0 if said else max(
+                5.0, min(30.0, HARD_TIMEOUT - (time.time() - _t0) - SPEAK_RESERVE))
             try:
-                result = await _call_brain_tool(tc.function.name, args)
+                result = await _call_brain_tool(tc.function.name, args,
+                                                timeout=_tool_cap)
             except Exception as e:  # noqa: BLE001
                 result = f"工具调用失败: {e}"
             if tc.function.name == "make_page" and isinstance(result, str) and result.startswith("http"):

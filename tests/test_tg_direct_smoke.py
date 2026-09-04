@@ -1968,3 +1968,124 @@ def test_the_folded_block_still_appears_when_he_actually_thinks(monkeypatch):
     assert live and live[0].startswith("<blockquote expandable>")
     assert "她在试探我值不值钱" in live[0]
     assert live[0].endswith("留的什么稀有谷。")
+
+
+def test_a_slow_tool_round_can_never_eat_the_time_he_needs_to_speak(monkeypatch):
+    """她让他去查记忆，等来一句「我这轮卡住了」。
+
+    真实原因是预算算错了：整轮硬墙 200s，可单轮流式允许跑 150s、工具再给 30s
+    ——一轮就能吃掉 180s，第二轮刚开口就撞墙。而「说不出话就强制开口」的软线
+    只在每轮开头检查，救不了。现在每一轮的上限都要给「开口」留出余量。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "STREAM_MAX_SECONDS", 150.0)
+
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    # 单轮上限必须由剩余预算算出来，不能是写死的常量
+    i = src.index("_round_cap = ")
+    body = src[i:i + 260]
+    assert "HARD_TIMEOUT" in body and "SPEAK_RESERVE" in body, body
+    # 工具调用同理
+    j = src.index("_tool_cap = ")
+    assert "SPEAK_RESERVE" in src[j:j + 200]
+
+
+def test_when_only_the_speaking_reserve_is_left_he_must_open_his_mouth(monkeypatch):
+    """剩下的时间只够说话时，必须停止调工具直接开口——这条是她那次的直接缺口。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index("_force_speak = _force_next")
+    assert "_left <= SPEAK_RESERVE" in src[i:i + 200]
+
+
+def test_brain_tool_timeout_is_caller_controlled(monkeypatch):
+    """写死 30 秒时，一次慢查询就能把开口的余量吃光。"""
+    tb = _load()
+    seen = {}
+
+    class _C:
+        def __init__(self, timeout=None, **kw):
+            seen["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            return types.SimpleNamespace(json=lambda: {"result": "（记忆）"})
+
+    monkeypatch.setattr(tb.httpx, "AsyncClient", _C)
+    asyncio.run(tb._call_brain_tool("breath", {"query": "x"}, timeout=7))
+    assert seen["timeout"] == 7
+    asyncio.run(tb._call_brain_tool("breath", {"query": "x"}, timeout=0.1))
+    assert seen["timeout"] >= 3, "再紧也要给一个能真的发出请求的下限"
+
+
+def test_he_still_speaks_after_a_round_that_burned_most_of_the_budget(monkeypatch):
+    """真跑一遍那次事故：第一轮查记忆吃掉大半预算，他必须还能开口。
+
+    只查源码不算数——她收到的是「我这轮卡住了」，那是运行时行为。
+    这里用假时钟把时间推到只剩一点，看第二轮是不是被逼着直接说话。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "CHAT_TOOL_ROUNDS", 9)   # 别让轮数上限替我们过关
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tb.time, "time", lambda: clock["t"])
+
+    rounds = []
+
+    def _tc_delta(name, args):
+        fn = types.SimpleNamespace(name=name, arguments=args)
+        tc = types.SimpleNamespace(index=0, id="c1", function=fn)
+        d = types.SimpleNamespace(content=None, tool_calls=[tc])
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    def _text_delta(text):
+        d = types.SimpleNamespace(content=text, tool_calls=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    async def _stream(chunks):
+        for c in chunks:
+            yield c
+
+    async def fake_create(**kw):
+        rounds.append(kw)
+        if len(rounds) == 1:
+            # ⚠️ 这一轮他**先说了一句**再去查记忆——这正是她那次的形状。
+            # 说过话之后，「一个字没说就强制开口」的软线就永久失效了
+            # （那条的前提是 not said），于是只剩「预算见底」这一条能救他。
+            return _stream([_text_delta("等我翻翻。\n"),
+                            _tc_delta("breath", '{"query":"火烧屁股"}')])
+        return _stream([_text_delta("查到了。火烧屁股是那个组长。")])
+
+    async def slow_tool(*a, **k):
+        clock["t"] += 170.0        # 这一轮把预算烧掉 170 秒
+        return "（记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", slow_tool)
+    tb._MEM_CACHE.clear()
+
+    said = []
+
+    async def sink(seg):
+        said.append(seg)
+
+    out = asyncio.run(tb._ask_claude([{"role": "user", "content": "你去查记忆"}],
+                                     on_segment=sink))
+
+    assert any("火烧屁股" in x for x in said), \
+        f"她等来的必须是他的话，不是「我这轮卡住了」：{said}"
+    assert "火烧屁股" in out, out
+    assert len(rounds) == 2
+    assert rounds[1].get("tool_choice") == "none", \
+        "只剩开口的时间了，这一轮必须禁掉工具，否则又是一轮空转"
