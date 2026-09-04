@@ -1272,9 +1272,19 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
             _round_t0 = time.time()   # ⚠️ 每轮重新计时：从整通调用起算会把多轮对话误砍
             # 这一轮最多能跑多久：既不超过单轮上限，也绝不吃掉留给「开口」的余量。
             # 已经说过话了就不用留——那时候超时最多是话没说完，不是一句没有。
-            _round_cap = STREAM_MAX_SECONDS if said else max(
-                15.0, min(STREAM_MAX_SECONDS,
-                          HARD_TIMEOUT - (time.time() - _t0) - SPEAK_RESERVE))
+            # 这一轮能跑多久。⚠️ 分三种，上一版只分了两种，结果第一轮拿走 150 秒、
+            # 重试只剩 15 秒——等于没给他第二次机会，她收到的还是「我这轮卡住了」。
+            _used = time.time() - _t0
+            if _force_speak:
+                # 最后一轮：剩下的全归它。它本身就是那份预留，不用再留了。
+                _round_cap = max(20.0, HARD_TIMEOUT - _used - 5.0)
+            elif said:
+                _round_cap = STREAM_MAX_SECONDS   # 已经说过话，超时最多是话没说完
+            else:
+                # 一个字还没说：只准用掉「可用时间」的一半，另一半留给重试那轮。
+                _round_cap = max(20.0, min(
+                    STREAM_MAX_SECONDS,
+                    (HARD_TIMEOUT - _used - SPEAK_RESERVE) / 2))
             async for ch in st:
                 # 硬墙：单轮流式绝不允许无限跑下去
                 if time.time() - _round_t0 > _round_cap:

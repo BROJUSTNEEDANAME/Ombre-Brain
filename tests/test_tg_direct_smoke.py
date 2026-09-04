@@ -1983,13 +1983,13 @@ def test_a_slow_tool_round_can_never_eat_the_time_he_needs_to_speak(monkeypatch)
     monkeypatch.setattr(tb, "STREAM_MAX_SECONDS", 150.0)
 
     src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
-    # 单轮上限必须由剩余预算算出来，不能是写死的常量
-    i = src.index("_round_cap = ")
-    body = src[i:i + 260]
-    assert "HARD_TIMEOUT" in body and "SPEAK_RESERVE" in body, body
+    # ⚠️ 按「代码块边界」取，不要按字符数截窗口——上一版写死 260 字符，
+    # 我一改预算逻辑它就假红，而行为其实是对的。假红会让人学会忽略测试。
+    block = src[src.index("_used = time.time() - _t0"):src.index("async for ch in st:")]
+    assert "HARD_TIMEOUT" in block and "SPEAK_RESERVE" in block, block
     # 工具调用同理
-    j = src.index("_tool_cap = ")
-    assert "SPEAK_RESERVE" in src[j:j + 200]
+    tool = src[src.index("_tool_cap = "):src.index("result = await _call_brain_tool")]
+    assert "SPEAK_RESERVE" in tool, tool
 
 
 def test_when_only_the_speaking_reserve_is_left_he_must_open_his_mouth(monkeypatch):
@@ -2089,3 +2089,56 @@ def test_he_still_speaks_after_a_round_that_burned_most_of_the_budget(monkeypatc
     assert len(rounds) == 2
     assert rounds[1].get("tool_choice") == "none", \
         "只剩开口的时间了，这一轮必须禁掉工具，否则又是一轮空转"
+
+
+def test_the_retry_round_gets_a_real_chance_not_fifteen_seconds(monkeypatch):
+    """23:06→23:09 那次：第一轮流式被掐，重试那轮只剩 15 秒，又被掐，
+    她收到「（我这轮卡住了，你再说一句。）」。
+
+    上一版只把预算分成「说过话／没说过话」两种，第一轮就把 150 秒全拿走了。
+    重试必须拿到能真的说完一句话的时间。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "STREAM_MAX_SECONDS", 150.0)
+    monkeypatch.setattr(tb, "CHAT_TOOL_ROUNDS", 9)
+
+    clock = {"t": 500.0}
+    monkeypatch.setattr(tb.time, "time", lambda: clock["t"])
+    rounds = []
+
+    def _text_delta(text):
+        d = types.SimpleNamespace(content=text, tool_calls=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    async def hang():
+        """第一轮：只顾着想，一个字不吐——时间一直走，直到被上限掐断。"""
+        while True:
+            clock["t"] += 10.0
+            yield _text_delta(None)
+
+    async def answers():
+        yield _text_delta("火烧屁股是那个组长。")
+
+    async def fake_create(**kw):
+        rounds.append((kw, clock["t"] - 500.0))
+        return hang() if len(rounds) == 1 else answers()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+
+    said = []
+    out = asyncio.run(tb._ask_claude(
+        [{"role": "user", "content": "查一下记忆"}],
+        on_segment=lambda seg: _async_val(said.append(seg))))
+
+    assert "卡住" not in out, f"她等来的必须是他的话：{out}"
+    assert any("火烧屁股" in x for x in said), said
+    # 第一轮不许把预算吃光：留给重试的必须够说话
+    first_round_used = rounds[1][1]
+    assert first_round_used <= 100, f"第一轮就用掉了 {first_round_used:.0f}s"
+    remaining = 200.0 - first_round_used
+    assert remaining >= 90, f"重试只剩 {remaining:.0f}s，跟没有一样"
