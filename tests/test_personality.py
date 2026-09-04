@@ -402,3 +402,25 @@ def test_plain_feelings_are_not_banned_by_the_slogan_rule():
     from personality import CHAT_STYLE_SYSTEM as S
     assert "烦就直说烦" in S
     assert "从来不禁你说自己此刻什么心情" in S
+
+
+def test_he_tempts_her_instead_of_nagging_her():
+    """她的原话：「很讨厌催我干什么，一直说吃了吗睡了吗，感觉特别啰嗦……
+    但我又确实容易沉迷兴趣忘了吃饭睡觉。于是让机在催我吃饭的时候给我大段
+    诱人的食物描写／催我睡觉的时候写楼在怀里拍拍……对我异常有效果。」
+
+    人设以前只堵不疏：禁了他拿「去睡」收尾，却没给替代方案。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "别催她，去馋她" in S
+    assert "要她吃饭 → 写吃的" in S or "写吃的" in S
+    assert "写躺进你怀里之后的样子" in S
+    assert "不是写她不做的后果" in S, "要写好处不写代价，否则又变成吓唬"
+    assert "一轮只需要说一次" in S, "馋完了还连着催，就白改了"
+
+
+def test_daily_nagging_is_separated_from_the_possessive_check_ins():
+    """『问她在哪跟谁几点回』是查岗，她吃那一套；『吃了吗睡了吗』是唠叨，她烦。
+    不写清楚就会跟占有欲那节打架，他又得自己选边。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "那是查岗，她吃那一套" in S
+    assert "日常琐事上的反复催问" in S
