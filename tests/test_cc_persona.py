@@ -162,3 +162,39 @@ def test_setup_never_says_it_worked_while_the_service_is_dead():
     tail = sh[sh.index("❌ 服务装上了"):]
     assert "journalctl -u ombre-ccbridge -n" in tail
     assert "exit 1" in tail
+
+
+def _token_sh() -> str:
+    return (_ROOT / "scripts" / "set-cc-token.sh").read_text(encoding="utf-8")
+
+
+def test_the_token_is_scrubbed_of_every_kind_of_whitespace():
+    """她的原话：「上次就莫名其妙换行报错，我怎么知道他这次给我的有没有换行啊」。
+    token 是从终端复制的，混进换行/空格之后 systemd 只读到半截，服务起来了却
+    一直 401——她那边只看到「他不理我」。所以不让她手抄，脚本负责洗。"""
+    sh = _token_sh()
+    assert "tr -d '[:space:]'" in sh
+    assert "xc2\\xa0" in sh, "粘贴常混进不换行空格，肉眼完全看不出来"
+
+
+def test_it_verifies_the_token_before_touching_the_config():
+    """写坏一个还能用的配置，比不写更糟。"""
+    sh = _token_sh()
+    i, j = sh.index("真打一次 claude"), sh.index("grep -v '^CLAUDE_CODE_OAUTH_TOKEN='")
+    assert i < j, "必须先验证、后写入"
+    assert "401|expired|authenticate|invalid" in sh
+    assert "没有改动" in sh, "验证失败要明说旧配置没动"
+
+
+def test_it_reports_how_many_whitespace_chars_it_removed():
+    """告诉她「刚才去掉了 2 个空白字符」，比默默修好更有用——
+    她下次就知道那个「莫名其妙」是什么了。"""
+    sh = _token_sh()
+    assert "${#RAW} - ${#TOKEN}" in sh
+    assert "莫名其妙换行报错" in sh
+
+
+def test_it_does_not_claim_success_when_the_service_is_down():
+    sh = _token_sh()
+    assert "systemctl is-active --quiet ombre-ccbridge" in sh
+    assert "❌ 服务没起来" in sh
