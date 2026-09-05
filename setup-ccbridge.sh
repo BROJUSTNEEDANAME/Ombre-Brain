@@ -127,8 +127,21 @@ SVCEOF
 systemctl daemon-reload
 systemctl enable ombre-ccbridge
 systemctl restart ombre-ccbridge
-sleep 2
-systemctl --no-pager --lines=15 status ombre-ccbridge || true
-echo ""
-echo "✅ 装好了。看日志：journalctl -u ombre-ccbridge -f"
-echo "   改人设后要重新生成：python3 scripts/make-cc-persona.py $PERSONA_DIR"
+sleep 3
+
+# ⚠️ 绝不在服务其实崩着的时候说「装好了」。上一版无脑打这句，她看到满屏
+# status=1/FAILURE 底下跟着一个绿勾——那种自相矛盾比不报还糟，
+# 因为她会以为是自己看错了。这类假捷报我已经给过她一次（backfill 那回）。
+if systemctl is-active --quiet ombre-ccbridge; then
+    echo ""
+    echo "✅ 起来了。看日志：journalctl -u ombre-ccbridge -f"
+    echo "   改人设后要重新生成：python3 scripts/make-cc-persona.py $PERSONA_DIR"
+else
+    echo ""
+    echo "❌ 服务装上了，但没起来。原因在这儿："
+    echo "---------------------------------------------"
+    journalctl -u ombre-ccbridge -n 25 --no-pager || true
+    echo "---------------------------------------------"
+    echo "把上面这段发出来就能定位。"
+    exit 1
+fi

@@ -149,3 +149,16 @@ def test_the_unit_carries_a_path_that_actually_contains_claude():
     sh = _setup_sh()
     assert "Environment=PATH=$CLAUDE_DIR:" in sh
     assert "Environment=HOME=/home/ombre" in sh, "claude 要读 ~/.claude，没有 HOME 会认不出登录状态"
+
+
+def test_setup_never_says_it_worked_while_the_service_is_dead():
+    """上一版无脑打「✅ 装好了」，她屏幕上是满屏 status=1/FAILURE 底下跟一个绿勾。
+    这种自相矛盾比不报还糟——她会以为是自己看错了。
+    （同一类错误我已经给过她一次：backfill 明明 ERROR，脚本却说「补完了」。）"""
+    sh = _setup_sh()
+    assert "systemctl is-active --quiet ombre-ccbridge" in sh
+    assert "❌ 服务装上了，但没起来" in sh
+    # 失败时要**当场把日志打出来**，别让她再去查一遍
+    tail = sh[sh.index("❌ 服务装上了"):]
+    assert "journalctl -u ombre-ccbridge -n" in tail
+    assert "exit 1" in tail
