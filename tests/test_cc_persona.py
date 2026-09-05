@@ -509,3 +509,98 @@ def test_two_empty_turns_get_human_words_not_a_placeholder(monkeypatch):
                         type("C", (), {"bot": _Bot()})(), 7, "在吗"))
     assert sent and "没出声" in sent[0], sent
     assert all("……" not in x for x in sent), sent
+
+
+def test_typing_indicator_keeps_going_for_the_whole_minute(monkeypatch):
+    """TG 的输入提示 5 秒就过期，只发一次等于没发。这边一轮要 60 秒——
+    她盯着静止的屏幕等一分钟，看着就是「他不理我」。API bot 一直有这个循环。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    ticks = {"n": 0}
+    real_sleep = aio.sleep          # ⚠️ 先抓住原函数，否则 patch 之后自己递归自己
+
+    async def slow_run(message, session_id):
+        await real_sleep(0.25)
+        return "在。", "s"
+
+    monkeypatch.setattr(cc, "run_cc", slow_run)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    monkeypatch.setattr(cc.asyncio, "sleep",
+                        lambda s: real_sleep(0.05))   # 把 4 秒压缩成 50ms
+
+    class _Msg:
+        async def reply_text(self, *a, **k):
+            return None
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            ticks["n"] += 1
+
+    aio.run(cc._respond(type("U", (), {"message": _Msg()})(),
+                        type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert ticks["n"] >= 3, f"只发了 {ticks['n']} 次，等于没发"
+
+
+def test_a_repeat_loop_is_cut_instead_of_dumped_on_her(monkeypatch):
+    """模型崩成复读机时，半截乱码一个字都不该发给她。API bot 早有这道闸。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    sent: list[str] = []
+
+    async def broken(message, session_id):
+        return "我知道你难受。" * 40, "s"
+
+    monkeypatch.setattr(cc, "run_cc", broken)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+
+    class _Msg:
+        async def reply_text(self, text, *a, **k):
+            sent.append(text)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+
+    aio.run(cc._respond(type("U", (), {"message": _Msg()})(),
+                        type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert len(sent) == 1 and "死循环" in sent[0], sent
+
+
+def test_punctuation_is_restored_on_the_way_out(monkeypatch):
+    """⚠️ 光测 restore_punctuation 本身不算数——把发送处的调用删掉，那条测试
+    照样绿（我第一版就是，今天第五次踩这个）。要盯她真正收到的那段字。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    sent: list[str] = []
+
+    async def no_punct(message, session_id):
+        return "过来 手给我", "s"
+
+    monkeypatch.setattr(cc, "run_cc", no_punct)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+
+    class _Msg:
+        async def reply_text(self, text, *a, **k):
+            sent.append(text)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+
+    aio.run(cc._respond(type("U", (), {"message": _Msg()})(),
+                        type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert sent == ["过来，手给我。"], sent
+
+
+def test_the_shared_helpers_live_in_one_place_now():
+    """由来：她连着发现好几处「只有 API 那边做了」。放进共用模块，
+    以后不会再出现「修了一边忘了另一边」。"""
+    tg = (_ROOT / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "def restore_punctuation" not in tg, "telegram_bot 里不该再有自己那份"
+    assert "def _looks_degenerate" not in tg
+    assert "from reply_sanitizer import" in tg
+    cc_src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    assert "from reply_sanitizer import restore_punctuation, looks_degenerate" in cc_src

@@ -32,6 +32,7 @@ from datetime import datetime, timezone, timedelta
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
+from reply_sanitizer import restore_punctuation, looks_degenerate
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -281,11 +282,32 @@ _EMPTY_REPLY = {"", "（……）", "（...）", "(...)", "...", "…", "。"}
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
+    async def _keep_typing() -> None:
+        """一直显示「正在输入」，直到回复发出。
+
+        ⚠️ TG 的输入提示 5 秒就过期，只发一次等于没发。这边一轮要 60 秒——
+        她盯着一个静止的屏幕等一分钟，看着就是「他不理我」。
+        API bot 一直有这个循环，cc 桥只发了一次。
+        """
+        try:
+            while True:
+                await asyncio.sleep(4)
+                await context.bot.send_chat_action(chat_id=cid,
+                                                   action=ChatAction.TYPING)
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
         await context.bot.send_chat_action(chat_id=cid, action=ChatAction.TYPING)
     except Exception:  # noqa: BLE001
         pass  # typing 指示器失败不影响正事
-    reply, sid = await run_cc(message, sessions.get(cid))
+    _typing = asyncio.create_task(_keep_typing())
+    try:
+        reply, sid = await run_cc(message, sessions.get(cid))
+    finally:
+        _typing.cancel()
     if reply.strip() in _EMPTY_REPLY:
         # 这一轮他一个字都没出声。再给一次机会——多半是那轮全花在工具调用上了。
         logger.warning("这一轮空回复，重来一次 chat=%s", cid)
@@ -294,6 +316,10 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         reply, sid = await run_cc(message, sessions.get(cid))
     if reply.strip() in _EMPTY_REPLY:
         reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
+    elif looks_degenerate(reply):
+        # 复读死循环：模型崩了，半截乱码一个字都不发给她（API bot 早有这道闸）
+        logger.warning("检测到复读死循环，掐掉 chat=%s（%d 字）", cid, len(reply))
+        reply = "他这轮卡进死循环了，你再说一句。"
     st = _inflight_cc.get(cid)
     if st is not None:
         st["sent"] = True          # 开口了，后面的消息不许再打断这一轮
@@ -301,7 +327,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sessions[cid] = sid
         _save_sessions()
     for chunk in _split_for_telegram(reply):
-        await _reply_with_retry(update.message, chunk)
+        await _reply_with_retry(update.message, restore_punctuation(chunk))
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
 

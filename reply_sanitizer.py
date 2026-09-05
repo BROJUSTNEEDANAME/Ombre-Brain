@@ -373,3 +373,38 @@ def polish_chat_reply(text: str, *, writing_mode: bool = False) -> str:
             clean += "。"
         polished_segments.append(clean)
     return " ‖ ".join(polished_segments)
+
+
+# ⚠️ 下面两个原本只写在 telegram_bot.py 里，于是 cc 桥一直没有——她连着发现
+# 好几处「只有 API 那边做了」的事（‖ 不拆、空回复上屏、连发不合并）。
+# 放进共用模块，就不会再出现「修了一边忘了另一边」。
+
+_CJK = r"\u4e00-\u9fff"
+_HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
+
+
+def restore_punctuation(text: str) -> str:
+    """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
+    整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」的空格换成逗号
+    并补上句号。只在两个中文字之间动手：「girl 过来」「铁剂 65mg」不受影响。"""
+    t = (text or "").strip()
+    if not t or _HAS_PUNCT_RE.search(t):
+        return text
+    fixed = _CJK_SPACE_RE.sub("，", t)
+    if fixed == t:
+        return text
+    if not re.search(r"[…~〜)）\]】]$", fixed):
+        fixed += "。"
+    return fixed
+
+
+def looks_degenerate(text: str) -> bool:
+    """复读死循环探测：尾部片段在正文里反复出现就是模型崩了。
+    只在正文够长时才判，避免误伤他本来就短的重复口头禅（「嗯。」「好。」）。"""
+    if len(text) < 240:
+        return False
+    tail = text[-40:].strip()
+    if len(tail) < 20:
+        return False
+    return text.count(tail) >= 3

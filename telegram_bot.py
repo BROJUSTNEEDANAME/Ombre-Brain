@@ -62,7 +62,8 @@ import web_search  # 本地：联网搜索（z.ai 自带）
 import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
-from reply_sanitizer import strip_hidden_stream, visible_cut, find_think
+from reply_sanitizer import (strip_hidden_stream, visible_cut, find_think,
+                             restore_punctuation, looks_degenerate as _looks_degenerate)
 from utils import parse_memory_note
 from prompt_cache import append_volatile_context
 import claude_provider
@@ -198,15 +199,6 @@ HARD_TIMEOUT = float(os.environ.get("OMBRE_TG_HARD_TIMEOUT", "200"))
 SPEAK_RESERVE = float(os.environ.get("OMBRE_TG_SPEAK_RESERVE", "45"))
 
 
-def _looks_degenerate(text: str) -> bool:
-    """复读死循环探测：尾部片段在正文里反复出现就是模型崩了，立刻掐掉。
-    只在正文够长时才判，避免误伤他本来就短的重复口头禅（「嗯。」「好。」）。"""
-    if len(text) < 240:
-        return False
-    tail = text[-40:].strip()
-    if len(tail) < 20:
-        return False
-    return text.count(tail) >= 3
 TELEGRAM_MSG_LIMIT = 4096
 
 # 时间感知：用闪闪所在时区的真实时间（默认太平洋时区 / Irvine）
@@ -1001,30 +993,6 @@ async def _llm_create_once(**kwargs):
             if not thinking or not note_thinking_error(model, e):
                 raise
     raise RuntimeError("thinking 档位协商失败")
-
-
-_CJK = r"\u4e00-\u9fff"
-_HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
-_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
-
-
-def restore_punctuation(text: str) -> str:
-    """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
-    这里兜一道：整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」
-    的空格换成逗号并补上句号。打标点就是默认行为，没有开关——她要的一直是
-    「有标点，正常说话」；活人感靠短句和参差，不靠去掉标点。
-
-    只在两个中文字之间动手：「girl 过来」「铁剂 65mg」这类不受影响；
-    本来就有标点的、写文模式的，一律原样返回。"""
-    t = (text or "").strip()
-    if not t or _HAS_PUNCT_RE.search(t):
-        return text
-    fixed = _CJK_SPACE_RE.sub("，", t)
-    if fixed == t:
-        return text
-    if not re.search(r"[…~〜)）\]】]$", fixed):
-        fixed += "。"
-    return fixed
 
 
 _MEMORY_TAG_RE = re.compile(r"\[\s*memory\s*[:：]\s*(.*?)\s*\]", re.I | re.S)
