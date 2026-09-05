@@ -8,7 +8,13 @@
 # （比如函数里引用了未定义的名字）挡不住，那要靠交付前的 scripts/check.sh。
 set -euo pipefail
 REPO=/home/ombre/Ombre-Brain
+# ⚠️ cc 桥是「装了才有」的，所以按 unit 是否存在动态决定，不写死——
+# 写死了没装的机器每轮都会 restart 一个不存在的服务、日志里刷红。
 SERVICES=(ombre-brain ombre-apibot)
+if systemctl list-unit-files ombre-ccbridge.service >/dev/null 2>&1 \
+   && systemctl cat ombre-ccbridge.service >/dev/null 2>&1; then
+    SERVICES+=(ombre-ccbridge)
+fi
 log() { logger -t ombre-autoupdate "$*"; echo "$*"; }
 g() { runuser -u ombre -- git -C "$REPO" "$@"; }
 
@@ -32,7 +38,22 @@ if ! g merge --ff-only "origin/$BRANCH" --quiet; then
     exit 1
 fi
 NEW=$(g rev-parse --short HEAD)
-log "拉到新提交 $BRANCH @ $NEW，重启服务"
+log "拉到新提交 $BRANCH @ $NEW，重启服务：${SERVICES[*]}"
+
+# ⚠️ cc 桥的人设是**生成**出来的（nikto-cc/CLAUDE.md 来自 personality.py）。
+# 光重启不重新生成，改完人设那边会一直用旧的，而且一点提示都没有——
+# 这种「看起来更新了、其实没更新」的静默失败最难查。
+CC_WORKDIR=$(grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" 2>/dev/null | tail -1 \
+             | cut -d= -f2- | tr -d '[:space:]')
+CC_WORKDIR=${CC_WORKDIR:-/home/ombre/nikto-cc}
+if printf '%s\n' "${SERVICES[@]}" | grep -qx ombre-ccbridge; then
+    if runuser -u ombre -- "$REPO/.venv/bin/python" \
+            "$REPO/scripts/make-cc-persona.py" "$CC_WORKDIR" >/dev/null 2>&1; then
+        log "cc 人设已按新代码重新生成（$CC_WORKDIR）"
+    else
+        log "⚠️ cc 人设重新生成失败，那边可能还在用旧人设"
+    fi
+fi
 
 for s in "${SERVICES[@]}"; do systemctl restart "$s" || true; done
 sleep 8   # 给它们一点启动时间再判活
@@ -50,4 +71,4 @@ if [ -n "$FAILED" ]; then
     exit 1
 fi
 rm -f "$BLOCK"
-log "✅ 已部署 $BRANCH @ $NEW，两个服务都活着"
+log "✅ 已部署 $BRANCH @ $NEW，${#SERVICES[@]} 个服务都活着：${SERVICES[*]}"

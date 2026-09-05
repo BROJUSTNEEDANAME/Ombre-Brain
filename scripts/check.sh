@@ -24,7 +24,7 @@ python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_personality.py tests/test_writing_style.py \
     tests/test_contradiction.py tests/test_stale_ledger.py \
     tests/test_env_file.py tests/test_web_search.py \
-    tests/test_cc_persona.py -q || fail=1
+    tests/test_cc_persona.py tests/test_autoupdate.py -q || fail=1
 
 echo "▶ 未定义名扫描（抽函数漏依赖专用）"
 python3 - <<'PY' || fail=1
