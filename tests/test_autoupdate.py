@@ -52,3 +52,31 @@ def test_the_success_line_no_longer_hardcodes_two_services():
     她看到的会是一句自信但不准确的捷报。"""
     assert "两个服务都活着" not in SH
     assert "${#SERVICES[@]}" in SH
+
+
+def test_a_service_running_older_code_than_HEAD_is_restarted_even_when_git_is_current():
+    """病根就在这。原来开头是「本地==远端就 exit 0」。
+    她这几天手动 git pull 过好几次——定时器五分钟后醒来，代码已经是最新的了，
+    于是掉头就走，**根本走不到重启那一步**。服务跑着五个半小时前的旧代码，
+    日志里一切正常。她连问三次「怎么还是这样」，其实我早就修好了。
+
+    所以「代码是新的」必须不等于「跑的是新代码」：
+    比 HEAD 的提交时间还早启动的服务，就是在跑旧代码，得重启。
+    """
+    # 1. 必须真的去问 systemd 服务什么时候起来的，而不是凭 git 状态猜
+    assert "ActiveEnterTimestamp" in SH
+    assert "log -1 --format=%ct" in SH, "得拿 HEAD 的提交时间来比"
+
+    # 2. 那句致命的 exit 0 必须**只在没有旧服务时**才走
+    i = SH.index('if [ "$LOCAL" = "$REMOTE" ]; then')
+    tail = SH[i:i + 400]
+    assert "exit 0" in tail
+    assert '[ -z "$STALE" ] && exit 0' in tail, \
+        "无条件 exit 0 就是原来的 bug：git 是最新的，但服务还跑着旧代码"
+
+    # 3. 判定必须在那个 exit 之前算好，否则永远是空的
+    assert SH.index("STALE=") < i
+
+    # 4. 判定要覆盖到所有服务（包括动态加进来的 cc 桥），不能只看一个
+    stale_block = SH[SH.index("HEAD_TS="):i]
+    assert 'for s in "${SERVICES[@]}"' in stale_block

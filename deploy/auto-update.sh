@@ -23,7 +23,25 @@ BRANCH=$(g rev-parse --abbrev-ref HEAD)
 g fetch origin "$BRANCH" --quiet
 LOCAL=$(g rev-parse HEAD)
 REMOTE=$(g rev-parse "origin/$BRANCH")
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+
+# ⚠️ 「代码是新的」不等于「跑的是新代码」。
+# 她这几天手动 git pull 过好几次；等定时器醒来时本地已经是最新的，
+# 这里直接 exit 0，**根本走不到重启那一步**——服务就一直跑着几小时前的旧代码，
+# 而日志里一切正常。她连问三次「怎么还是这样」，我改了三轮其实早就修好了。
+# 所以再加一道：任何一个服务的启动时间早于当前 HEAD 的提交时间，就是在跑旧代码。
+HEAD_TS=$(g log -1 --format=%ct)
+STALE=""
+for s in "${SERVICES[@]}"; do
+    ST=$(systemctl show "$s" -p ActiveEnterTimestamp --value 2>/dev/null)
+    [ -z "$ST" ] && continue
+    STE=$(date -d "$ST" +%s 2>/dev/null) || continue
+    [ "$STE" -lt "$HEAD_TS" ] && STALE="$STALE $s"
+done
+
+if [ "$LOCAL" = "$REMOTE" ]; then
+    [ -z "$STALE" ] && exit 0
+    log "代码已是最新，但这些服务还跑着旧代码，重启：$STALE"
+fi
 
 # 坏提交拉黑：回滚之后本地必然落后于远端，不记住的话下一轮又拉一遍，
 # 变成每 5 分钟重启一次她的服务的无限循环（模拟测试里踩到了）。
