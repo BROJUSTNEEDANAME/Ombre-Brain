@@ -142,8 +142,8 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             try:
                 data = json.loads(raw)
             except Exception:  # noqa: BLE001
-                return raw or "（……）", session_id
-            return (data.get("result") or "（……）").strip(), data.get("session_id", session_id)
+                return raw.strip(), session_id
+            return str(data.get("result") or "").strip(), data.get("session_id", session_id)
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
         if rc in _SIGNAL_KILL_CODES and attempt == 0:
@@ -272,6 +272,12 @@ def _take_pending_cc(cid: int) -> str:
     return str(st.get("text") or "")
 
 
+# 空回复的样子。⚠️ 「（……）」原本是 run_cc 在结果为空时返回的**占位符**，
+# 却被当成他的话原样发出去——她看到的是他只回了一个省略号，两次。
+# 这跟 API bot 那边「[memory:] 标签原样上屏」是同一类事故：内部标记漏到她眼前。
+_EMPTY_REPLY = {"", "（……）", "（...）", "(...)", "...", "…", "。"}
+
+
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
@@ -280,6 +286,14 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception:  # noqa: BLE001
         pass  # typing 指示器失败不影响正事
     reply, sid = await run_cc(message, sessions.get(cid))
+    if reply.strip() in _EMPTY_REPLY:
+        # 这一轮他一个字都没出声。再给一次机会——多半是那轮全花在工具调用上了。
+        logger.warning("这一轮空回复，重来一次 chat=%s", cid)
+        if sid:
+            sessions[cid] = sid
+        reply, sid = await run_cc(message, sessions.get(cid))
+    if reply.strip() in _EMPTY_REPLY:
+        reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
     st = _inflight_cc.get(cid)
     if st is not None:
         st["sent"] = True          # 开口了，后面的消息不许再打断这一轮

@@ -449,3 +449,63 @@ def test_an_exploding_turn_is_logged_not_swallowed():
     i = src.index("task.add_done_callback")
     body = src[src.index("def _done", 0):i]
     assert "t.exception()" in body and "logger.exception" in body
+
+
+def test_an_empty_turn_never_reaches_her_as_an_ellipsis(monkeypatch):
+    """她两次收到他只回一个「（……）」。那不是他说的话——是 run_cc 在结果为空时
+    返回的占位符，被当成他的话原样发了出去。跟 API bot 那边「[memory:] 标签
+    原样上屏」是同一类事故：内部标记漏到她眼前。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    sent: list[str] = []
+    calls = {"n": 0}
+
+    async def flaky(message, session_id):
+        calls["n"] += 1
+        return ("", "s1") if calls["n"] == 1 else ("在。", "s2")
+
+    monkeypatch.setattr(cc, "run_cc", flaky)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+
+    class _Msg:
+        async def reply_text(self, text, *a, **k):
+            sent.append(text)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+
+    upd = type("U", (), {"message": _Msg()})()
+    ctx = type("C", (), {"bot": _Bot()})()
+    aio.run(cc._respond(upd, ctx, 7, "在吗"))
+
+    assert calls["n"] == 2, "空回复要再给一次机会"
+    assert sent == ["在。"], sent
+
+
+def test_two_empty_turns_get_human_words_not_a_placeholder(monkeypatch):
+    """重试还是空，也不许拿省略号冒充他。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    sent: list[str] = []
+
+    async def always_empty(message, session_id):
+        return "（……）", "s"
+
+    monkeypatch.setattr(cc, "run_cc", always_empty)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+
+    class _Msg:
+        async def reply_text(self, text, *a, **k):
+            sent.append(text)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+
+    aio.run(cc._respond(type("U", (), {"message": _Msg()})(),
+                        type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert sent and "没出声" in sent[0], sent
+    assert all("……" not in x for x in sent), sent
