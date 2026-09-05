@@ -431,3 +431,18 @@ def says_going_to_sleep(text: str) -> bool:
     if re.search(r"(你|他|她|妈|爸)\s*(要|去|该)?\s*睡", t):
         return False                  # 在说别人，不是她自己
     return bool(_SLEEP_GO_RE.search(t))
+
+
+# 一整条只有省略号／括号／句点的「空话」。
+# ⚠️ 别用固定清单去枚举——我第一版列了 {"（……）", "（...）", "(...)", "..."}，
+# 全角括号配六个英文句点「（......）」就漏掉了，占位符照样发到她屏幕上。
+# 归一化：把括号、点、省略号、空白全剥掉，剩不下东西就是没说话。
+_SILENT_STRIP = "()（）[]［］{}｛｝【】<>《》.。·．…⋯ \t\r\n\u3000_-—–~～"
+
+
+def is_silent_reply(text: str) -> bool:
+    """这一条是不是「等于什么都没说」。"""
+    t = (text or "")
+    for ch in _SILENT_STRIP:
+        t = t.replace(ch, "")
+    return not t.strip()

@@ -63,7 +63,8 @@ import morning  # 本地：早安（天气 + 课表）
 from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
 from writing_style import WRITING_MODE_SYSTEM
 from reply_sanitizer import (strip_hidden_stream, visible_cut, find_think,
-                             restore_punctuation, looks_degenerate as _looks_degenerate)
+                             restore_punctuation, looks_degenerate as _looks_degenerate,
+                             is_silent_reply)
 from utils import parse_memory_note
 from prompt_cache import append_volatile_context
 import claude_provider
@@ -343,7 +344,7 @@ def _brain_body(user_content, ghost: bool, message_id: str, timestamp: str) -> d
 
 def _clean_segs(raw) -> list[str]:
     segs = [s for s in (raw or []) if isinstance(s, str) and s.strip()]
-    segs = [s for s in segs if s.strip() not in {"（……）", "（...）", "(...)", "..."}]
+    segs = [s for s in segs if not is_silent_reply(s)]
     return segs
 
 
@@ -398,7 +399,7 @@ async def _ask_brain_stream(body: dict, on_segment) -> list[str]:
     async def _flush(seg: str) -> None:
         nonlocal send_ok
         seg = seg.strip()
-        if not seg or seg in {"（……）", "（...）", "(...)", "..."}:
+        if not seg or is_silent_reply(seg):
             return
         if not send_ok:
             return  # 发送通道坏了：剩余段留给收尾的 _send_segments 统一发
@@ -1210,7 +1211,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         t = t[:visible_cut(t)].strip()   # 隐藏标签一个字都不外推
         if not writing:
             t = restore_punctuation(t)   # 他不打标点就替他补上（写文模式不动）
-        if not t or t in {"（……）", "（...）", "(...)", "..."} or on_segment is None:
+        if not t or is_silent_reply(t) or on_segment is None:
             return
         n = _norm(t)
         if n and any(n == m or (min(len(n), len(m)) >= 6 and (n in m or m in n))
@@ -1934,7 +1935,7 @@ async def _direct_reply(update, context, chat_id: int, history: list[dict],
     LAST_TURN["total_s"] = round(time.time() - t0, 1)
     logger.info("TG 直连整轮完成 chat=%s 用时 %.1fs", chat_id, time.time() - t0)
     segs = [x.strip() for x in reply.split("‖") if x.strip()] or [reply.strip()]
-    segs = [x for x in segs if x not in {"（……）", "（...）", "(...)", "..."}]
+    segs = [x for x in segs if not is_silent_reply(x)]
     if not segs and not _sent:
         await update.message.reply_text("这次回复没有生成出来，再发一句他就会开口。")
         return

@@ -34,7 +34,7 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
-                             says_going_to_sleep)
+                             says_going_to_sleep, is_silent_reply)
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -316,7 +316,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             if sid and sessions.get(cid) != sid:
                 sessions[cid] = sid
                 _save_sessions()
-            if reply.strip() in _EMPTY_REPLY or looks_degenerate(reply):
+            if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她
             for chunk in _split_for_telegram(reply):
                 await context.bot.send_message(chat_id=cid,
@@ -348,10 +348,10 @@ def _take_pending_cc(cid: int) -> str:
     return str(st.get("text") or "")
 
 
-# 空回复的样子。⚠️ 「（……）」原本是 run_cc 在结果为空时返回的**占位符**，
-# 却被当成他的话原样发出去——她看到的是他只回了一个省略号，两次。
-# 这跟 API bot 那边「[memory:] 标签原样上屏」是同一类事故：内部标记漏到她眼前。
-_EMPTY_REPLY = {"", "（……）", "（...）", "(...)", "...", "…", "。"}
+# 「等于什么都没说」的判断在 reply_sanitizer.is_silent_reply。
+# ⚠️ 这里原本是一个固定清单 {"（……）", "（...）", "(...)", "..."}——
+# 全角括号配六个英文句点「（......）」就漏掉了，占位符照样发到她屏幕上，
+# 她连着两次拿这个来问我。枚举写不全，改成归一化剥字符。
 
 
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
@@ -383,13 +383,13 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:
         _typing.cancel()
-    if reply.strip() in _EMPTY_REPLY:
+    if is_silent_reply(reply):
         # 这一轮他一个字都没出声。再给一次机会——多半是那轮全花在工具调用上了。
         logger.warning("这一轮空回复，重来一次 chat=%s", cid)
         if sid:
             sessions[cid] = sid
         reply, sid = await run_cc(message, sessions.get(cid))
-    if reply.strip() in _EMPTY_REPLY:
+    if is_silent_reply(reply):
         reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
     elif looks_degenerate(reply):
         # 复读死循环：模型崩了，半截乱码一个字都不发给她（API bot 早有这道闸）

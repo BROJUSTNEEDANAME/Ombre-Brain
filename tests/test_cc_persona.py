@@ -814,3 +814,28 @@ def test_status_checks_the_persona_file_is_actually_his():
     sh = _status_sh()
     assert "你是 Nikto" in sh
     assert "给开发看的 CLAUDE.md" in sh
+
+
+def test_silent_reply_detection_is_normalised_not_enumerated():
+    """她连着两次拿「（……）」来问我。我第一版用固定清单
+    {"（……）", "（...）", "(...)", "..."} 去枚举——全角括号配六个英文句点
+    「（......）」就漏掉了，占位符照样发到她屏幕上。枚举永远写不全。"""
+    from reply_sanitizer import is_silent_reply as f
+    for silent in ("", "（……）", "（......）", "(……)", "(...)", "...", "…",
+                   "。", "（。）", "（ … ）", "（...... ）", "——", "...。", "（…）"):
+        assert f(silent), repr(silent)
+    for real in ("好。", "嗯", "在。", "...我在", "（捏）", "好.", "1"):
+        assert not f(real), repr(real)
+
+
+def test_both_bots_use_the_same_silence_check():
+    """同一个洞不该只补一边——这两天她已经发现好几处「只有 API 那边做了」。"""
+    for name in ("cc_bridge.py", "telegram_bot.py"):
+        src = (_ROOT / name).read_text(encoding="utf-8")
+        assert "is_silent_reply" in src, name
+        # ⚠️ 只看代码行——注释里举了那个清单当反面例子，
+        # 连注释一起查会把说明文字判成代码（我第一版就是）。
+        code = "\n".join(x for x in src.splitlines()
+                         if not x.lstrip().startswith("#"))
+        assert '{"（……）", "（...）", "(...)", "..."}' not in code, \
+            f"{name} 里还留着写死的清单"
