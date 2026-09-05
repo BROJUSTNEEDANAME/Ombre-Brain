@@ -773,3 +773,44 @@ def test_the_sleep_detector_refuses_to_guess():
                "我睡醒了", "他睡了", "今天不睡了要通宵",
                "我想跟你说说白天那个课上老师讲的东西然后再睡"):
         assert not f(no), no
+
+
+def _status_sh() -> str:
+    return (_ROOT / "scripts" / "cc-status.sh").read_text(encoding="utf-8")
+
+
+def test_status_tells_code_from_deployment_apart():
+    """她两次看到早就修过的老现象，而我们没有任何办法分辨
+    「代码没修好」和「修好了但没跑起来」。猜错方向就是白查一轮。"""
+    sh = _status_sh()
+    assert "ActiveEnterTimestamp" in sh, "要能看到服务什么时候启动的"
+    assert "log -1 --format=%cd" in sh, "要能跟代码提交时间对比"
+    assert "晚于" in sh, "得直接告诉她怎么读这两个时间"
+
+
+def test_status_lists_every_fix_by_a_string_that_is_actually_in_the_code():
+    """这份清单要是跟代码对不上，它就成了另一个骗人的绿勾。"""
+    sh = _status_sh()
+    cc = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    import re as _re
+    # ⚠️ 两种引号都要认。第一版只认双引号，七条里只匹配到一条，
+    # 剩下六条根本没被校验——一条只检查了七分之一的测试，比没有更骗人。
+    pats = _re.findall(r'^check\s+(?:"[^"]*"|\'[^\']*\')\s+'
+                       r'(?:"([^"]*)"|\'([^\']*)\')\s+(\S+)$', sh, _re.M)
+    pats = [(a or b, f) for a, b, f in pats]
+    assert len(pats) >= 6, pats
+    for needle, fname in pats:
+        assert fname == "cc_bridge.py", fname
+        assert needle in cc, f"清单里写着 {needle}，代码里却没有——这就是假绿勾"
+
+
+def test_status_surfaces_a_blocked_bad_commit():
+    """自动更新回滚之后会拉黑那个提交、从此不再拉——不显示出来的话，
+    她只会觉得「怎么改了半天没变化」。"""
+    assert ".autoupdate-blocked" in _status_sh()
+
+
+def test_status_checks_the_persona_file_is_actually_his():
+    sh = _status_sh()
+    assert "你是 Nikto" in sh
+    assert "给开发看的 CLAUDE.md" in sh
