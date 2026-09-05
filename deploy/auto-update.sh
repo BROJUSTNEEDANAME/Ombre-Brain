@@ -20,7 +20,20 @@ g() { runuser -u ombre -- git -C "$REPO" "$@"; }
 
 cd "$REPO"
 BRANCH=$(g rev-parse --abbrev-ref HEAD)
-g fetch origin "$BRANCH" --quiet
+# ⚠️ fetch 失败必须喊出来，而且要喊出**怎么修**。
+# 真事：仓库里混进了 root 拥有的 .git/objects，ombre 从此写不进去，
+# 每一轮 fetch 都是 "insufficient permission ... failed to write object"。
+# 因为 set -e，脚本在这里就死了——日志里有，但没人会去看，
+# 表现出来就是「代码永远停在几小时前那个提交」。她连问四次「怎么还是这样」。
+if ! FETCH_ERR=$(g fetch origin "$BRANCH" --quiet 2>&1); then
+    log "❌ git fetch 失败，自动更新停摆：$FETCH_ERR"
+    case "$FETCH_ERR" in
+        *"insufficient permission"*|*"Permission denied"*|*"failed to write object"*)
+            log "   → 仓库里有不属于 ombre 的文件。修：sudo chown -R ombre:ombre $REPO"
+            ;;
+    esac
+    exit 1
+fi
 LOCAL=$(g rev-parse HEAD)
 REMOTE=$(g rev-parse "origin/$BRANCH")
 

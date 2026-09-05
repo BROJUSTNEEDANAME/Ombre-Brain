@@ -11,11 +11,25 @@ cd "$REPO"
 
 echo "── 代码 ──"
 runuser -u ombre -- git -C "$REPO" log --oneline -1
-runuser -u ombre -- git -C "$REPO" fetch origin --quiet 2>/dev/null || true
+# ⚠️ 原来这里是 `fetch ... || true`：fetch 失败时它拿**过期的** origin 记录去比，
+# 于是理直气壮地报「跟远端一致 ✅」——而机器其实落后 7 个提交。
+# 她照着这句话信了两轮。fetch 失败就必须说失败，绝不许拿旧数据充数。
+FETCH_ERR=$(runuser -u ombre -- git -C "$REPO" fetch origin --quiet 2>&1) && FETCH_OK=1 || FETCH_OK=0
 B=$(runuser -u ombre -- git -C "$REPO" rev-parse --abbrev-ref HEAD)
 L=$(runuser -u ombre -- git -C "$REPO" rev-parse HEAD)
-R=$(runuser -u ombre -- git -C "$REPO" rev-parse "origin/$B" 2>/dev/null || echo "$L")
-[ "$L" = "$R" ] && echo "跟远端一致 ✅" || echo "⚠️ 落后远端，自动更新还没拉（或被拉黑了）"
+if [ "$FETCH_OK" = 0 ]; then
+    echo "❌ 连不上远端，下面这句「一致/落后」不作数：$FETCH_ERR"
+    case "$FETCH_ERR" in
+        *"insufficient permission"*|*"Permission denied"*|*"failed to write object"*)
+            echo "   → 仓库里有不属于 ombre 的文件，自动更新一直在悄悄失败。"
+            echo "   → 修：sudo chown -R ombre:ombre $REPO"
+            ;;
+    esac
+else
+    R=$(runuser -u ombre -- git -C "$REPO" rev-parse "origin/$B" 2>/dev/null || echo "$L")
+    [ "$L" = "$R" ] && echo "跟远端一致 ✅" \
+        || echo "⚠️ 落后远端 $(runuser -u ombre -- git -C "$REPO" rev-list --count "$L..$R" 2>/dev/null) 个提交，自动更新没拉下来"
+fi
 [ -f "$REPO/.autoupdate-blocked" ] && \
     echo "⚠️ 有坏提交被拉黑：$(cat "$REPO/.autoupdate-blocked" | cut -c1-8)"
 

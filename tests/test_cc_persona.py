@@ -1084,3 +1084,21 @@ def test_status_checks_the_autoupdate_timer_itself():
     assert "ombre-autoupdate.timer" in sh
     assert "journalctl -t ombre-autoupdate" in sh, "光看在不在跑不够，得看它说了什么"
     assert "返回空 result" in sh, "空 result 的原因也要摆出来"
+
+
+def test_status_never_claims_in_sync_when_it_could_not_reach_the_remote():
+    """原来是 `fetch ... || true`：fetch 失败时拿**过期的** origin 记录去比，
+    于是理直气壮地报「跟远端一致 ✅」——而机器其实落后 7 个提交。
+    她照着这句话信了两轮，我也跟着往错方向查了两轮。"""
+    sh = (_ROOT / "scripts" / "cc-status.sh").read_text(encoding="utf-8")
+    assert "fetch origin --quiet 2>/dev/null || true" not in sh, \
+        "吞掉 fetch 错误正是那个 bug"
+    assert "连不上远端，下面这句「一致/落后」不作数" in sh
+    assert "chown -R ombre:ombre" in sh, "得说出怎么修，不是只说失败"
+    # 「一致 ✅」只能在 fetch 成功的分支里
+    # ⚠️ 用 echo 那行定位，不能只 index 字面串——上面的注释里也写着这句话，
+    #    会先命中注释。（这个坑今天已经踩过两次了。）
+    i = sh.index('FETCH_OK" = 0')
+    j = sh.index('echo "跟远端一致 ✅"')
+    assert i < j, "「一致」必须在失败判定之后"
+    assert "else" in sh[i:j]

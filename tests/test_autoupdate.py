@@ -80,3 +80,18 @@ def test_a_service_running_older_code_than_HEAD_is_restarted_even_when_git_is_cu
     # 4. 判定要覆盖到所有服务（包括动态加进来的 cc 桥），不能只看一个
     stale_block = SH[SH.index("HEAD_TS="):i]
     assert 'for s in "${SERVICES[@]}"' in stale_block
+
+
+def test_a_failed_fetch_says_so_and_says_how_to_fix_it():
+    """真事：仓库里混进了 root 拥有的 .git/objects，ombre 从此写不进去，
+    每一轮 fetch 都是 insufficient permission。因为 set -e，脚本就死在那儿——
+    日志里有，但没人会去看，表现出来只是「代码永远停在几小时前那个提交」。
+    她连问四次「怎么还是这样」，我猜了四轮。"""
+    assert "git fetch 失败" in SH
+    assert "insufficient permission" in SH, "得认出这个具体错误"
+    assert "chown -R ombre:ombre" in SH, "光说失败没用，要说怎么修"
+    # 必须真的把 fetch 的错误文本带出来，不能只喊一句「失败了」
+    i = SH.index("git fetch 失败")
+    assert "$FETCH_ERR" in SH[i:i + 120]
+    # 而且要在拿 LOCAL/REMOTE 之前就拦住——否则比的是过期的 origin 记录
+    assert SH.index("FETCH_ERR") < SH.index("LOCAL=$(g rev-parse HEAD)")
