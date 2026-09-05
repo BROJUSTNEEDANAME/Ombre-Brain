@@ -511,3 +511,12 @@ def test_silence_must_have_a_body_not_an_empty_bubble():
     assert "「（……）」" in S and "空气泡" in S
     assert "沉默要有实体" in S
     assert "「唔」" in S, "语气词那一刻最不该这么干"
+
+
+def test_he_asks_instead_of_faking_a_meme():
+    """她要给他补国内二次元梗。共用人设里也得有这条——API bot 有联网搜索，
+    同一条规矩不该只在 cc 那边（这两天已经发现好几处「只有一边做了」）。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "装懂才难看" in S
+    assert "别把查来的解释整段" in S, "百科腔不是他说话"
+    assert "问她比编一个强" in S

@@ -839,3 +839,46 @@ def test_both_bots_use_the_same_silence_check():
                          if not x.lstrip().startswith("#"))
         assert '{"（……）", "（...）", "(...)", "..."}' not in code, \
             f"{name} 里还留着写死的清单"
+
+
+def test_he_looks_memes_up_instead_of_faking_it():
+    """她说「急需给我的 cc 扩展国内二次元智商梗」。爬萌娘百科塞进上下文不行——
+    量级撑不住、大半用不到、而且会过期。改成他自己查、自己记。"""
+    text = _mod().build()
+    assert "听不懂她的梗时" in text
+    assert "装懂是最难看的" in text
+    assert "梗.md" in text
+    assert "别把查来的解释整段念给她听" in text, "百科腔不是他说话"
+    assert "问她比编一个强" in text
+
+
+def test_the_glossary_is_the_one_file_he_may_write():
+    """人设明令『不改文件』。不开这个口，他会守着规矩不敢往 梗.md 里加。"""
+    text = _mod().build()
+    assert "不写代码" in text and "唯一例外" in text and "梗.md" in text
+
+
+def test_the_glossary_is_never_overwritten_once_it_exists(tmp_path, monkeypatch):
+    """那是他一条条查回来的东西。每次重新生成人设都推平的话，他永远学不会
+    ——而重新生成是自动更新每次都会做的事。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    g = out / "梗.md"
+    g.write_text(g.read_text(encoding="utf-8") + "\n- **他查到的** — 意思。\n",
+                 encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    assert "他查到的" in g.read_text(encoding="utf-8"), "被推平了"
+
+
+def test_the_seed_glossary_does_not_bluff():
+    """种子词条只放我真的有把握的。编一个像模像样的解释，
+    比不懂难看得多——那正是我要求他别做的事。"""
+    m = _mod()
+    assert "只写你**真的查清楚了**的" in m.GLOSSARY_SEED
+    assert "别编一个像模像样的解释" in m.GLOSSARY_SEED
+    entries = [x for x in m.GLOSSARY_SEED.splitlines() if x.startswith("- **")]
+    assert 3 <= len(entries) <= 12, f"种子应该少而准，现在 {len(entries)} 条"
