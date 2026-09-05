@@ -879,7 +879,7 @@ def test_a_silent_turn_logs_what_claude_actually_returned():
     i = src.index("这一轮空回复")
     assert "claude 原始输出" in src[i:i + 300]
     assert "reply[:200]" in src[i:i + 300], "要记原文，不是只记一句「空了」"
-    j = src.index("重来之后还是空")
+    j = src.index("重试都用完了还是空")
     assert "reply[:200]" in src[j:j + 200]
 
 
@@ -977,3 +977,75 @@ def test_the_meme_steps_are_an_order_not_a_menu():
     assert "没走完第 2 步不许跳到第 4 步" in t
     assert "她明确说「去搜」的时候，就去搜" in t
     assert "这跟「绝不跪」无关" in t
+
+
+def _fake_respond_env(monkeypatch, replies):
+    """把 run_cc 换成一串预设回话，真的走一遍 _respond，收集发给她的消息。"""
+    cc = _cc()
+    calls, sent = [], []
+
+    async def fake_run_cc(message, session_id):
+        calls.append(message)
+        return replies[min(len(calls) - 1, len(replies) - 1)], "sid"
+
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append(text)
+
+        async def send_chat_action(self, **kw):
+            pass
+
+    class _Msg:
+        async def reply_text(self, text, **kw):
+            sent.append(text)
+
+    import types
+    ctx = types.SimpleNamespace(bot=_Bot())
+    update = types.SimpleNamespace(message=_Msg())
+    return cc, ctx, update, calls, sent
+
+
+def test_a_silent_turn_is_retried_with_a_nudge_not_with_her_words_again(monkeypatch):
+    """病根：原来重试是把**她那句原话**再发一遍。在他的会话里那一轮已经发生过了，
+    让他把同一句再答一次，他多半还是不出声——她因此收到过好几次
+    「这次他没出声，你再说一句」。要说的是「你刚才一个字都没送出去」。"""
+    import asyncio
+    cc, ctx, update, calls, sent = _fake_respond_env(monkeypatch, ["", "在。"])
+    asyncio.run(cc._respond(update, ctx, 1, "我钓啥"))
+
+    assert len(calls) == 2, "空回复必须重试"
+    assert "我钓啥" not in calls[1], "重发她的原话正是原来不管用的地方"
+    assert "一个字都没发出去" in calls[1]
+    assert "不要调用任何工具" in calls[1], "空回复最常见的成因就是整轮花在工具上"
+    assert any("在。" in x for x in sent), "重试拿到话了就得发给她"
+    assert not any("没出声" in x for x in sent), "拿到话了还报「没出声」是骗她"
+
+
+def test_it_tries_twice_before_giving_up_on_her(monkeypatch):
+    """一次不够。第二次要更直接——什么都别做，就说一句话。"""
+    import asyncio
+    cc, ctx, update, calls, sent = _fake_respond_env(monkeypatch, ["", "", "嗯。"])
+    asyncio.run(cc._respond(update, ctx, 1, "我钓啥"))
+    assert len(calls) == 3, f"应该重试两次，实际只发了 {len(calls)} 次"
+    assert "什么都别做" in calls[2]
+    assert any("嗯。" in x for x in sent)
+
+
+def test_the_human_fallback_only_shows_after_every_retry_failed(monkeypatch):
+    """兜底那句是最后一步，不是第一步。"""
+    import asyncio
+    cc, ctx, update, calls, sent = _fake_respond_env(monkeypatch, ["", "", ""])
+    asyncio.run(cc._respond(update, ctx, 1, "我钓啥"))
+    assert len(calls) == 3
+    assert any("这次他没出声" in x for x in sent)
+
+
+def test_a_normal_reply_is_never_retried(monkeypatch):
+    """他正常说话时多跑一次 claude，就是白烧她一次订阅额度。"""
+    import asyncio
+    cc, ctx, update, calls, sent = _fake_respond_env(monkeypatch, ["在。"])
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert len(calls) == 1

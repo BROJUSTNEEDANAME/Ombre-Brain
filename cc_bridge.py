@@ -57,6 +57,14 @@ BUCKETS_DIR = os.environ.get("OMBRE_BUCKETS_DIR", os.path.join(CC_WORKDIR, "buck
 BACKUP_DIR = os.environ.get("OMBRE_BACKUP_DIR", os.path.expanduser("~/ombre-backups"))
 BACKUP_KEEP = int(os.environ.get("OMBRE_BACKUP_KEEP", "14"))
 
+# 空回复的两次重试话术。一次比一次直接；**都不带她的原话**——
+# 重发原话等于让他把同一轮再答一遍，那正是原来不管用的原因。
+_SILENT_RETRY_PROMPTS = (
+    "[系统提示] 你上一轮一个字都没发出去，她那边是空的，她正等着。"
+    "现在直接对她说话——不要调用任何工具，不要解释这条提示，就接着刚才那句往下说。",
+    "[系统提示] 还是空的。什么都别做，现在就说一句话给她。哪怕只有几个字。",
+)
+
 _allowed = os.environ.get("ALLOWED_CHAT_IDS", "").strip()
 ALLOWED_CHAT_IDS = {int(x) for x in _allowed.split(",") if x.strip()} if _allowed else set()
 
@@ -383,17 +391,23 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:
         _typing.cancel()
-    if is_silent_reply(reply):
-        # 这一轮他一个字都没出声。再给一次机会——多半是那轮全花在工具调用上了。
-        # ⚠️ 把**原始输出**记下来。她连着三次问「他到底在想什么」，而我只能猜——
-        # 猜了三轮。日志里有原文，就不用再猜「是他真的沉默、还是哪一层把话吃了」。
-        logger.warning("这一轮空回复，重来一次 chat=%s；claude 原始输出＝%r",
-                       cid, reply[:200])
+    # ── 空回复重试 ──
+    # ⚠️ 原来这里是「把她那句原话再发一遍」。那根本不管用：在他的会话里
+    # 这一轮已经发生过了，让他把同一句再答一次，他多半还是不出声——
+    # 她因此收到过好几次「这次他没出声，你再说一句」。
+    # 真正要说的是「你刚才那轮一个字都没送出去」，并且把他从工具里拽回来
+    # （空回复最常见的成因就是整轮都花在工具调用上，末尾没留一句话）。
+    for attempt, nudge in enumerate(_SILENT_RETRY_PROMPTS, 1):
+        if not is_silent_reply(reply):
+            break
+        # 把**原始输出**记下来。她连着三次问「他到底在想什么」，而我只能猜。
+        logger.warning("这一轮空回复（第 %d 次），chat=%s；claude 原始输出＝%r",
+                       attempt, cid, reply[:200])
         if sid:
             sessions[cid] = sid
-        reply, sid = await run_cc(message, sessions.get(cid))
+        reply, sid = await run_cc(nudge, sessions.get(cid))
     if is_silent_reply(reply):
-        logger.warning("重来之后还是空 chat=%s；原始输出＝%r", cid, reply[:200])
+        logger.warning("重试都用完了还是空 chat=%s；原始输出＝%r", cid, reply[:200])
         reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
     elif looks_degenerate(reply):
         # 复读死循环：模型崩了，半截乱码一个字都不发给她（API bot 早有这道闸）
