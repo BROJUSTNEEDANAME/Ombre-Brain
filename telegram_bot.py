@@ -678,6 +678,19 @@ def _clean_memory_block(text: str, limit: int) -> str:
     value = _OPEN_FENCE_RE.sub("（存档数据，略）", value)   # 没闭合的也算
     value = _JSONISH_RE.sub("（存档数据，略）", value)
     value = re.sub(r"\n{3,}", "\n\n", value).strip()
+    # ⚠️ 擦完之后如果基本上什么都不剩，就**整块不要**，宁可这轮不带记忆说话。
+    # 原来会把「（存档数据，略）（存档数据，略）」这种残渣照样塞进提示词——
+    # 那不是记忆，是噪音，还占着「已自动浮现的相关记忆」这个名头，
+    # 他看见了就以为翻过记忆了、不会再去 breath。
+    # 这条是从 paramecium 学的：没结果好过垃圾结果。
+    # ⚠️ 判据是「**一个字都没剩**」，不是「剩得少」。
+    # 第一版写的是「少于 20 字就丢」，结果把「她玩得很上头。」这条只有六个字的
+    # 真记忆整块扔了——正好犯了我自己在 memory_guard 里写的那条「不许错杀」。
+    # 短记忆才是最该留的：一句话的事，往往是最要紧的那句。
+    _left = re.sub(r"[\s。，、；：！？…·—\-（）()「」『』【】\"'']+", "",
+                   value.replace("（存档数据，略）", ""))
+    if not _left:
+        return ""
     if len(value) <= limit:
         return value
     cut = value[:limit]

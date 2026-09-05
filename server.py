@@ -87,6 +87,8 @@ from writing_style import WRITING_MODE_SYSTEM as _WRITING_MODE_SYSTEM
 # --- Load config & init logging / 加载配置 & 初始化日志 ---
 config = load_config()
 setup_logging(config.get("log_level", "INFO"))
+from memory_guard import data_dump_reason, refuse_message
+
 logger = logging.getLogger("ombre_brain")
 
 # --- Initialize core components / 初始化核心组件 ---
@@ -716,6 +718,15 @@ async def hold(
     if not content or not content.strip():
         return "内容为空，无法存储。"
 
+    # ⚠️ 机械闸：拦住「机器写给机器看的数据」。
+    # 她等过 195 秒一个字没等到，查下去是一份被截断的 JSON 存档被当成记忆
+    # 塞进了提示词。在提示词里写「别存存档」是没用的——得有一道真的会拒绝的闸。
+    # 只拦形状，不碰内容：存什么值不值得记，永远是他自己的事。
+    _dump = data_dump_reason(content)
+    if _dump:
+        logger.warning("hold 拒绝存档数据（%s）：%r", _dump, content[:120])
+        return refuse_message(_dump)
+
     importance = max(1, min(10, importance))
     extra_tags = [t.strip() for t in tags.split(",") if t.strip()]
 
@@ -854,6 +865,11 @@ async def grow(content: str) -> str:
 
     if not content or not content.strip():
         return "内容为空，无法整理。"
+
+    _dump = data_dump_reason(content)      # 同 hold：写入口都要过这道闸
+    if _dump:
+        logger.warning("grow 拒绝存档数据（%s）：%r", _dump, content[:120])
+        return refuse_message(_dump)
 
     # --- Short content fast path: skip digest, use hold logic directly ---
     # --- 短内容快速路径：跳过 digest 拆分，直接走 hold 逻辑省一次 API ---
