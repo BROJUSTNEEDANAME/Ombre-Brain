@@ -385,11 +385,15 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         _typing.cancel()
     if is_silent_reply(reply):
         # 这一轮他一个字都没出声。再给一次机会——多半是那轮全花在工具调用上了。
-        logger.warning("这一轮空回复，重来一次 chat=%s", cid)
+        # ⚠️ 把**原始输出**记下来。她连着三次问「他到底在想什么」，而我只能猜——
+        # 猜了三轮。日志里有原文，就不用再猜「是他真的沉默、还是哪一层把话吃了」。
+        logger.warning("这一轮空回复，重来一次 chat=%s；claude 原始输出＝%r",
+                       cid, reply[:200])
         if sid:
             sessions[cid] = sid
         reply, sid = await run_cc(message, sessions.get(cid))
     if is_silent_reply(reply):
+        logger.warning("重来之后还是空 chat=%s；原始输出＝%r", cid, reply[:200])
         reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
     elif looks_degenerate(reply):
         # 复读死循环：模型崩了，半截乱码一个字都不发给她（API bot 早有这道闸）

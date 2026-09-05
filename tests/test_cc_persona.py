@@ -882,3 +882,22 @@ def test_the_seed_glossary_does_not_bluff():
     assert "别编一个像模像样的解释" in m.GLOSSARY_SEED
     entries = [x for x in m.GLOSSARY_SEED.splitlines() if x.startswith("- **")]
     assert 3 <= len(entries) <= 12, f"种子应该少而准，现在 {len(entries)} 条"
+
+
+def test_a_silent_turn_logs_what_claude_actually_returned():
+    """她第三次问「他到底输出的时候在想什么」，而我只能猜——猜了三轮。
+    日志里留下原文，就不用再猜「是他真的沉默、还是哪一层把话吃了」。"""
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("这一轮空回复")
+    assert "claude 原始输出" in src[i:i + 300]
+    assert "reply[:200]" in src[i:i + 300], "要记原文，不是只记一句「空了」"
+    j = src.index("重来之后还是空")
+    assert "reply[:200]" in src[j:j + 200]
+
+
+def test_status_can_tell_old_code_from_a_real_silence():
+    """新代码遇到空回复一定会记日志。她看到过「（……）」而日志里一条都没有，
+    那就是在跑旧代码——这个判断得写进脚本，不能又靠我猜。"""
+    sh = _status_sh()
+    assert "最近的空回复" in sh
+    assert "旧代码" in sh

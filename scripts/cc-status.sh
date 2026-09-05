@@ -48,3 +48,15 @@ if [ -f "$W/CLAUDE.md" ]; then
 else
     echo "❌ 没有人设文件，他会用仓库那份给开发看的 CLAUDE.md"
 fi
+
+echo ""
+echo "── 最近的空回复（他到底输出了什么）──"
+J=$(journalctl -u ombre-ccbridge --since "-6 hours" --no-pager 2>/dev/null \
+    | grep -E "空回复|还是空" | tail -5)
+if [ -n "$J" ]; then
+    printf '%s\n' "$J"
+else
+    echo "（6 小时内没有记到空回复）"
+    echo "⚠️ 要是她这段时间明明看到过「（……）」，那说明跑的是**旧代码**"
+    echo "   ——新代码遇到空回复一定会记一行日志。"
+fi
