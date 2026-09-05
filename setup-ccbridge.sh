@@ -50,6 +50,14 @@ CC_MODEL=claude-opus-4-6
 # 单条最长等多久
 CC_TIMEOUT=300
 
+# 主动找她：她安静这么多分钟就开口一次
+CC_NUDGE_MINUTES=15
+# 一段沉默里最多找她几次（之后闭嘴，等她开口才重置）。
+# ⚠️ 每一次都是真跑一轮 claude，吃订阅额度——不设上限她睡着时会通宵烧。
+CC_NUDGE_MAX=4
+# 想设静默时段就填，比如 23-8 表示 23:00–08:00 不打扰。留空＝全天都可以找。
+CC_NUDGE_QUIET=
+
 # 时区
 OMBRE_BOT_TZ=America/Los_Angeles
 ENVEOF

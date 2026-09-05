@@ -604,3 +604,125 @@ def test_the_shared_helpers_live_in_one_place_now():
     assert "from reply_sanitizer import" in tg
     cc_src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
     assert "from reply_sanitizer import restore_punctuation, looks_degenerate" in cc_src
+
+
+def _nudge_env(cc, monkeypatch, *, silent_minutes=20, count=0, inflight=False):
+    import time as _t
+    cc.ALLOWED_CHAT_IDS = {7}
+    cc.last_user_ts.clear(); cc.nudge_count.clear(); cc.last_nudge_at.clear()
+    cc._inflight_cc.clear()
+    cc.last_user_ts[7] = _t.time() - silent_minutes * 60
+    if count:
+        cc.nudge_count[7] = count
+    if inflight:
+        cc._inflight_cc[7] = {"sent": False, "text": "x", "task": None}
+    sent: list[str] = []
+
+    class _Bot:
+        async def send_message(self, chat_id=None, text=None, **k):
+            sent.append(text)
+
+    return sent, type("C", (), {"bot": _Bot()})()
+
+
+def test_he_reaches_out_with_context_not_a_canned_line(monkeypatch):
+    """她要「根据上下文主动找我」。API bot 那套是预设文案；这边必须真跑一轮，
+    而且要用同一个 session（--resume），否则他不知道刚才聊到哪。"""
+    import asyncio as aio
+    cc = _cc()
+    seen = {}
+
+    async def fake_run(message, session_id):
+        seen["prompt"] = message
+        seen["sid"] = session_id
+        return "刚才那事你还没说完。", "s2"
+
+    monkeypatch.setattr(cc, "run_cc", fake_run)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    cc.sessions[7] = "s1"
+    sent, ctx = _nudge_env(cc, monkeypatch)
+    aio.run(cc.check_inactivity(ctx))
+
+    assert sent == ["刚才那事你还没说完。"], sent
+    assert seen["sid"] == "s1", "必须带着上下文找她"
+    assert "不要问「在吗」" in seen["prompt"], "空话式问候正是她烦的那种"
+
+
+def test_he_shuts_up_after_the_cap(monkeypatch):
+    """15 分钟一次、每次真跑一轮 claude。没有上限的话，她睡着时会通宵烧额度。"""
+    import asyncio as aio
+    cc = _cc()
+
+    # ⚠️ 不能用「抛异常」表示不该被调用：check_inactivity 外面包着
+    # except Exception（那是为了别让一次失败弄死定时任务），异常会被吞掉记日志，
+    # 测试照样绿。我第一版就是这么写的，变异没变红才发现。数调用次数才作数。
+    calls = []
+
+    async def counted(*a, **k):
+        calls.append(a)
+        return "不该发出去的", "s"
+
+    monkeypatch.setattr(cc, "run_cc", counted)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    sent, ctx = _nudge_env(cc, monkeypatch, count=cc.NUDGE_MAX)
+    aio.run(cc.check_inactivity(ctx))
+    assert calls == [], "到上限了还去跑，就是在烧她的额度"
+    assert sent == []
+
+
+def test_speaking_again_gives_him_a_fresh_set_of_chances():
+    cc = _cc()
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("async def on_message")
+    body = src[i:i + 900]
+    assert "nudge_count[cid] = 0" in body
+    assert "last_user_ts[cid] = time.time()" in body
+
+
+def test_he_does_not_cut_in_while_already_talking(monkeypatch):
+    """他正在回她的时候插一条主动消息，读着像两个人在说话。"""
+    import asyncio as aio
+    cc = _cc()
+
+    calls = []
+
+    async def counted(*a, **k):
+        calls.append(a)
+        return "不该发出去的", "s"
+
+    monkeypatch.setattr(cc, "run_cc", counted)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    sent, ctx = _nudge_env(cc, monkeypatch, inflight=True)
+    aio.run(cc.check_inactivity(ctx))
+    assert calls == [], "他正在说话还插队"
+    assert sent == []
+
+
+def test_an_empty_or_broken_nudge_is_dropped_silently(monkeypatch):
+    """主动找她那轮要是空的或者崩成复读机，宁可当没发生——
+    绝不把「这次他没出声」这种系统话当成他主动找她推给她。"""
+    import asyncio as aio
+    cc = _cc()
+
+    async def empty(*a, **k):
+        return "", "s"
+
+    monkeypatch.setattr(cc, "run_cc", empty)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    sent, ctx = _nudge_env(cc, monkeypatch)
+    aio.run(cc.check_inactivity(ctx))
+    assert sent == []
+    assert cc.nudge_count.get(7, 0) == 0, "没发出去就不该计数"
+
+
+def test_quiet_hours_are_available_even_if_off_by_default():
+    """她说「最好频繁点」，所以默认不设静默时段；但得留个开关，
+    哪天她嫌吵不用改代码。"""
+    cc = _cc()
+    from datetime import datetime as dt
+    cc.NUDGE_QUIET = "23-8"
+    assert cc._in_quiet_hours(dt(2026, 9, 5, 2, 0))     # 跨午夜
+    assert cc._in_quiet_hours(dt(2026, 9, 5, 23, 30))
+    assert not cc._in_quiet_hours(dt(2026, 9, 5, 12, 0))
+    cc.NUDGE_QUIET = ""
+    assert not cc._in_quiet_hours(dt(2026, 9, 5, 3, 0))

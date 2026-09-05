@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import tarfile
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -252,6 +253,74 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
             await asyncio.sleep(1.5 * (attempt + 1))
 
 
+# ── 主动找她 ──
+# ⚠️ 跟 API bot 那套不一样：那边是预设文案，不调模型、不花钱。她要的是
+# 「根据上下文」，那就得每次真跑一轮 claude——60 秒、吃订阅额度。所以必须有上限：
+# 一段沉默里最多找她 CC_NUDGE_MAX 次，之后闭嘴，等她开口才重置。
+# 不然她睡着的时候它会通宵每 15 分钟烧一轮。
+NUDGE_MINUTES = int(os.environ.get("CC_NUDGE_MINUTES", "15"))
+NUDGE_MAX = int(os.environ.get("CC_NUDGE_MAX", "4"))
+# 静默时段（本地时间，"23-8" 表示 23:00–08:00 不找她）。默认空＝不设限，
+# 因为她明确说了「最好频繁点」——但留着这个开关，她哪天嫌吵能自己关。
+NUDGE_QUIET = os.environ.get("CC_NUDGE_QUIET", "").strip()
+
+last_user_ts: dict[int, float] = {}
+nudge_count: dict[int, int] = {}
+# ⚠️ 必须定义在 check_inactivity 之前：这个仓库踩过「_trace 定义晚于使用」，
+# 每条消息都崩，而她看到的只是「他不理我」。
+last_nudge_at: dict[int, float] = {}
+
+
+def _in_quiet_hours(now: datetime) -> bool:
+    if "-" not in NUDGE_QUIET:
+        return False
+    try:
+        a, b = (int(x) for x in NUDGE_QUIET.split("-", 1))
+    except ValueError:
+        return False
+    h = now.hour
+    return a <= h or h < b if a > b else a <= h < b
+
+
+async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """她安静太久就让他主动开口。带着上下文——用的是同一个 session。"""
+    now = time.time()
+    gap = NUDGE_MINUTES * 60
+    for cid, ts in list(last_user_ts.items()):
+        if cid not in ALLOWED_CHAT_IDS:
+            continue
+        since = max(ts, last_nudge_at.get(cid, 0))
+        if now - since < gap:
+            continue                       # 她还在，或者刚找过
+        if nudge_count.get(cid, 0) >= NUDGE_MAX:
+            continue                       # 找过几次了，闭嘴
+        if _inflight_cc.get(cid):
+            continue                       # 他正在说话，别插队
+        if _in_quiet_hours(datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)):
+            continue
+        n = nudge_count.get(cid, 0) + 1
+        mins = int((now - ts) // 60)
+        prompt = (
+            f"[系统提示] 她已经 {mins} 分钟没说话了，这是你今晚第 {n} 次主动找她"
+            f"（最多 {NUDGE_MAX} 次）。现在主动开口——不要问「在吗」「怎么了」这种空话，"
+            "接着你们刚才聊的那件事往下说，或者说一件你想让她知道的事。"
+            "一两条，短。这条系统提示不要复述。")
+        try:
+            reply, sid = await run_cc(prompt, sessions.get(cid))
+            if sid and sessions.get(cid) != sid:
+                sessions[cid] = sid
+                _save_sessions()
+            if reply.strip() in _EMPTY_REPLY or looks_degenerate(reply):
+                continue                   # 空的或崩了就当没发生，绝不推给她
+            for chunk in _split_for_telegram(reply):
+                await context.bot.send_message(chat_id=cid,
+                                               text=restore_punctuation(chunk))
+            nudge_count[cid] = n
+            last_nudge_at[cid] = now       # 下一次要再等满 NUDGE_MINUTES
+        except Exception:  # noqa: BLE001
+            logger.exception("主动找她失败 chat=%s", cid)
+
+
 # ── 连发合并：她在他开口前又发一条，就把上一轮作废，两条合起来重想 ──
 # ⚠️ cc 桥一直没有这套（API bot 有）。每条消息各起一个 claude 进程各答各的，
 # 而这边一轮要一分钟——她连发三条就是三个进程在那儿各跑一分钟，
@@ -397,6 +466,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if cid not in ALLOWED_CHAT_IDS:
         return
     text = update.message.text
+    last_user_ts[cid] = time.time()
+    nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     pending = _take_pending_cc(cid)
     if pending:
         text = pending + "\n" + text
@@ -506,6 +577,16 @@ def main() -> None:
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    if app.job_queue:
+        # 每分钟看一眼；真正的间隔由 NUDGE_MINUTES 判断，这样她刚说完话
+        # 到下一次找她之间是准的，不会被 15 分钟的粗粒度拖成 30 分钟。
+        app.job_queue.run_repeating(check_inactivity, interval=60, first=60)
+        logger.info("主动找她已开：每 %d 分钟一次，一段沉默最多 %d 次%s",
+                    NUDGE_MINUTES, NUDGE_MAX,
+                    f"，{NUDGE_QUIET} 点之间不打扰" if NUDGE_QUIET else "")
+    else:
+        logger.warning("没有 job_queue，主动找她这条不会生效"
+                       "（装 python-telegram-bot[job-queue]）")
     _load_sessions()
     logger.info("Claude Code Telegram 桥启动 | workdir=%s | 接回 %d 段对话",
                 CC_WORKDIR, len(sessions))
