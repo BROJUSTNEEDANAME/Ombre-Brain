@@ -63,8 +63,18 @@ fi
 if grep -q "在这里填" "$ENV_FILE"; then
     echo "!! $ENV_FILE 里还有没填的，先编辑：nano $ENV_FILE"; exit 1
 fi
-if ! grep -Eq '^ALLOWED_CHAT_IDS=[0-9]+(,[0-9]+)*$' "$ENV_FILE"; then
-    echo "!! ALLOWED_CHAT_IDS 必须填成纯数字白名单，拒绝开放启动"; exit 1
+# ⚠️ 这道检查只该拦住「空的／没填的」白名单，不该拦住合法写法。
+# 第一版要求整行严格等于纯数字，于是这三种全被误杀：等号后带空格、
+# 值加了引号、群组的负数 chat id（-100... 开头）。她填对了却被拒，
+# 而报错只说「必须填成纯数字」，看不出是哪儿不对。
+_IDS="$(grep -E '^[[:space:]]*ALLOWED_CHAT_IDS=' "$ENV_FILE" | head -1 | cut -d= -f2- \
+        | tr -d '"'"'"' \r' | xargs 2>/dev/null || true)"
+if ! printf '%s' "$_IDS" | grep -Eq '^-?[0-9]+(,-?[0-9]+)*$'; then
+    echo "!! ALLOWED_CHAT_IDS 读出来是：「$_IDS」"
+    echo "!! 它必须是你的 Telegram 数字 chat id，多个用逗号隔开（群组是负数，也行）。"
+    echo "!! 空着或写别的会让这个 bot 对所有人开放，所以拒绝启动。"
+    echo "!! 编辑：nano $ENV_FILE"
+    exit 1
 fi
 
 # ⚠️ 两个 bot 共用一个 token 是最难查的那类故障：两个程序轮流抢同一条消息，

@@ -84,9 +84,37 @@ def test_setup_points_cc_at_the_persona_dir_not_the_repo():
 
 
 def test_setup_will_not_start_without_a_chat_whitelist():
+    """白名单为空＝这个 bot 对所有人开放，必须拦。"""
     sh = _setup_sh()
-    assert "ALLOWED_CHAT_IDS=[0-9]+" in sh
-    assert "拒绝开放启动" in sh
+    assert "拒绝启动" in sh
+    assert "ALLOWED_CHAT_IDS 读出来是" in sh, "报错要把读到的值给她看，别只说规则"
+
+
+def test_the_whitelist_check_accepts_the_ways_people_actually_write_it(tmp_path):
+    """第一版要求整行严格等于纯数字，于是等号后带空格、加引号、群组负数 id
+    全被误杀——她填对了却被拒，而报错只说「必须填成纯数字」，看不出哪儿不对。
+    这里把脚本里那段真的跑一遍。"""
+    import re
+    import subprocess
+
+    sh = _setup_sh()
+    body = sh[sh.index('_IDS="$(grep'):sh.index('    exit 1\nfi', sh.index('_IDS="$('))]
+
+    def verdict(line: str) -> bool:
+        env = tmp_path / "e"
+        env.write_text(line + "\n", encoding="utf-8")
+        script = f'ENV_FILE="{env}"\n{body}\n  exit 1\nfi\nexit 0\n'
+        return subprocess.run(["bash", "-c", script],
+                              capture_output=True).returncode == 0
+
+    for ok in ("ALLOWED_CHAT_IDS=123456",
+               "ALLOWED_CHAT_IDS= 123456",
+               'ALLOWED_CHAT_IDS="123456"',
+               "ALLOWED_CHAT_IDS=123456 ",
+               "ALLOWED_CHAT_IDS=-1001234,567"):
+        assert verdict(ok), f"合法写法被误杀：{ok}"
+    for bad in ("ALLOWED_CHAT_IDS=", "ALLOWED_CHAT_IDS=在这里填你的chat id"):
+        assert not verdict(bad), f"没填却放行了：{bad}"
 
 
 def test_setup_checks_claude_exists_before_promising_anything():
