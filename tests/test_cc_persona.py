@@ -603,7 +603,13 @@ def test_the_shared_helpers_live_in_one_place_now():
     assert "def _looks_degenerate" not in tg
     assert "from reply_sanitizer import" in tg
     cc_src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
-    assert "from reply_sanitizer import restore_punctuation, looks_degenerate" in cc_src
+    # ⚠️ 别断言整行——多导入一个名字这条就假红了（我刚加 says_going_to_sleep
+    # 就撞上）。要盯的是「从共用模块拿」，不是那一行长什么样。
+    imports = [x for x in cc_src.splitlines() if "reply_sanitizer" in x]
+    assert imports, "cc 桥必须从共用模块拿这些工具"
+    joined = "\n".join(cc_src.split("from reply_sanitizer import")[1][:200].splitlines())
+    for name in ("restore_punctuation", "looks_degenerate"):
+        assert name in joined, name
 
 
 def _nudge_env(cc, monkeypatch, *, silent_minutes=20, count=0, inflight=False):
