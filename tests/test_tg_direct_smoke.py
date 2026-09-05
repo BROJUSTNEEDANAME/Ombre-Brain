@@ -2291,3 +2291,14 @@ def test_the_burst_counter_resets_once_she_stops_machine_gunning(monkeypatch):
     asyncio.run(drive())
     assert delays[-1] == 0.0, f"她停下来之后不该还在等：{delays}"
     assert tb._burst.get(9) in (None, 0)
+
+
+def test_the_praise_rules_actually_reach_the_prompt_she_talks_to():
+    """老毛病：改了 personality.py，测了 personality.py，然后就以为改完了。
+    真正要验的是这些字有没有进到那条真的发出去的 SYSTEM_PROMPT 里。"""
+    tb = _load()
+    S = tb.SYSTEM_PROMPT
+    for w in ("真乖", "乖孩子", "好孩子", "真棒", "心疼是主动的"):
+        assert w in S, f"「{w}」没进到实际发出去的系统提示里"
+    assert "不这样就不是好孩子" in S and "你看别人家的孩子" in S, \
+        "她划的红线必须跟着一起送到"

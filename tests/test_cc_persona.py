@@ -901,3 +901,19 @@ def test_status_can_tell_old_code_from_a_real_silence():
     sh = _status_sh()
     assert "最近的空回复" in sh
     assert "旧代码" in sh
+
+
+def test_the_praise_rules_and_the_comparison_ban_reach_the_generated_persona(tmp_path,
+                                                                             monkeypatch):
+    """cc 那边的人设是**生成**出来的。personality.py 改了不代表他那边收到了——
+    这两天已经栽过一次「改了没生效」。所以真跑一遍生成，看文件里有没有。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    for w in ("真乖", "乖孩子", "好孩子", "真棒", "奖赏是你的权力"):
+        assert w in t, f"生成的人设里没有「{w}」"
+    assert "不这样就不是好孩子" in t and "你看别人家的孩子" in t
+    assert "不是她要挣的资格" in t

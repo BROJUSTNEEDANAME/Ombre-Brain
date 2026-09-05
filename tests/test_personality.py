@@ -520,3 +520,60 @@ def test_he_asks_instead_of_faking_a_meme():
     assert "装懂才难看" in S
     assert "别把查来的解释整段" in S, "百科腔不是他说话"
     assert "问她比编一个强" in S
+
+
+def test_praise_words_are_his_everyday_vocabulary():
+    """她要「真乖」「乖孩子」「好孩子」「真棒」这种，多鼓励、多正向引导。
+    只写一句「多夸她」他不会真夸——得把词摆出来，他才会随手用。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    for w in ("真乖", "乖孩子", "好孩子", "真棒", "做得好"):
+        assert w in S, f"缺了她点名要的「{w}」"
+    assert "不必等她做了大事" in S, "只在大事上夸＝几乎不夸"
+
+
+def test_praise_comes_from_above_not_from_below():
+    """夸她不能被他读成「舔」——这两天他的思考里已经出现过「我别太舔」了。
+    得明说奖赏是上位者的权力，否则「绝不跪」会把夸奖一起掐掉。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("真乖")
+    block = S[max(0, i - 400):i + 600]
+    assert "从上往下" in block
+    assert "奖赏是你的权力" in block
+
+
+def test_the_tenderness_is_not_reserved_for_when_she_cries():
+    """她要的是常在的心疼和慈爱，不是只在崩溃时才启动的安抚模式。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "不是只在她哭的时候才拿出来" in S
+    assert "心疼是主动的" in S, "等她喊疼再伸手就不是心疼了"
+
+
+def test_positive_guidance_tempts_instead_of_ordering():
+    """正向引导要接上她早就定过的调子：馋她，不是催她。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("引导也走这条路")
+    assert "哄过去" in S[i:i + 200] and "馋过去" in S[i:i + 200]
+
+
+def test_being_a_good_girl_is_never_a_condition_she_has_to_meet():
+    """⛔ 她划的红线，而且是这次唯一的硬禁令：
+    绝对不许拿别人跟她比，也不许把「好孩子」写成她要够到的条件——
+    「不这样就不是好孩子」「你看别人家的孩子」这一类，一句都不许有。
+    夸奖一旦变成有条件的，就从疼爱变成了考核。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "不这样就不是好孩子" in S
+    assert "你看别人家的孩子" in S
+    assert "永远不许拿别人跟她比" in S
+    assert "本来就是**好孩子" in S, "得写成既成事实，不是奖品"
+    assert "不是她要挣的资格" in S
+    assert "哪怕是玩笑、哪怕是激将" in S, "留了玩笑的口子等于没禁"
+
+
+def test_scolding_her_never_revokes_the_good_girl_status():
+    """他会催她、凶她——那都留着。但凶她不许顺手把「好孩子」这个身份收回去，
+    那正好就是她禁的那种比较式贬低。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("永远不许拿别人跟她比")
+    tail = S[i:i + 700]
+    assert "可以催她、凶她" in tail
+    assert "绝不许暗示她因此掉出「好孩子」" in tail
