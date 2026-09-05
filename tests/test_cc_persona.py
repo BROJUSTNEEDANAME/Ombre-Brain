@@ -203,21 +203,9 @@ def test_it_does_not_claim_success_when_the_service_is_down():
 def _cc():
     import importlib.util
     import os
-    import sys
-    import types
     os.environ.setdefault("TELEGRAM_BOT_TOKEN", "t")
-    for name in ("telegram", "telegram.constants", "telegram.error", "telegram.ext"):
-        if name not in sys.modules:
-            m = types.ModuleType(name)
-            sys.modules[name] = m
-    sys.modules["telegram"].Update = type("Update", (), {"ALL_TYPES": []})
-    sys.modules["telegram.constants"].ChatAction = types.SimpleNamespace(TYPING="typing")
-    sys.modules["telegram.error"].TelegramError = Exception
-    ext = sys.modules["telegram.ext"]
-    for attr in ("Application", "ApplicationBuilder", "CommandHandler",
-                 "MessageHandler", "filters"):
-        setattr(ext, attr, object)
-    ext.ContextTypes = types.SimpleNamespace(DEFAULT_TYPE=object)
+    from tests.tgstub import install_all      # noqa: PLC0415
+    install_all()
     spec = importlib.util.spec_from_file_location("cc_bridge", _ROOT / "cc_bridge.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
@@ -917,3 +905,52 @@ def test_the_praise_rules_and_the_comparison_ban_reach_the_generated_persona(tmp
         assert w in t, f"生成的人设里没有「{w}」"
     assert "不这样就不是好孩子" in t and "你看别人家的孩子" in t
     assert "不是她要挣的资格" in t
+
+
+def test_the_two_bots_share_one_telegram_stub_so_order_cannot_matter():
+    """真踩过的坑：这个文件和 test_tg_direct_smoke 各塞各的 telegram 替身进
+    **全局** sys.modules，而且都写着「已经有了就不管」。谁先跑谁说了算——
+    cc 这份没有 BotCommand，等 telegram_bot 再 import 就炸，一次挂 91 条。
+    单独跑每个文件都是绿的，check.sh 也是绿的（它分步跑），
+    只有把两个文件放进同一次 pytest 才现形。最难发现的那种。
+
+    所以：替身只能有一份，而且必须是**补缺**不是**跳过**。
+    """
+    import subprocess
+    import sys
+    from tests import tgstub
+
+    # 1. 两个文件都必须用同一份，不许再各写各的。
+    #    ⚠️ 只数「出现过」会被这条断言自己满足——上面这几行里就有那串字。
+    #    所以要看**装替身的那个函数体**里到底怎么写的。
+    import re
+    for f, fn in (("test_cc_persona.py", "_cc"),
+                  ("test_tg_direct_smoke.py", "_stub_deps")):
+        src = (_ROOT / "tests" / f).read_text(encoding="utf-8")
+        body = re.search(rf"\ndef {fn}\(\):\n(.*?)\n\n\n", src, re.S).group(1)
+        assert "install_all()" in body, f"{f} 的 {fn}() 没用共用替身"
+        assert 'ModuleType(' + '"telegram")' not in body, f"{f} 又自己造了一份"
+
+    # 2. 已经存在的模块必须被补齐，而不是整块跳过
+    src = (_ROOT / "tests" / "tgstub.py").read_text(encoding="utf-8")
+    assert "if not hasattr(m, k)" in src
+    assert 'if name not in ' + 'sys.modules' not in src, \
+        "「已存在就跳过」正是那个 bug"
+
+    # 3. 真的把两个文件放进同一次 pytest 跑一遍——两种顺序都得绿。
+    #    只断言源码是不够的：这个 bug 的全部特征就是「分开跑都对」。
+    for order in (["tests/test_cc_persona.py", "tests/test_tg_direct_smoke.py"],
+                  ["tests/test_tg_direct_smoke.py", "tests/test_cc_persona.py"]):
+        r = subprocess.run(
+            [sys.executable, "-m", "pytest", *order, "-q",
+             "-p", "no:cacheprovider",
+             "--deselect",
+             "tests/test_cc_persona.py::"
+             "test_the_two_bots_share_one_telegram_stub_so_order_cannot_matter"],
+            cwd=_ROOT, capture_output=True, text=True, timeout=300)
+        assert r.returncode == 0, \
+            f"这个顺序会挂：{' '.join(order)}\n{r.stdout[-1500:]}"
+
+    # 4. 补齐后 telegram_bot 真的 import 得起来（当年炸的就是这一行）
+    tgstub.install_all()
+    assert hasattr(sys.modules["telegram"], "BotCommand")

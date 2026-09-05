@@ -20,37 +20,12 @@ os.environ.setdefault("TELEGRAM_API_BOT_TOKEN", "test")
 
 def _stub_deps():
     """没装 openai / telegram 也要能真跑：塞最小替身进 sys.modules。
-    跳过的测试等于没有测试——这个文件存在的意义就是真的执行一遍。"""
-    if "openai" not in sys.modules:
-        m = types.ModuleType("openai")
+    跳过的测试等于没有测试——这个文件存在的意义就是真的执行一遍。
 
-        class _C:
-            def __init__(self, *a, **k):
-                self.chat = types.SimpleNamespace(completions=self)
-
-            async def create(self, **kw):
-                raise AssertionError("测试里应当被替换掉")
-
-        m.AsyncOpenAI = _C
-        sys.modules["openai"] = m
-
-    if "telegram" not in sys.modules:
-        tg = types.ModuleType("telegram")
-        tg.Update = type("Update", (), {"ALL_TYPES": []})
-        tg.BotCommand = lambda *a, **k: None
-        sys.modules["telegram"] = tg
-
-        const = types.ModuleType("telegram.constants")
-        const.ChatAction = types.SimpleNamespace(TYPING="typing", RECORD_VOICE="rv")
-        sys.modules["telegram.constants"] = const
-
-        ext = types.ModuleType("telegram.ext")
-        for _n in ("Application", "ApplicationBuilder", "CommandHandler",
-                   "MessageHandler"):
-            setattr(ext, _n, type(_n, (), {}))
-        ext.ContextTypes = type("ContextTypes", (), {"DEFAULT_TYPE": object})
-        ext.filters = types.SimpleNamespace(PHOTO=1, VOICE=2, TEXT=4, COMMAND=8)
-        sys.modules["telegram.ext"] = ext
+    替身本身放在 tests/tgstub.py，跟 test_cc_persona 共用一份：
+    以前两边各塞各的、还都「已存在就跳过」，谁先跑谁说了算，合起来挂 91 条。"""
+    from tests.tgstub import install_all      # noqa: PLC0415
+    install_all()
 
 
 def _load():
