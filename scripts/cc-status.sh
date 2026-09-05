@@ -20,6 +20,18 @@ R=$(runuser -u ombre -- git -C "$REPO" rev-parse "origin/$B" 2>/dev/null || echo
     echo "⚠️ 有坏提交被拉黑：$(cat "$REPO/.autoupdate-blocked" | cut -c1-8)"
 
 echo ""
+echo "── 自动更新定时器 ──"
+# ⚠️ 她的机器卡在一个几小时前的提交上，而自动更新「应该」每 5 分钟拉一次。
+# 定时器没开、或者每次都在报错，从聊天记录里完全看不出来——只会表现成
+# 「怎么改了还是老样子」。所以直接把它的状态摆出来。
+systemctl is-active ombre-autoupdate.timer >/dev/null 2>&1 \
+    && echo "定时器在跑 ✅（下次：$(systemctl show ombre-autoupdate.timer -p NextElapseUSecRealtime --value)）" \
+    || echo "❌ ombre-autoupdate.timer 没在跑——代码永远不会自己更新"
+echo "最近几次自动更新说了什么："
+journalctl -t ombre-autoupdate --since "-3 hours" --no-pager 2>/dev/null | tail -5 \
+    || echo "（没有日志）"
+
+echo ""
 echo "── 服务 ──"
 systemctl is-active ombre-ccbridge >/dev/null 2>&1 \
     && echo "ombre-ccbridge 活着 ✅" || echo "❌ ombre-ccbridge 没在跑"
@@ -73,5 +85,13 @@ echo "── 每轮花了多久（判断有没有真的重试）──"
 # 一轮 claude 要一分钟左右，三轮不可能在同一分钟内跑完——
 # 所以那一定不是重试跑完之后的结果。时间戳是这里最硬的证据。
 journalctl -u ombre-ccbridge --since "-2 hours" --no-pager 2>/dev/null \
-    | grep -E "空回复|重试都用完|claude 退出码|速率限制|API 错误|被信号掐断" \
+    | grep -E "空回复|重试都用完|claude 退出码|速率限制|API 错误|被信号掐断|返回空 result" \
     | tail -12 || echo "（没有相关日志）"
+
+echo ""
+echo "── 空 result 的原因（claude 自己在 JSON 里写了）──"
+# 「原始输出＝''」只说明是空的，没说为什么。subtype=error_max_turns 就是
+# 「这一轮全花在工具调用上、轮数用完了」，那是完全不同的病。
+journalctl -u ombre-ccbridge --since "-6 hours" --no-pager 2>/dev/null \
+    | grep "返回空 result" | tail -5 \
+    || echo "（没有——说明跑的还是没带这条日志的旧代码）"

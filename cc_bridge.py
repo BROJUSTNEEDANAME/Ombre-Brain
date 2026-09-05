@@ -154,7 +154,20 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
                 data = json.loads(raw)
             except Exception:  # noqa: BLE001
                 return raw.strip(), session_id
-            return str(data.get("result") or "").strip(), data.get("session_id", session_id)
+            text = str(data.get("result") or "").strip()
+            if not text:
+                # ⚠️ 退出码 0、result 是空字符串。日志里只记「原始输出＝''」
+                # 等于什么都没说——她因此连问四次「为什么还是不说话」，
+                # 而我每次只能猜。claude 自己在 JSON 里说了原因（subtype 会写
+                # error_max_turns / error_during_execution，num_turns 说明
+                # 这一轮是不是全花在工具调用上），记下来就不用猜。
+                logger.warning(
+                    "claude 返回空 result：subtype=%r is_error=%r num_turns=%r "
+                    "duration_ms=%r stop_reason=%r 全量键=%s",
+                    data.get("subtype"), data.get("is_error"),
+                    data.get("num_turns"), data.get("duration_ms"),
+                    data.get("stop_reason"), sorted(data.keys()))
+            return text, data.get("session_id", session_id)
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
         if rc in _SIGNAL_KILL_CODES and attempt == 0:

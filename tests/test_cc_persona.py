@@ -1061,3 +1061,26 @@ def test_a_normal_reply_is_never_retried(monkeypatch):
     cc, ctx, update, calls, sent = _fake_respond_env(monkeypatch, ["在。"])
     asyncio.run(cc._respond(update, ctx, 1, "在吗"))
     assert len(calls) == 1
+
+
+def test_an_empty_result_is_logged_with_the_reason_claude_gave():
+    """日志里只有「原始输出＝''」，等于什么都没说——她连问四次
+    「为什么还是不说话」，我每次只能猜。claude 自己在 JSON 里写了原因
+    （subtype=error_max_turns 就是「整轮花在工具调用上、轮数用完了」），记下来。"""
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("claude 返回空 result")
+    block = src[i - 600:i + 600]
+    for k in ("subtype", "num_turns", "is_error", "duration_ms"):
+        assert f'data.get("{k}")' in block, f"没记 {k}"
+    assert "sorted(data.keys())" in block, "键名也要记，下次才知道还有什么可看"
+    # 必须只在空的时候记，否则每一轮都刷一行
+    assert "if not text:" in src[i - 600:i]
+
+
+def test_status_checks_the_autoupdate_timer_itself():
+    """她的机器卡在几小时前的提交上，而自动更新「应该」每 5 分钟拉一次。
+    定时器没开或每次都报错，从聊天记录里完全看不出来。"""
+    sh = (_ROOT / "scripts" / "cc-status.sh").read_text(encoding="utf-8")
+    assert "ombre-autoupdate.timer" in sh
+    assert "journalctl -t ombre-autoupdate" in sh, "光看在不在跑不够，得看它说了什么"
+    assert "返回空 result" in sh, "空 result 的原因也要摆出来"
