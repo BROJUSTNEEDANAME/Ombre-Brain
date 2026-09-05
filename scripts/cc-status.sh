@@ -31,6 +31,7 @@ echo ""
 echo "── 这份代码里有没有这些修复 ──"
 check() { grep -q "$2" "$REPO/$3" && echo "  ✅ $1" || echo "  ❌ $1（这份代码没有）"; }
 check "空回复不再上屏「（……）」" "这次他没出声" cc_bridge.py
+check "空回复重试带指令（不重发她的原话）" "_SILENT_RETRY_PROMPTS" cc_bridge.py
 check "连发合并"                  "_take_pending_cc"    cc_bridge.py
 check "‖ 拆成多条"                'if "‖" in text'      cc_bridge.py
 check "会话 id 落盘"              "_save_sessions"      cc_bridge.py
@@ -52,11 +53,25 @@ fi
 echo ""
 echo "── 最近的空回复（他到底输出了什么）──"
 J=$(journalctl -u ombre-ccbridge --since "-6 hours" --no-pager 2>/dev/null \
-    | grep -E "空回复|还是空" | tail -5)
+    | grep -E "空回复|还是空|重试都用完" | tail -8)
 if [ -n "$J" ]; then
     printf '%s\n' "$J"
+    echo ""
+    echo "读法：新代码每次空回复会记「（第 N 次）」。"
+    echo "  只看到「第 1 次」而没有「第 2 次」→ 重试成功了，她其实收到了话。"
+    echo "  看到「重试都用完了」→ 三轮真的全空，那是模型的问题，不是这边吃了话。"
+    echo "  一条都没有「第 N 次」字样 → 跑的是**旧代码**。"
 else
     echo "（6 小时内没有记到空回复）"
-    echo "⚠️ 要是她这段时间明明看到过「（……）」，那说明跑的是**旧代码**"
+    echo "⚠️ 要是她这段时间明明看到过「这次他没出声」，那说明跑的是**旧代码**"
     echo "   ——新代码遇到空回复一定会记一行日志。"
 fi
+
+echo ""
+echo "── 每轮花了多久（判断有没有真的重试）──"
+# ⚠️ 她给的截图里，她发消息和「这次他没出声」是**同一分钟**。
+# 一轮 claude 要一分钟左右，三轮不可能在同一分钟内跑完——
+# 所以那一定不是重试跑完之后的结果。时间戳是这里最硬的证据。
+journalctl -u ombre-ccbridge --since "-2 hours" --no-pager 2>/dev/null \
+    | grep -E "空回复|重试都用完|claude 退出码|速率限制|API 错误|被信号掐断" \
+    | tail -12 || echo "（没有相关日志）"

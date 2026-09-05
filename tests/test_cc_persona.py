@@ -883,6 +883,18 @@ def test_a_silent_turn_logs_what_claude_actually_returned():
     assert "reply[:200]" in src[j:j + 200]
 
 
+def test_status_shows_whether_the_retries_actually_ran():
+    """她第三次问「为什么还是不说话」。她给的截图里，她发消息和「这次他没出声」
+    是**同一分钟**——一轮 claude 要一分钟，三轮不可能同分钟跑完，
+    所以那根本不是重试跑完的结果。时间戳是最硬的证据，得让脚本自己摆出来。"""
+    sh = (_ROOT / "scripts" / "cc-status.sh").read_text(encoding="utf-8")
+    assert "_SILENT_RETRY_PROMPTS" in sh, "得能看出这份代码有没有带上新的重试"
+    assert "第 N 次" in sh, "日志里的重试次数是分辨新旧代码的标记"
+    assert "跑的是**旧代码**" in sh
+    assert "同一分钟" in sh
+    assert "claude 退出码" in sh, "快速返回的失败（退出码/限流）也得摆出来"
+
+
 def test_status_can_tell_old_code_from_a_real_silence():
     """新代码遇到空回复一定会记日志。她看到过「（……）」而日志里一条都没有，
     那就是在跑旧代码——这个判断得写进脚本，不能又靠我猜。"""
