@@ -198,3 +198,53 @@ def test_it_does_not_claim_success_when_the_service_is_down():
     sh = _token_sh()
     assert "systemctl is-active --quiet ombre-ccbridge" in sh
     assert "❌ 服务没起来" in sh
+
+
+def _cc():
+    import importlib.util
+    import os
+    import sys
+    import types
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "t")
+    for name in ("telegram", "telegram.constants", "telegram.error", "telegram.ext"):
+        if name not in sys.modules:
+            m = types.ModuleType(name)
+            sys.modules[name] = m
+    sys.modules["telegram"].Update = type("Update", (), {"ALL_TYPES": []})
+    sys.modules["telegram.constants"].ChatAction = types.SimpleNamespace(TYPING="typing")
+    sys.modules["telegram.error"].TelegramError = Exception
+    ext = sys.modules["telegram.ext"]
+    for attr in ("Application", "ApplicationBuilder", "CommandHandler",
+                 "MessageHandler", "filters"):
+        setattr(ext, attr, object)
+    ext.ContextTypes = types.SimpleNamespace(DEFAULT_TYPE=object)
+    spec = importlib.util.spec_from_file_location("cc_bridge", _ROOT / "cc_bridge.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_the_bubble_separator_is_split_not_shown_to_her():
+    """人设让他用 ‖ 一条条递话。API bot 一直按它拆，cc 桥不拆——
+    她收到的是「报数？‖说，怎么了。」，那个符号原样上屏。"""
+    cc = _cc()
+    out = cc._split_for_telegram("报数？‖说，怎么了。")
+    assert out == ["报数？", "说，怎么了。"], out
+    assert all("‖" not in x for x in out)
+
+
+def test_splitting_still_respects_the_length_limit():
+    """按 ‖ 拆完，每一条还得各自做长度切分，不能把长度那层绕过去。"""
+    cc = _cc()
+    long_part = "啊" * 5000
+    out = cc._split_for_telegram(f"短的‖{long_part}")
+    assert out[0] == "短的"
+    assert len(out) > 2
+    assert all(len(x) <= cc.TELEGRAM_MSG_LIMIT for x in out)
+
+
+def test_empty_segments_do_not_become_empty_messages():
+    """他有时会打出连着的 ‖，或者末尾带一个。空消息发不出去会报错。"""
+    cc = _cc()
+    assert cc._split_for_telegram("在。‖‖") == ["在。"]
+    assert cc._split_for_telegram("‖") == []

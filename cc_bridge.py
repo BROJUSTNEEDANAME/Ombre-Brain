@@ -181,6 +181,14 @@ def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]
     text = (text or "").strip()
     if not text:
         return []
+    # ⚠️ ‖ 是人设里让他用来「一条一条把话递过去」的分隔符。API bot 一直按它拆，
+    # cc 桥不拆——于是她收到的是「报数？‖说，怎么了。」，那个符号原样上屏。
+    # 先按 ‖ 拆成一条条，每条再各自做长度切分。
+    if "‖" in text:
+        out: list[str] = []
+        for part in text.split("‖"):
+            out += _split_for_telegram(part, limit)
+        return out
     if len(text) <= limit:
         return [text]
     chunks: list[str] = []
