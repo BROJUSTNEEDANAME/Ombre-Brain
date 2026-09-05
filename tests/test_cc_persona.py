@@ -100,3 +100,20 @@ def test_env_files_with_suffixes_are_gitignored():
     ——那两个文件里装的是 bot token 和订阅凭据。"""
     ignore = (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".env.*" in ignore
+
+
+def test_claude_is_looked_up_as_the_service_user_not_root():
+    """第一版只查了 root 有没有 claude。服务是用 ombre 跑的——root 有、ombre 没有，
+    脚本照样说装好了，她那边就是「发了没回复」，而日志里那句 FileNotFoundError
+    谁也不会去看。"""
+    sh = _setup_sh()
+    assert "sudo -u ombre bash -lc 'command -v claude'" in sh
+    assert "root 有不算数" in sh
+
+
+def test_the_unit_carries_a_path_that_actually_contains_claude():
+    """systemd 的 PATH 极窄，不含 ~/.local/bin、nvm、npm 全局目录。
+    找得到 claude 不等于服务跑得起来。"""
+    sh = _setup_sh()
+    assert "Environment=PATH=$CLAUDE_DIR:" in sh
+    assert "Environment=HOME=/home/ombre" in sh, "claude 要读 ~/.claude，没有 HOME 会认不出登录状态"

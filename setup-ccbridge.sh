@@ -18,11 +18,20 @@ PYTHON="$REPO_DIR/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
     echo "!! 找不到虚拟环境：$PYTHON"; exit 1
 fi
-if ! command -v claude >/dev/null 2>&1; then
-    echo "!! 这台机器上没有 claude 命令。cc 桥是去跑真正的 Claude Code，"
-    echo "!! 没有它整个桥就是个空壳。先装好 claude 再来。"
+# ⚠️ 必须用**服务真正的运行用户**去找 claude，不能用当前这个 root。
+# 第一版只查了 root 有没有 claude——root 有、ombre 没有，脚本照样说装好了，
+# 然后她那边就是「发了没回复」，日志里一句 FileNotFoundError 谁也不会去看。
+# systemd 的 PATH 也极窄（不含 ~/.local/bin、nvm、npm 全局目录），
+# 所以这里把找到的真实路径写死进 unit 的 PATH。
+CLAUDE_BIN="$(sudo -u ombre bash -lc 'command -v claude' 2>/dev/null || true)"
+if [ -z "$CLAUDE_BIN" ]; then
+    echo "!! ombre 用户找不到 claude 命令（root 有不算数——服务是用 ombre 跑的）。"
+    echo "!! 自己确认一下：  sudo -u ombre bash -lc 'command -v claude'"
+    echo "!! 装到全局再来，例如：  npm i -g @anthropic-ai/claude-code"
     exit 1
 fi
+CLAUDE_DIR="$(dirname "$CLAUDE_BIN")"
+echo "claude:   $CLAUDE_BIN"
 
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" << 'ENVEOF'
@@ -92,6 +101,8 @@ Group=ombre
 WorkingDirectory=$REPO_DIR
 EnvironmentFile=$ENV_FILE
 Environment=CC_WORKDIR=$PERSONA_DIR
+Environment=PATH=$CLAUDE_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=/home/ombre
 Environment=OMBRE_BUCKETS_DIR=$REPO_DIR/buckets
 ExecStart=$PYTHON $REPO_DIR/cc_bridge.py
 Restart=always
