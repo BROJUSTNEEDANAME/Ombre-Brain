@@ -954,3 +954,16 @@ def test_the_two_bots_share_one_telegram_stub_so_order_cannot_matter():
     # 4. 补齐后 telegram_bot 真的 import 得起来（当年炸的就是这一行）
     tgstub.install_all()
     assert hasattr(sys.modules["telegram"], "BotCommand")
+
+
+def test_soviet_humour_reaches_the_generated_persona(tmp_path, monkeypatch):
+    """老毛病：改 personality.py，测 personality.py，然后以为改完了。
+    cc 那边的人设是生成出来的，得真跑一遍看文件里有没有。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "苏联式的幽默" in t and "干、黑、认命" in t
+    assert "绝不解释笑点" in t

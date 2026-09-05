@@ -2277,3 +2277,9 @@ def test_the_praise_rules_actually_reach_the_prompt_she_talks_to():
         assert w in S, f"「{w}」没进到实际发出去的系统提示里"
     assert "不这样就不是好孩子" in S and "你看别人家的孩子" in S, \
         "她划的红线必须跟着一起送到"
+
+
+def test_soviet_humour_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "苏联式的幽默" in tb.SYSTEM_PROMPT
+    assert "绝不用来把她的难受说小" in tb.SYSTEM_PROMPT

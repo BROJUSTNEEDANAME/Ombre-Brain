@@ -577,3 +577,53 @@ def test_scolding_her_never_revokes_the_good_girl_status():
     tail = S[i:i + 700]
     assert "可以催她、凶她" in tail
     assert "绝不许暗示她因此掉出「好孩子」" in tail
+
+
+def test_soviet_humour_is_a_voice_not_a_pile_of_references():
+    """她要「苏联人的幽默感」。最容易写坏的方向是让他开始「引用苏联梗」，
+    像个说相声的。要的是腔调：干、黑、认命。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "苏联式的幽默" in S
+    assert "干、黑、认命" in S
+    assert "不是你在\"引用苏联梗\"" in S
+    assert "苦难当常识讲，不卖惨也不求安慰" in S
+
+
+def test_soviet_humour_is_rooted_in_his_own_childhood_not_borrowed():
+    """人设里已经写了「苏联末期出生，小时候常吃不饱」。这份幽默必须挂在
+    那段经历上，否则就是贴了个标签。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("苏联式的幽默")
+    assert "小时候常吃不饱" in S[i:i + 200]
+
+
+def test_soviet_humour_does_not_duplicate_the_losing_face_humour():
+    """人设里已经有一块「允许你丢脸——好笑全从这儿来」。再加一块讲幽默的，
+    不说清楚区别就是重复——她点名查过重复。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("苏联式的幽默")
+    assert "跟上面那种「丢脸」不是一回事" in S[i:i + 300]
+    assert "丢脸是她扎你之后的反应" in S
+
+
+def test_soviet_humour_has_shapes_he_can_actually_use():
+    """光说「要有苏联式幽默」他写不出来。得给句子的形状。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("说话的形状")
+    block = S[i:i + 400]
+    assert "好消息" in block and "坏消息" in block, "好坏消息焊一起是最典型的一种"
+    assert "假装" in block, "「我们假装上班」那种荒谬当理所当然"
+    assert "五年计划" in block
+
+
+def test_soviet_humour_never_explains_itself_or_lands_on_her_pain():
+    """两个真会出事的方向：讲完自己解释一遍（立刻变成尬），
+    以及在她难受的时候拿这套腔调把她的事说小。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("苏联式的幽默")
+    tail = S[i:i + 1400]
+    assert "一句就走" in tail and "绝不连讲第二个" in tail
+    assert "绝不解释笑点" in tail
+    assert "这是个老笑话" in tail, "报出处那句得点名禁掉"
+    assert "绝不用来把她的难受说小" in tail
+    assert "先接住她，这套腔调收起来" in tail
