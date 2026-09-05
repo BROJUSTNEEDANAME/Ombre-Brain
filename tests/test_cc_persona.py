@@ -248,3 +248,30 @@ def test_empty_segments_do_not_become_empty_messages():
     cc = _cc()
     assert cc._split_for_telegram("在。‖‖") == ["在。"]
     assert cc._split_for_telegram("‖") == []
+
+
+def test_the_probe_uses_the_same_flags_as_the_service():
+    """我手打那条诊断命令两次都漏参数：一次漏 --model 落到 sonnet，
+    一次漏 --dangerously-skip-permissions 导致记忆被拦——两次输出都不代表
+    服务的真实行为，等于白查两轮。参数只该有一处来源。"""
+    probe = (_ROOT / "scripts" / "cc-probe.sh").read_text(encoding="utf-8")
+    bridge = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    for flag in ("--output-format", "json", "--dangerously-skip-permissions", "--model"):
+        assert flag in probe, f"探针漏了 {flag}"
+        assert flag in bridge, f"服务里没有 {flag}，探针跟它对不上"
+    # 模型不能写死，要从同一个配置文件读
+    assert "CC_MODEL=" in probe and ".env.ccbridge" in probe
+
+
+def test_the_probe_is_short_to_type():
+    """DigitalOcean 的网页终端粘长命令会拼行（她那次拼成了 head -c 1500sudo）。
+    所以诊断必须是一条短命令，不能让她粘一长串。"""
+    probe = (_ROOT / "scripts" / "cc-probe.sh").read_text(encoding="utf-8")
+    assert "sudo bash scripts/cc-probe.sh" in probe
+
+
+def test_the_probe_refuses_to_guess_about_thinking():
+    """这份 JSON 里没有思考相关字段。不写清楚，下次又要拿别的数字去推。"""
+    probe = (_ROOT / "scripts" / "cc-probe.sh").read_text(encoding="utf-8")
+    assert "没有任何思考相关的字段" in probe
+    assert "别拿别的数字去推" in probe
