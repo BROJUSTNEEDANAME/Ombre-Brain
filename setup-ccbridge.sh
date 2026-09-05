@@ -1,0 +1,113 @@
+#!/bin/bash
+# 一键部署 cc 桥（走 Claude 订阅，不烧 API）
+# 在 VPS 的 Ombre-Brain 仓库目录里跑：sudo bash setup-ccbridge.sh
+#
+# ⚠️ 它和 API bot 必须用**两个不同的** Telegram bot——同一个 token 同时被两个
+#    程序收消息，Telegram 会互相抢，表现是「有时回有时不回」，极难查。
+#    这里会主动比对两个 env 文件里的 token，一样就拒绝启动。
+
+set -e
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$REPO_DIR/.env.ccbridge"
+API_ENV="$REPO_DIR/.env.apibot"
+SERVICE_FILE="/etc/systemd/system/ombre-ccbridge.service"
+PERSONA_DIR="/home/ombre/nikto-cc"
+PYTHON="$REPO_DIR/.venv/bin/python"
+
+if [ ! -x "$PYTHON" ]; then
+    echo "!! 找不到虚拟环境：$PYTHON"; exit 1
+fi
+if ! command -v claude >/dev/null 2>&1; then
+    echo "!! 这台机器上没有 claude 命令。cc 桥是去跑真正的 Claude Code，"
+    echo "!! 没有它整个桥就是个空壳。先装好 claude 再来。"
+    exit 1
+fi
+
+if [ ! -f "$ENV_FILE" ]; then
+    cat > "$ENV_FILE" << 'ENVEOF'
+# cc 桥用的 Telegram bot token（⚠️ 必须和 .env.apibot 里那个是不同的 bot）
+TELEGRAM_BOT_TOKEN=在这里填第二个bot的token
+
+# 你的 Telegram chat ID（和 API bot 那边一样）
+ALLOWED_CHAT_IDS=在这里填你的chat id
+
+# 在你**登录了订阅的电脑**上跑 `claude setup-token`，把输出贴进来
+CLAUDE_CODE_OAUTH_TOKEN=在这里填setup-token的输出
+
+# 模型。Opus 4.6 走订阅额度；想省额度可以填 claude-sonnet-4-6
+CC_MODEL=claude-opus-4-6
+
+# 单条最长等多久
+CC_TIMEOUT=300
+
+# 时区
+OMBRE_BOT_TZ=America/Los_Angeles
+ENVEOF
+    chown ombre:ombre "$ENV_FILE"; chmod 600 "$ENV_FILE"
+    echo ""
+    echo "!! 已创建 $ENV_FILE，先填好再重新跑本脚本"
+    echo "!! 命令：nano $ENV_FILE"
+    exit 1
+fi
+
+if grep -q "在这里填" "$ENV_FILE"; then
+    echo "!! $ENV_FILE 里还有没填的，先编辑：nano $ENV_FILE"; exit 1
+fi
+if ! grep -Eq '^ALLOWED_CHAT_IDS=[0-9]+(,[0-9]+)*$' "$ENV_FILE"; then
+    echo "!! ALLOWED_CHAT_IDS 必须填成纯数字白名单，拒绝开放启动"; exit 1
+fi
+
+# ⚠️ 两个 bot 共用一个 token 是最难查的那类故障：两个程序轮流抢同一条消息，
+# 她那边看到的是「有时候回有时候不回」，日志两边都正常。这里当场拦掉。
+if [ -f "$API_ENV" ]; then
+    A=$(grep -E '^TELEGRAM_API_BOT_TOKEN=' "$API_ENV" | cut -d= -f2- | tr -d ' \r')
+    B=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d ' \r')
+    if [ -n "$A" ] && [ "$A" = "$B" ]; then
+        echo "!! 这两个服务填的是同一个 bot token。"
+        echo "!! 同一个 token 不能同时被两个程序收消息——必须用两个不同的 bot。"
+        exit 1
+    fi
+fi
+
+chown ombre:ombre "$ENV_FILE"; chmod 600 "$ENV_FILE"
+
+# 人设目录：cc 会读那儿的 CLAUDE.md。不做这一步，他加载的是仓库里给开发看的
+# CLAUDE.md，她面对的就是个编程助理，不是他。
+echo "生成人设目录 $PERSONA_DIR ..."
+sudo -u ombre "$PYTHON" "$REPO_DIR/scripts/make-cc-persona.py" "$PERSONA_DIR"
+
+"$PYTHON" -m pip install -q -r "$REPO_DIR/requirements-telegram.txt"
+
+cat > "$SERVICE_FILE" << SVCEOF
+[Unit]
+Description=Ombre Nikto cc bridge (Claude subscription)
+After=network-online.target ombre-brain.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ombre
+Group=ombre
+WorkingDirectory=$REPO_DIR
+EnvironmentFile=$ENV_FILE
+Environment=CC_WORKDIR=$PERSONA_DIR
+Environment=OMBRE_BUCKETS_DIR=$REPO_DIR/buckets
+ExecStart=$PYTHON $REPO_DIR/cc_bridge.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable ombre-ccbridge
+systemctl restart ombre-ccbridge
+sleep 2
+systemctl --no-pager --lines=15 status ombre-ccbridge || true
+echo ""
+echo "✅ 装好了。看日志：journalctl -u ombre-ccbridge -f"
+echo "   改人设后要重新生成：python3 scripts/make-cc-persona.py $PERSONA_DIR"

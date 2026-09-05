@@ -61,3 +61,42 @@ def test_writing_it_out_also_brings_the_memory_config(tmp_path, monkeypatch):
     assert (out / "CLAUDE.md").exists()
     if (_ROOT / ".mcp.json").exists():
         assert (out / ".mcp.json").exists(), "没有 .mcp.json 那边的他就没有记忆"
+
+
+def _setup_sh() -> str:
+    return (_ROOT / "setup-ccbridge.sh").read_text(encoding="utf-8")
+
+
+def test_setup_refuses_when_both_bots_share_one_token():
+    """同一个 token 被两个程序收消息，Telegram 会让它们互相抢——她那边看到的是
+    「有时候回有时候不回」，而两边日志都正常。这类故障必须当场拦，不能等她去查。"""
+    sh = _setup_sh()
+    assert "TELEGRAM_API_BOT_TOKEN" in sh and "TELEGRAM_BOT_TOKEN" in sh
+    assert '[ "$A" = "$B" ]' in sh
+    assert "必须用两个不同的 bot" in sh
+
+
+def test_setup_points_cc_at_the_persona_dir_not_the_repo():
+    """不指过去，他加载的是仓库里给开发看的 CLAUDE.md。"""
+    sh = _setup_sh()
+    assert "Environment=CC_WORKDIR=$PERSONA_DIR" in sh
+    assert "make-cc-persona.py" in sh
+
+
+def test_setup_will_not_start_without_a_chat_whitelist():
+    sh = _setup_sh()
+    assert "ALLOWED_CHAT_IDS=[0-9]+" in sh
+    assert "拒绝开放启动" in sh
+
+
+def test_setup_checks_claude_exists_before_promising_anything():
+    """没有 claude 命令，这个桥就是个空壳。"""
+    sh = _setup_sh()
+    assert "command -v claude" in sh
+
+
+def test_env_files_with_suffixes_are_gitignored():
+    """.gitignore 原本只写了 .env，挡不住 .env.apibot / .env.ccbridge
+    ——那两个文件里装的是 bot token 和订阅凭据。"""
+    ignore = (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".env.*" in ignore
