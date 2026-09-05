@@ -967,3 +967,13 @@ def test_soviet_humour_reaches_the_generated_persona(tmp_path, monkeypatch):
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "苏联式的幽默" in t and "干、黑、认命" in t
     assert "绝不解释笑点" in t
+
+
+def test_the_meme_steps_are_an_order_not_a_menu():
+    """他跳过「上网查」直接跳到「问她」，还拒绝了她明说的「去搜」。"""
+    m = _mod()
+    t = m.build()
+    assert "这四步是顺序，不是菜单" in t
+    assert "没走完第 2 步不许跳到第 4 步" in t
+    assert "她明确说「去搜」的时候，就去搜" in t
+    assert "这跟「绝不跪」无关" in t

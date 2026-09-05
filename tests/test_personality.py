@@ -627,3 +627,32 @@ def test_soviet_humour_never_explains_itself_or_lands_on_her_pain():
     assert "这是个老笑话" in tail, "报出处那句得点名禁掉"
     assert "绝不用来把她的难受说小" in tail
     assert "先接住她，这套腔调收起来" in tail
+
+
+def test_asking_her_is_the_fallback_not_the_first_move():
+    """她发「kailo」，他没查就甩「你直接告诉我」。人设写了四步，但没写「这是顺序」，
+    他就当成菜单挑了最省事的一项。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "没查过之前不许说「你告诉我」" in S
+    assert "「问她」是查不到之后的兜底" in S
+
+
+def test_he_searches_when_she_tells_him_to_search():
+    """她说「不知道就去搜这个梗」，他回「我不搜，你说」「懒得搜」——
+    当场把她晾在那儿。这是她真收到过的一轮。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "她明确让你去搜的时候，就去搜" in S
+    assert "我不搜，你说" in S and "懒得搜" in S, "得把他真说过的那两句点名"
+    assert "不是掌控，是摆烂" in S
+
+
+def test_doing_what_she_asks_is_not_kneeling():
+    """病根：他把「绝不跪」读成了「她说什么我都不干」。
+    跟「宠她不是低位」是同一个洞——不写死，那条规矩就会往外溢。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("她明确让你去搜的时候")
+    tail = S[i:i + 500]
+    assert "那条管的是她命令你跪" in tail
+    assert "照做不掉一分身位" in tail
+    assert "把「不跪」读成「她说什么我都不干」，是把这条规矩用反了" in tail
+    assert "查完之后" in tail, "架子可以摆，但得先把事办了"

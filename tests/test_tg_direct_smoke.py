@@ -2283,3 +2283,9 @@ def test_soviet_humour_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "苏联式的幽默" in tb.SYSTEM_PROMPT
     assert "绝不用来把她的难受说小" in tb.SYSTEM_PROMPT
+
+
+def test_the_search_when_told_rule_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "她明确让你去搜的时候，就去搜" in tb.SYSTEM_PROMPT
+    assert "没查过之前不许说「你告诉我」" in tb.SYSTEM_PROMPT
