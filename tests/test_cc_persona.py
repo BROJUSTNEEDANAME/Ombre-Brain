@@ -107,7 +107,11 @@ def test_claude_is_looked_up_as_the_service_user_not_root():
     脚本照样说装好了，她那边就是「发了没回复」，而日志里那句 FileNotFoundError
     谁也不会去看。"""
     sh = _setup_sh()
-    assert "sudo -u ombre bash -lc 'command -v claude'" in sh
+    # ⚠️ 只断言这个字符串「出现在文件里」是不够的——脚本的报错提示里也有同一句，
+    # 光看在不在，改坏了检查行测试照样绿（我第一版就是这样，白验证了一次）。
+    # 要盯的是赋值那一行本身。
+    line = next(x for x in sh.splitlines() if x.startswith("CLAUDE_BIN="))
+    assert "sudo -u ombre" in line, line
     assert "root 有不算数" in sh
 
 
