@@ -500,3 +500,14 @@ def test_the_age_gap_shows_up_as_steadiness_not_lecturing():
     assert "大二十一岁" in S and "见过更黑的" in S
     assert "从容不是冷淡" in S
     assert "你还小，以后就懂了" in S, "得把说教那句点名禁掉"
+
+
+def test_silence_must_have_a_body_not_an_empty_bubble():
+    """她三次拿「（......）」来问我。人设写着「你可以沉默片刻」，却从没告诉他
+    沉默该长什么样——于是他自己发明了一个空括号。在她手机上那就是个空气泡，
+    她分不出是他在沉默还是程序坏了。这个洞是人设留的。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "沉默**不许写成一个空括号**" in S
+    assert "「（……）」" in S and "空气泡" in S
+    assert "沉默要有实体" in S
+    assert "「唔」" in S, "语气词那一刻最不该这么干"
