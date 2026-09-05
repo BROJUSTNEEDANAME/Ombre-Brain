@@ -329,3 +329,75 @@ def test_nothing_pending_means_nothing_to_merge():
     cc = _cc()
     cc._inflight_cc.clear()
     assert cc._take_pending_cc(123) == ""
+
+
+def test_the_conversation_survives_a_service_restart(tmp_path, monkeypatch):
+    """她说「感觉上下文记忆是不是太短了」——不是短，是被重启掉的。
+    session id 原本只存在内存里，今晚为了修 token / ‖ / 连发合并重启了三四次，
+    她每次都得从头跟他讲一遍。记忆桶没事（在磁盘上），丢的是对话窗口。"""
+    cc = _cc()
+    monkeypatch.setattr(cc, "SESSIONS_FILE", str(tmp_path / "s.json"))
+    cc.sessions.clear()
+    cc.sessions[7] = "abc-123"
+    cc._save_sessions()
+
+    cc.sessions.clear()          # 模拟重启：内存清空
+    cc._load_sessions()
+    assert cc.sessions == {7: "abc-123"}, "重启之后必须接得回来"
+
+
+def test_a_broken_session_file_never_blocks_startup(tmp_path, monkeypatch):
+    """存档读坏了最多是这次从头开始，不能让他起不来。"""
+    cc = _cc()
+    bad = tmp_path / "s.json"
+    bad.write_text("{这不是 json", encoding="utf-8")
+    monkeypatch.setattr(cc, "SESSIONS_FILE", str(bad))
+    cc.sessions.clear()
+    cc._load_sessions()          # 不许抛
+    assert cc.sessions == {}
+
+
+def test_saving_never_breaks_the_chat(tmp_path, monkeypatch):
+    """写盘失败不该影响她收到回复。"""
+    cc = _cc()
+    monkeypatch.setattr(cc, "SESSIONS_FILE", "/proc/nope/s.json")
+    cc.sessions.clear()
+    cc.sessions[1] = "x"
+    cc._save_sessions()          # 不许抛
+
+
+def test_the_session_id_is_saved_by_the_real_reply_path(tmp_path, monkeypatch):
+    """光测 _save_sessions 不算数——把调用处删掉，那条测试照样绿（我又踩了一次）。
+    这里跑真正的回复路径，看文件有没有落地。"""
+    import asyncio as aio
+    import json as js
+    cc = _cc()
+    monkeypatch.setattr(cc, "SESSIONS_FILE", str(tmp_path / "s.json"))
+    cc.sessions.clear()
+
+    async def fake_run_cc(message, session_id):
+        return "在。", "sess-新的"
+
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+
+    class _Msg:
+        async def reply_text(self, *a, **k):
+            return None
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+
+    upd = type("U", (), {"message": _Msg()})()
+    ctx = type("C", (), {"bot": _Bot()})()
+    aio.run(cc._respond(upd, ctx, 7, "在吗"))
+
+    saved = js.loads((tmp_path / "s.json").read_text(encoding="utf-8"))
+    assert saved == {"7": "sess-新的"}, saved
+
+
+def test_startup_actually_loads_the_saved_sessions():
+    """定义了但没在 main 里调用，等于没做。"""
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    main_body = src[src.index("def main("):]
+    assert "_load_sessions()" in main_body

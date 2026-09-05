@@ -63,7 +63,33 @@ logging.basicConfig(
 logger = logging.getLogger("cc-bridge")
 
 # chat_id -> claude 会话 id（保持上下文连续）
+# ⚠️ 这个 id 是 claude --resume 用来接上「刚才聊到哪了」的。只存在内存里的话，
+# 服务一重启就全没——今晚为了修 token、修 ‖、修连发合并重启了三四次，
+# 她每次都得从头跟他讲一遍，还以为是「上下文记忆太短」。记忆桶没事（在磁盘上），
+# 丢的是对话窗口。所以落盘。
+SESSIONS_FILE = os.path.join(CC_WORKDIR, ".cc_sessions.json")
 sessions: dict[int, str] = {}
+
+
+def _load_sessions() -> None:
+    try:
+        with open(SESSIONS_FILE, encoding="utf-8") as fh:
+            for k, v in (json.load(fh) or {}).items():
+                if isinstance(v, str) and v:
+                    sessions[int(k)] = v
+    except (OSError, ValueError, TypeError):
+        pass          # 没有或者读坏了都不该拦住启动，最多是这次从头开始
+
+
+def _save_sessions() -> None:
+    """写文件不许影响聊天：失败就算了，下次再说。"""
+    try:
+        tmp = SESSIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({str(k): v for k, v in sessions.items()}, fh)
+        os.replace(tmp, SESSIONS_FILE)
+    except OSError:
+        logger.warning("会话 id 存盘失败，重启后这段对话会从头开始", exc_info=True)
 
 
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
@@ -172,6 +198,7 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _ok(cid):
         return
     sessions.pop(cid, None)
+    _save_sessions()
     await update.message.reply_text("好，重新开一段。")
 
 
@@ -256,8 +283,9 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     st = _inflight_cc.get(cid)
     if st is not None:
         st["sent"] = True          # 开口了，后面的消息不许再打断这一轮
-    if sid:
+    if sid and sessions.get(cid) != sid:
         sessions[cid] = sid
+        _save_sessions()
     for chunk in _split_for_telegram(reply):
         await _reply_with_retry(update.message, chunk)
     if _inflight_cc.get(cid) is st:
@@ -427,7 +455,9 @@ def main() -> None:
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    logger.info("Claude Code Telegram 桥启动 | workdir=%s", CC_WORKDIR)
+    _load_sessions()
+    logger.info("Claude Code Telegram 桥启动 | workdir=%s | 接回 %d 段对话",
+                CC_WORKDIR, len(sessions))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
