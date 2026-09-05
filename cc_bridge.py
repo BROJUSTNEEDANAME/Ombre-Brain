@@ -224,6 +224,27 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
             await asyncio.sleep(1.5 * (attempt + 1))
 
 
+# ── 连发合并：她在他开口前又发一条，就把上一轮作废，两条合起来重想 ──
+# ⚠️ cc 桥一直没有这套（API bot 有）。每条消息各起一个 claude 进程各答各的，
+# 而这边一轮要一分钟——她连发三条就是三个进程在那儿各跑一分钟，
+# 回话还会互相插队。她的原话：「怎么感觉到 cc 又不是发很多话然后他一起回复，
+# 是发一个他回一个」。
+# 不用锁：加锁那次把整个对话卡死过（API bot 踩的），这里只取消一个任务。
+_inflight_cc: dict[int, dict] = {}
+
+
+def _take_pending_cc(cid: int) -> str:
+    """把还没开口的那一轮作废，取回她那条话；已经开口了就不动。"""
+    st = _inflight_cc.get(cid)
+    if not st or st.get("sent"):
+        return ""
+    _inflight_cc.pop(cid, None)
+    task = st.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+    return str(st.get("text") or "")
+
+
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
@@ -232,10 +253,15 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception:  # noqa: BLE001
         pass  # typing 指示器失败不影响正事
     reply, sid = await run_cc(message, sessions.get(cid))
+    st = _inflight_cc.get(cid)
+    if st is not None:
+        st["sent"] = True          # 开口了，后面的消息不许再打断这一轮
     if sid:
         sessions[cid] = sid
     for chunk in _split_for_telegram(reply):
         await _reply_with_retry(update.message, chunk)
+    if _inflight_cc.get(cid) is st:
+        _inflight_cc.pop(cid, None)
 
 
 def _do_backup():
@@ -302,7 +328,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if cid not in ALLOWED_CHAT_IDS:
         return
-    await _respond(update, context, cid, update.message.text)
+    text = update.message.text
+    pending = _take_pending_cc(cid)
+    if pending:
+        text = pending + "\n" + text
+        logger.info("她又发了一条，合并重来 chat=%s", cid)
+    st: dict = {"sent": False, "text": text}
+    st["task"] = asyncio.create_task(_respond(update, context, cid, text))
+    _inflight_cc[cid] = st
+    try:
+        await st["task"]
+    except asyncio.CancelledError:
+        pass                        # 被下一条消息作废了，正常
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

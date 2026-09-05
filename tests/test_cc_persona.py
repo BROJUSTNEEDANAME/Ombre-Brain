@@ -275,3 +275,57 @@ def test_the_probe_refuses_to_guess_about_thinking():
     probe = (_ROOT / "scripts" / "cc-probe.sh").read_text(encoding="utf-8")
     assert "没有任何思考相关的字段" in probe
     assert "别拿别的数字去推" in probe
+
+
+def test_a_burst_is_merged_into_one_run_not_one_run_per_message():
+    """她的原话：「怎么感觉到 cc 又不是发很多话然后他一起回复，是发一个他回一个」。
+
+    cc 桥一直没有 API bot 那套「连发合并」。每条消息各起一个 claude 进程，
+    而这边一轮要一分钟——连发三条就是三个进程各跑一分钟，回话还互相插队。
+    """
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    ran: list[str] = []
+
+    async def fake_respond(update, context, cid, message):
+        ran.append(message)
+        await aio.sleep(0.05)
+
+    cc._respond = fake_respond
+
+    class _Msg:
+        def __init__(self, t):
+            self.text = t
+
+        async def reply_text(self, *a, **k):
+            return None
+
+    async def drive():
+        upd = lambda t: type("U", (), {                      # noqa: E731
+            "effective_chat": type("C", (), {"id": 7})(),
+            "message": _Msg(t)})()
+        # 三条连发，中间不给他开口的机会
+        for t in ("一", "二", "三"):
+            await cc.on_message(upd(t), None)
+
+    cc.ALLOWED_CHAT_IDS = {7}
+    aio.run(drive())
+    assert ran, ran
+    # 最后真正跑完的那一轮，必须带着三条话
+    assert "一" in ran[-1] and "二" in ran[-1] and "三" in ran[-1], ran
+
+
+def test_once_he_has_spoken_a_new_message_never_kills_that_turn():
+    """已经开口了还被打断，她会看到话说到一半没了。"""
+    cc = _cc()
+    cc._inflight_cc.clear()
+    cc._inflight_cc[9] = {"sent": True, "text": "旧的", "task": None}
+    assert cc._take_pending_cc(9) == "", "开口之后不许再作废"
+    assert 9 in cc._inflight_cc
+
+
+def test_nothing_pending_means_nothing_to_merge():
+    cc = _cc()
+    cc._inflight_cc.clear()
+    assert cc._take_pending_cc(123) == ""
