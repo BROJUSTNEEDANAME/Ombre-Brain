@@ -401,3 +401,51 @@ def test_startup_actually_loads_the_saved_sessions():
     src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
     main_body = src[src.index("def main("):]
     assert "_load_sessions()" in main_body
+
+
+def test_the_handler_returns_immediately_so_the_next_message_can_interrupt():
+    """我第一版在 handler 里 await 了那一轮，她说「还是这样」——因为
+    python-telegram-bot 默认一条处理完才处理下一条：handler 等满 60 秒，
+    她的下一条根本进不来，合并永远触发不到。API bot 一直是建任务就返回。"""
+    import asyncio as aio
+    cc = _cc()
+    cc._inflight_cc.clear()
+    cc.ALLOWED_CHAT_IDS = {7}
+    started = []
+
+    async def slow_respond(update, context, cid, message):
+        started.append(message)
+        await aio.sleep(5)          # 一轮很久
+
+    cc._respond = slow_respond
+
+    class _Msg:
+        def __init__(self, t):
+            self.text = t
+
+        async def reply_text(self, *a, **k):
+            return None
+
+    def upd(t):
+        return type("U", (), {
+            "effective_chat": type("C", (), {"id": 7})(),
+            "message": _Msg(t)})()
+
+    async def drive():
+        # handler 必须秒退：0.5s 内跑完三条，而每一轮要 5s
+        await aio.wait_for(cc.on_message(upd("一"), None), timeout=0.5)
+        await aio.wait_for(cc.on_message(upd("二"), None), timeout=0.5)
+        await aio.sleep(0)
+        return cc._inflight_cc[7]["text"]
+
+    merged = aio.run(drive())
+    assert "一" in merged and "二" in merged, merged
+    assert started[0] == "一", started
+
+
+def test_an_exploding_turn_is_logged_not_swallowed():
+    """不 await 就没人接异常。悄悄吞掉的话，她只会看到「他不理我」。"""
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("task.add_done_callback")
+    body = src[src.index("def _done", 0):i]
+    assert "t.exception()" in body and "logger.exception" in body

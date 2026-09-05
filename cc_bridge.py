@@ -361,13 +361,24 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if pending:
         text = pending + "\n" + text
         logger.info("她又发了一条，合并重来 chat=%s", cid)
+    # ⚠️ 这里**绝不能 await 这个任务**。python-telegram-bot 默认一条处理完才处理
+    # 下一条：handler 要是等满这一轮（这边一轮 60 秒），她的下一条消息根本进不来，
+    # 合并逻辑永远触发不到。我第一版就是 await 的，她说「还是这样」。
+    # API bot 一直是「建任务就返回」，照抄它。
     st: dict = {"sent": False, "text": text}
-    st["task"] = asyncio.create_task(_respond(update, context, cid, text))
+    task = asyncio.create_task(_respond(update, context, cid, text))
+    st["task"] = task
     _inflight_cc[cid] = st
-    try:
-        await st["task"]
-    except asyncio.CancelledError:
-        pass                        # 被下一条消息作废了，正常
+
+    def _done(t: asyncio.Task) -> None:
+        # 不 await 就没人接异常，出了错会被悄悄吞掉——至少要落进日志
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.exception("这一轮炸了 chat=%s", cid, exc_info=exc)
+
+    task.add_done_callback(_done)
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
