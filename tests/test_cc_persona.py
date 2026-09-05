@@ -1082,7 +1082,9 @@ def test_status_checks_the_autoupdate_timer_itself():
     定时器没开或每次都报错，从聊天记录里完全看不出来。"""
     sh = (_ROOT / "scripts" / "cc-status.sh").read_text(encoding="utf-8")
     assert "ombre-autoupdate.timer" in sh
-    assert "journalctl -t ombre-autoupdate" in sh, "光看在不在跑不够，得看它说了什么"
+    # 读日志现在走 logs()（它把「读不到」和「确实没有」分开）——
+    # 断言行为，不断言命令怎么写，否则一重构就红。
+    assert "logs -t ombre-autoupdate" in sh, "光看在不在跑不够，得看它说了什么"
     assert "返回空 result" in sh, "空 result 的原因也要摆出来"
 
 
