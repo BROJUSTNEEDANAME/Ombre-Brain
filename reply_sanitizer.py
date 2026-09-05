@@ -408,3 +408,26 @@ def looks_degenerate(text: str) -> bool:
     if len(tail) < 20:
         return False
     return text.count(tail) >= 3
+
+
+# 她说「要去睡了」。⚠️ 这个判断必须保守：判错的代价是他整晚闭嘴，
+# 而她根本不知道自己哪句话把他关掉了。所以宁可漏判，不可误判——
+# 疑问句（「你睡了吗」）、否定（「睡不着」「不想睡」）、以及说别人的一律不算。
+_SLEEP_ASK_RE = re.compile(r"[吗嘛么？?]\s*$")
+_SLEEP_NEG_RE = re.compile(r"(睡不着|睡不了|不想睡|不睡|别睡|没睡|睡够了|睡醒|"
+                           r"睡多了|睡过头|失眠)")
+_SLEEP_GO_RE = re.compile(
+    r"(晚安|安安|去睡|睡了|睡觉了|睡啦|睡咯|睡去了|洗洗睡|"
+    r"要睡|该睡|准备睡|躺了|困死了|good\s*night|gn\b)", re.I)
+
+
+def says_going_to_sleep(text: str) -> bool:
+    """她这句是不是在说「我要去睡了」。"""
+    t = (text or "").strip()
+    if not t or len(t) > 40:          # 长句多半在讲别的事，别硬套
+        return False
+    if _SLEEP_NEG_RE.search(t) or _SLEEP_ASK_RE.search(t):
+        return False
+    if re.search(r"(你|他|她|妈|爸)\s*(要|去|该)?\s*睡", t):
+        return False                  # 在说别人，不是她自己
+    return bool(_SLEEP_GO_RE.search(t))

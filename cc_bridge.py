@@ -33,7 +33,8 @@ from datetime import datetime, timezone, timedelta
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
-from reply_sanitizer import restore_punctuation, looks_degenerate
+from reply_sanitizer import (restore_punctuation, looks_degenerate,
+                             says_going_to_sleep)
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -269,6 +270,9 @@ nudge_count: dict[int, int] = {}
 # ⚠️ 必须定义在 check_inactivity 之前：这个仓库踩过「_trace 定义晚于使用」，
 # 每条消息都崩，而她看到的只是「他不理我」。
 last_nudge_at: dict[int, float] = {}
+# 她说了「睡了」之后就别再主动找她。她再开口才解除。
+# ⚠️ 这个开关只挡主动消息，不挡他回她——她半夜醒了说一句，他照样答。
+asleep: dict[int, bool] = {}
 
 
 def _in_quiet_hours(now: datetime) -> bool:
@@ -296,6 +300,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             continue                       # 找过几次了，闭嘴
         if _inflight_cc.get(cid):
             continue                       # 他正在说话，别插队
+        if asleep.get(cid):
+            continue                       # 她说她睡了，别吵她
         if _in_quiet_hours(datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)):
             continue
         n = nudge_count.get(cid, 0) + 1
@@ -468,6 +474,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text = update.message.text
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
+    # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
+    asleep[cid] = says_going_to_sleep(update.message.text)
     pending = _take_pending_cc(cid)
     if pending:
         text = pending + "\n" + text

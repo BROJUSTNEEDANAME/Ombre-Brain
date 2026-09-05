@@ -726,3 +726,44 @@ def test_quiet_hours_are_available_even_if_off_by_default():
     assert not cc._in_quiet_hours(dt(2026, 9, 5, 12, 0))
     cc.NUDGE_QUIET = ""
     assert not cc._in_quiet_hours(dt(2026, 9, 5, 3, 0))
+
+
+def test_saying_goodnight_stops_the_proactive_messages(monkeypatch):
+    """她说「我说睡了就不主动发」。这个开关只挡主动消息——她半夜醒了说一句，
+    他照样答。"""
+    import asyncio as aio
+    cc = _cc()
+    calls = []
+
+    async def counted(*a, **k):
+        calls.append(a)
+        return "不该发的", "s"
+
+    monkeypatch.setattr(cc, "run_cc", counted)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    sent, ctx = _nudge_env(cc, monkeypatch)
+    cc.asleep[7] = True
+    aio.run(cc.check_inactivity(ctx))
+    assert calls == [] and sent == []
+
+
+def test_speaking_again_wakes_the_nudges_back_up():
+    cc = _cc()
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("async def on_message")
+    body = src[i:i + 1200]
+    assert "asleep[cid] = says_going_to_sleep" in body, \
+        "得每条消息都重算，否则她醒了他还闭着嘴"
+
+
+def test_the_sleep_detector_refuses_to_guess():
+    """判错的代价是他整晚闭嘴，而她根本不知道哪句话把他关掉了。
+    所以宁可漏判，不可误判。"""
+    from reply_sanitizer import says_going_to_sleep as f
+    for yes in ("睡了", "我去睡了", "晚安", "困死了睡了", "洗洗睡了",
+                "要睡了", "躺了", "gn", "Good night"):
+        assert f(yes), yes
+    for no in ("你睡了吗", "睡了吗？", "睡不着", "不想睡", "睡够了",
+               "我睡醒了", "他睡了", "今天不睡了要通宵",
+               "我想跟你说说白天那个课上老师讲的东西然后再睡"):
+        assert not f(no), no
