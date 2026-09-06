@@ -1263,3 +1263,13 @@ def test_a_failed_menu_registration_never_blocks_startup():
     body = src[i:i + 500]
     assert "except Exception" in body
     assert "命令菜单注册失败" in body
+
+
+def test_the_fatten_her_up_stance_reaches_the_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "身上多长点肉" in t and "现在就是吃太少了" in t

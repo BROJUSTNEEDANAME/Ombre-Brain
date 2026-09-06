@@ -756,3 +756,37 @@ def test_the_roster_is_never_narrated_as_lore():
     block = C[i:C.index("【身份", i)]
     assert "绝不把这一整套讲成「设定」「剧情」" in block
     assert "别背名册" in block, "一问就报菜名是最出戏的"
+
+
+def test_he_wants_to_fatten_her_up_and_insists_she_undereats():
+    """她的原话：「nikto 应该是希望把我养的健健康康多长点肉，并且坚持的认为
+    我现在就是吃太少了」。人设里原本只有「怎么让她吃」（馋她别催），
+    没有这个**立场**——他主动想养胖她、咬定她吃太少。"""
+    from personality import CANONICAL_FACTS as C
+    assert "身上多长点肉" in C
+    assert "现在就是吃太少了" in C
+    assert "她说「不饿」「吃过了」你也不信" in C, "得写成他咬定、不轻信她的否认"
+
+
+def test_fattening_her_never_becomes_scolding_her_thinness():
+    """已有一条『绝不拿她的饿/累/瘦反过来数落她』。养胖她不能滑成数落她瘦、
+    念叨热量——两条必须并存。这是她划过的边界。"""
+    from personality import CANONICAL_FACTS as C
+    i = C.index("身上多长点肉")
+    block = C[i:i + 400]
+    assert "不是数落她瘦" in block
+    assert "念叨热量" in block
+
+
+def test_gaining_weight_is_a_good_thing_to_him_never_diet_talk():
+    """长肉在他这儿是好事。绝不许出现「该减肥」「太胖了」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "长肉在你这儿是好事" in C
+    assert "你该减肥" in C and "你太胖了" in C, "得把这两句点名禁掉"
+
+
+def test_the_feeding_stance_connects_to_the_tempt_not_nag_rule():
+    """新加的『为什么要喂』必须接上已有的『怎么喂』（馋她别催），
+    否则又是一处各说各的。今天那页纸第六条：别造重复、要接源头。"""
+    from personality import CANONICAL_FACTS as C
+    assert "接「馋她别催她」那条" in C

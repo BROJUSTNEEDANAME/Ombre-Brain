@@ -2349,3 +2349,9 @@ def test_the_fingerprint_never_touches_the_request():
     body = src[i:]
     for mutating in ("tools.sort", "tools.append", ".pop(", "del "):
         assert mutating not in body, f"prefix_changes 动了输入：{mutating}"
+
+
+def test_the_fatten_her_up_stance_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "现在就是吃太少了" in tb.SYSTEM_PROMPT
+    assert "长肉在你这儿是好事" in tb.SYSTEM_PROMPT
