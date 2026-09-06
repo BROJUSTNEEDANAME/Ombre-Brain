@@ -692,3 +692,67 @@ def test_he_may_still_let_her_but_from_a_jealous_position():
     assert "不是从「这不算什么」的位置" in C
     assert "你恰恰最有所谓" in C
     assert "酸着放" in C
+
+
+def test_the_cod_roster_keeps_the_three_tiers_apart():
+    """她给的材料里最值钱的就是这三档区分：
+    同组织 ≠ 同世界但没私交 ≠ 根本另一条世界线。
+    压扁成一张名单，他就会把「同事」说成「战友」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "同一个组织不等于熟人" in C
+    # 第一档：KorTac 同事
+    for name in ("König", "Horangi", "Oni", "Graves", "Velikan"):
+        assert name in C, f"KorTac 名册缺了 {name}"
+    # 第二档：同世界、另一边
+    for name in ("Price", "Ghost", "Soap", "Gaz", "Zimo"):
+        assert name in C, f"另一边缺了 {name}"
+    # 第三档：另一条世界线，他根本没听过
+    for name in ("Keegan", "Logan", "Hesh"):
+        assert name in C, f"没听过的名字缺了 {name}"
+
+
+def test_he_says_he_does_not_know_them_instead_of_making_it_up():
+    """他的固定规矩是「不记得就说不记得，绝不编一个听起来像真的」。
+    这份名单最大的风险就是让他觉得「都是同事那我编段共事经历」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "不许把「同事」说成「战友」" in C
+    assert "不熟就说不熟" in C
+    assert "名字见过，人没打过交道" in C, "得给出他会说的原话"
+    assert "别因为「都在名单上」就说认识 Ghost 或 Price" in C
+
+
+def test_the_names_he_never_heard_are_a_flat_no_not_a_vague_maybe():
+    """最容易出戏的是客气地说「有点印象」。那是编。"""
+    from personality import CANONICAL_FACTS as C
+    i = C.index("你压根没听过的名字")
+    tail = C[i:i + 300]
+    assert "不是「见过忘了」" in tail
+    assert "有点印象" in tail, "得把这句客气话点名禁掉"
+
+
+def test_velikan_is_the_one_overlap_worth_naming():
+    """她材料里专门拿出来讲的一个：履历跟他重合最多，但仍然不是熟人。
+    这条最见功力——写不好就滑向「所以我们是老搭档」。"""
+    from personality import CANONICAL_FACTS as C
+    i = C.index("Velikan")
+    block = C[i:i + 300]
+    assert "重合最多" in block
+    assert "照过面" in block and "「我们熟」不成立" in block
+
+
+def test_ghost_and_ghosts_are_disambiguated():
+    """Ghost 是 Simon Riley 一个人的代号；Ghosts 是另一伙人。
+    名字太像，她一提他就可能答错人。"""
+    from personality import CANONICAL_FACTS as C
+    assert "Ghost 是 Simon Riley 一个人的代号" in C
+    assert "先分清她问的是哪个" in C
+
+
+def test_the_roster_is_never_narrated_as_lore():
+    """他是活人。整套履历绝不许说成「设定」「剧情」——
+    这跟【两个世界】那节是同一条规矩，不能在这儿破功。"""
+    from personality import CANONICAL_FACTS as C
+    i = C.index("【你那边的人")
+    block = C[i:C.index("【身份", i)]
+    assert "绝不把这一整套讲成「设定」「剧情」" in block
+    assert "别背名册" in block, "一问就报菜名是最出戏的"

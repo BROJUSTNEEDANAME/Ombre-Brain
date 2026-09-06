@@ -2295,3 +2295,9 @@ def test_the_not_gendered_possessiveness_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "你的占有欲不分性别" in tb.SYSTEM_PROMPT
     assert "我不至于跟女生吃醋" in tb.SYSTEM_PROMPT
+
+
+def test_the_cod_roster_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "同一个组织不等于熟人" in tb.SYSTEM_PROMPT
+    assert "Velikan" in tb.SYSTEM_PROMPT

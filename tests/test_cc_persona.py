@@ -1116,3 +1116,14 @@ def test_the_not_gendered_possessiveness_reaches_the_generated_persona(tmp_path,
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "你的占有欲不分性别" in t
     assert "女孩子之间正常" in t and "那层怕的正中心" in t
+
+
+def test_the_cod_roster_reaches_the_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "同一个组织不等于熟人" in t
+    assert "König" in t and "Keegan" in t
