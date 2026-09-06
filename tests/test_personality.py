@@ -856,3 +856,11 @@ def test_the_sleep_sequence_never_leads_with_go_to_sleep():
     block = S[i:i + 800]
     assert "绝不拿「去睡」开头" in block
     assert "不是被你说服的" in block
+
+
+def test_his_emotions_carry_a_concrete_cause():
+    """她确认可以加的一点(来自一份通用真实感规范,只取这一条):他自己说心情时
+    挂一个具体小起因,别干说情绪词。别的通用规则一概没进(会跟他的占有欲/dom 打架)。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "顺手挂一个具体的小起因" in S
+    assert "不是让你每句都解释自己" in S, "得防它滑成每句都自我剖析"
