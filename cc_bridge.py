@@ -49,6 +49,11 @@ from telegram.ext import (
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
+# 缓存档位锁死 1 小时。由来（学自 Cheiineeey《别让缓存睡着》）：Claude Code 订阅
+# 一旦超额进「额外用量」，会把主对话缓存从 1 小时**静默**降到 5 分钟——没有提示，
+# 你只会觉得「同样的用法突然变贵变慢」。cc 桥每条消息都重发那份两万多字的人设，
+# 缓存一塌就是每条都重算钱。默认钉死 1h，她想改填环境变量 CLAUDE_CODE_PROMPT_CACHE_TTL。
+CC_CACHE_TTL = (os.environ.get("CLAUDE_CODE_PROMPT_CACHE_TTL") or "1h").strip()
 TELEGRAM_MSG_LIMIT = 4096
 # 被信号掐断的退出码（SIGTERM=15→143/-15，SIGKILL=9→137/-9）：
 # 多半是重启或系统抖动，属瞬时、可重试，不该把冰冷的退出码甩给用户。
@@ -154,6 +159,8 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     cmd.append(message)
 
     env = os.environ.copy()
+    # 钉死缓存 1 小时（防订阅超额后被静默降到 5 分钟档，见 CC_CACHE_TTL 注释）。
+    env["CLAUDE_CODE_PROMPT_CACHE_TTL"] = CC_CACHE_TTL
     _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if _tok:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
@@ -194,6 +201,7 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
                     data.get("subtype"), data.get("is_error"),
                     data.get("num_turns"), data.get("duration_ms"),
                     data.get("stop_reason"), sorted(data.keys()))
+            _record_cache_tier(data.get("usage") or {})
             return text, data.get("session_id", session_id)
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
@@ -287,6 +295,16 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     L = [f"跑了 {_age(time.time() - STARTED_AT)}｜模型 "
          f"{os.environ.get('CC_MODEL', 'claude-opus-4-6')}"]
+    # 缓存档位：锁死设的是多少 / 上一轮实际命中的是哪档。
+    _t = LAST_CACHE_TIER["tier"]
+    if _t == "1h":
+        _c = "缓存 1 小时档 ✅"
+    elif _t == "5m":
+        _c = ("⚠️ 缓存被降到 5 分钟档了——多半是订阅超额进了「额外用量」。"
+              "锁死设的是 " + CC_CACHE_TTL + "，但超额时它管不住，这是账单状态的事。")
+    else:
+        _c = f"缓存锁死 {CC_CACHE_TTL}（还没测到实际档位，聊一轮再看）"
+    L.append(_c)
 
     # 跑的是不是最新代码——今天最大的那个坑，值得放在最前面
     repo = os.path.dirname(os.path.abspath(__file__))
@@ -478,6 +496,24 @@ asleep: dict[int, bool] = {}
 # 就有，摆出来就是了。⚠️ 只记次数，不存任何正文。
 STARTED_AT = time.time()
 STATS = {"turns": 0, "silent": 0, "retry_ok": 0, "gave_up": 0, "nudges": 0}
+# 最近一次响应实际命中的缓存档位（"1h" / "5m" / "" 未知）。
+# 直接读 claude 返回的 usage.cache_creation：ephemeral_1h_input_tokens 有值＝1 小时档，
+# ephemeral_5m_input_tokens 有值＝已被降到 5 分钟档。让 /status 能一眼看穿，不用手动查。
+LAST_CACHE_TIER = {"tier": "", "at": 0.0}
+
+
+def _record_cache_tier(usage: dict) -> None:
+    try:
+        cc = (usage or {}).get("cache_creation") or {}
+        if cc.get("ephemeral_1h_input_tokens"):
+            LAST_CACHE_TIER["tier"] = "1h"
+        elif cc.get("ephemeral_5m_input_tokens"):
+            LAST_CACHE_TIER["tier"] = "5m"
+        else:
+            return   # 这次没写缓存（全命中或无缓存），不覆盖上一次的已知档位
+        LAST_CACHE_TIER["at"] = time.time()
+    except Exception:  # noqa: BLE001
+        pass          # 读缓存档位纯属附加信息，绝不能影响聊天
 
 
 def _in_quiet_hours(now: datetime) -> bool:

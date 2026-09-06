@@ -122,6 +122,8 @@ Environment=CC_WORKDIR=$PERSONA_DIR
 Environment=PATH=$CLAUDE_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=HOME=/home/ombre
 Environment=OMBRE_BUCKETS_DIR=$REPO_DIR/buckets
+# 缓存钉死 1 小时，防订阅超额后被静默降到 5 分钟档（代码里也有默认，这里为可见）
+Environment=CLAUDE_CODE_PROMPT_CACHE_TTL=1h
 ExecStart=$PYTHON $REPO_DIR/cc_bridge.py
 Restart=always
 RestartSec=5

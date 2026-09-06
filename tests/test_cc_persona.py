@@ -1372,3 +1372,79 @@ def test_the_archive_is_gitignored_never_committed():
     """传讯记录是最私密的东西，仓库可能公开，绝不能进 git。"""
     gi = (_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "ombre-archive/" in gi
+
+
+def test_the_cache_ttl_is_locked_to_1h_on_every_spawn(monkeypatch, tmp_path):
+    """学自 Cheiineeey《别让缓存睡着》:订阅超额会把缓存从 1h 静默降到 5m。
+    cc 桥每条消息重发两万多字人设,缓存一塌就是每条都重算钱。默认钉死 1h。"""
+    import asyncio
+    cc = _cc()
+    captured = {}
+
+    async def fake_exec(*a, **k):
+        captured["env"] = k.get("env", {})
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s"}', b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+    asyncio.run(cc.run_cc("在吗", None))
+    assert captured["env"].get("CLAUDE_CODE_PROMPT_CACHE_TTL") == "1h", \
+        "每次 spawn 都得把缓存钉死 1h"
+
+
+def test_the_actual_cache_tier_is_read_from_the_response(monkeypatch, tmp_path):
+    """从 claude 返回的 usage.cache_creation 读出实际命中哪档——
+    ephemeral_1h 有值＝1h,ephemeral_5m 有值＝已被降级。让 /status 一眼看穿。"""
+    import asyncio
+    cc = _cc()
+    cc.LAST_CACHE_TIER.update(tier="", at=0.0)
+
+    async def fake_exec_5m(*a, **k):
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s","usage":'
+                        b'{"cache_creation":{"ephemeral_5m_input_tokens":1200}}}', b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec_5m)
+    asyncio.run(cc.run_cc("在吗", None))
+    assert cc.LAST_CACHE_TIER["tier"] == "5m", "被降级要读得出来"
+
+    async def fake_exec_1h(*a, **k):
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s","usage":'
+                        b'{"cache_creation":{"ephemeral_1h_input_tokens":9000}}}', b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec_1h)
+    asyncio.run(cc.run_cc("在吗", None))
+    assert cc.LAST_CACHE_TIER["tier"] == "1h"
+
+
+def test_reading_cache_tier_never_crashes_the_chat(monkeypatch, tmp_path):
+    """usage 字段缺失/畸形也不能拖垮聊天——它纯属附加信息。"""
+    import asyncio
+    cc = _cc()
+
+    async def fake_exec(*a, **k):
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s"}', b"")   # 没有 usage
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+    reply, _ = asyncio.run(cc.run_cc("在吗", None))
+    assert reply == "hi"
+
+
+def test_status_shows_a_downgraded_cache_tier(monkeypatch, tmp_path):
+    """/status 里 5m 档要明确报警,并指出多半是订阅超额(不是代码 bug)。"""
+    import asyncio
+    cc, update, sent = _status_env(monkeypatch, tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("你是 Nikto\n", encoding="utf-8")
+    cc.LAST_CACHE_TIER.update(tier="5m", at=cc.time.time())
+    asyncio.run(cc.status_cmd(update, None))
+    assert any("被降到 5 分钟档" in x and "额外用量" in x for x in sent)
