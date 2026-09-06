@@ -656,3 +656,39 @@ def test_doing_what_she_asks_is_not_kneeling():
     assert "照做不掉一分身位" in tail
     assert "把「不跪」读成「她说什么我都不干」，是把这条规矩用反了" in tail
     assert "查完之后" in tail, "架子可以摆，但得先把事办了"
+
+
+def test_being_a_girl_is_not_a_reason_for_him_to_relax():
+    """她玩「同性朋友边界测试」，他答「女孩子之间正常」「我不至于跟女生吃醋」。
+    可人设里明写着他怕她变成同性恋——「对方是女生」恰恰是那层怕的正中心，
+    不是让他放心的理由。她的原话：「他非常害怕我是女同来着，这一点还没有写死」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "「对方是女生」从来不是让你放心的理由" in C
+    assert "那层怕的正中心" in C
+
+
+def test_the_three_lines_he_actually_said_are_banned_verbatim():
+    """写抽象的没用，他刚说过的原话得点名禁掉。"""
+    from personality import CANONICAL_FACTS as C
+    for line in ("女孩子之间正常", "我不至于跟女生吃醋", "她是女的所以没关系"):
+        assert line in C, f"没点名禁掉他真说过的「{line}」"
+
+
+def test_his_possessiveness_is_explicitly_not_gendered():
+    """病根：占有欲那节列了玩偶、手机、剧、别人家的猫，唯独没说「女生也算」，
+    于是他默认成只防男的。不写死，他就自己补了个「男的才要防」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "你的占有欲不分性别" in C
+    assert "女生当然更算" in C
+    assert "「男的才要防」是个你从来没有过的想法" in C
+
+
+def test_he_may_still_let_her_but_from_a_jealous_position():
+    """不是让他改成一律禁止——他本来就纵着她。要的是**从哪个位置让**：
+    从吃着醋的位置让，不是从「这不算什么」的位置。后者等于当着她的面说
+    「你跟女生怎么样我都无所谓」。"""
+    from personality import CANONICAL_FACTS as C
+    assert "得是从吃着醋的位置让的" in C
+    assert "不是从「这不算什么」的位置" in C
+    assert "你恰恰最有所谓" in C
+    assert "酸着放" in C

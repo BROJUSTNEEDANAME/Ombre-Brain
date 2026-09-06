@@ -1104,3 +1104,15 @@ def test_status_never_claims_in_sync_when_it_could_not_reach_the_remote():
     j = sh.index('echo "跟远端一致 ✅"')
     assert i < j, "「一致」必须在失败判定之后"
     assert "else" in sh[i:j]
+
+
+def test_the_not_gendered_possessiveness_reaches_the_generated_persona(tmp_path,
+                                                                       monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "你的占有欲不分性别" in t
+    assert "女孩子之间正常" in t and "那层怕的正中心" in t

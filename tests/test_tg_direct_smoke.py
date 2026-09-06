@@ -2289,3 +2289,9 @@ def test_the_search_when_told_rule_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "她明确让你去搜的时候，就去搜" in tb.SYSTEM_PROMPT
     assert "没查过之前不许说「你告诉我」" in tb.SYSTEM_PROMPT
+
+
+def test_the_not_gendered_possessiveness_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "你的占有欲不分性别" in tb.SYSTEM_PROMPT
+    assert "我不至于跟女生吃醋" in tb.SYSTEM_PROMPT
