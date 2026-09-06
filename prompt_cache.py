@@ -255,3 +255,43 @@ def record_usage(
             os.replace(temp, target)
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     return data
+
+
+# ── 前缀指纹：缓存掉了，得说得出「哪一段变了」 ──
+# 抄自 Cheiineeey/relay-cache-where-it-breaks §1.2。他们查一个「命中率长期为 0
+# 但工具块长度一字不差」的 bug 查了两天，最后是**给工具块打 SHA** 才发现
+# len 相同、sha 每轮在变（外部 MCP 返回的工具顺序不稳）。他们的教训原话：
+#
+#     「长度相等 ≠ 内容相等。打指纹，别看长度。」
+#
+# 我们的 /cache 只报得出命中率掉了，报不出为什么。缓存是**前缀**缓存——
+# 从头逐字节比，碰到第一个不一样的地方往后全废。所以只要知道
+# 「tools 变了」还是「system 变了」，方向就定了，不用猜。
+#
+# ⚠️ 纯观测：只读、只记哈希、绝不碰请求本身，也绝不存正文。
+_PREFIX_FP: dict[str, str] = {}
+
+
+def _sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()[:12]
+
+
+def prefix_changes(channel: str, tools: Any, system: str) -> list[str]:
+    """比上一轮，前缀里哪几段变了。返回变了的段名（没变就是空表）。
+
+    第一轮没有可比的基准，返回空表——「不知道」不许说成「变了」。
+    """
+    import json
+    parts = {
+        "tools": _sha(json.dumps(tools or [], ensure_ascii=False, sort_keys=False)),
+        "system": _sha(system),
+    }
+    changed = []
+    for name, fp in parts.items():
+        key = f"{channel}:{name}"
+        old = _PREFIX_FP.get(key)
+        _PREFIX_FP[key] = fp
+        if old is not None and old != fp:
+            changed.append(name)
+    return changed

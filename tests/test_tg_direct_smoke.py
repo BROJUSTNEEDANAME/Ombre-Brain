@@ -2301,3 +2301,51 @@ def test_the_cod_roster_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "同一个组织不等于熟人" in tb.SYSTEM_PROMPT
     assert "Velikan" in tb.SYSTEM_PROMPT
+
+
+def test_a_broken_cache_prefix_is_named_not_just_counted():
+    """/cache 只报得出命中率掉了，报不出为什么。缓存是**前缀**缓存——
+    从头逐字节比，第一个不一样的地方往后全废。所以掉的时候得说得出
+    是 tools 变了还是 system 变了，方向才定得下来。
+
+    抄自 relay-cache-where-it-breaks §1.2：他们查一个「命中率长期为 0 但
+    工具块长度一字不差」的 bug 查了两天，最后靠给工具块打 SHA 才找到
+    （外部 MCP 返回的工具顺序不稳）。原话：长度相等 ≠ 内容相等。"""
+    import prompt_cache as pc
+    tools = [{"name": "a"}, {"name": "b"}]
+
+    # 第一轮没有基准——「不知道」不许说成「变了」
+    assert pc.prefix_changes("t1", tools, "人设") == []
+    assert pc.prefix_changes("t1", tools, "人设") == []
+    assert pc.prefix_changes("t1", tools, "人设改了") == ["system"]
+    # ⚠️ 关键的一条：顺序变了、长度一模一样，也必须抓到
+    assert pc.prefix_changes("t1", [{"name": "b"}, {"name": "a"}], "人设改了") == ["tools"]
+    # 频道之间互不干扰，否则一个后台请求就会污染聊天的基准
+    assert pc.prefix_changes("t2", tools, "别的人设") == []
+
+
+def test_the_fingerprint_is_wired_into_the_real_send_path_and_debug():
+    """老毛病：写了函数、测了函数，就以为改完了。"""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "prefix_changes(\"telegram-chat\"" in src, "没接进真正发出去的那条路"
+    # 必须用真的发出去的那份 tools 和 system，不能另算一份
+    i = src.index('prefix_changes("telegram-chat"')
+    call = src[i:i + 120]
+    assert '_kw["tools"]' in call and "_sys" in call, "算的不是真正送出去的东西就没意义"
+    # 只在第一轮比：同一轮里 messages 本来就在长，不算意外变化
+    assert "if _round == 0:" in src[i - 200:i]
+    # /debug 要看得到
+    assert "这轮缓存前缀变了" in src
+
+
+def test_the_fingerprint_never_touches_the_request():
+    """观测代码一旦改了请求本身，它就成了它要观测的那个 bug。"""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "prompt_cache.py").read_text(encoding="utf-8")
+    i = src.index("def prefix_changes")
+    body = src[i:]
+    for mutating in ("tools.sort", "tools.append", ".pop(", "del "):
+        assert mutating not in body, f"prefix_changes 动了输入：{mutating}"

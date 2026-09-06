@@ -73,7 +73,7 @@ from prompt_cache import read_stats as read_prompt_cache_stats
 from prompt_cache import record_usage as record_prompt_cache_usage
 from prompt_cache import request_extra_body as prompt_cache_extra_body
 from prompt_cache import (thinking_request, note_thinking_error,
-                          preset_thinking_level, thinking_state)
+                          preset_thinking_level, thinking_state, prefix_changes)
 from adhd_manager import (
     ManageStore,
     detect_control,
@@ -1249,6 +1249,17 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
         # 正确做法是保留 tools，用 tool_choice="none" 告诉它这轮别调工具、直接说话。
         _kw = {"model": use_model, "max_tokens": _budget, "messages": messages,
                "tools": (BRAIN_TOOLS if writing else CHAT_TOOLS)}
+        # 前缀指纹：缓存是前缀缓存，前面一变后面全废。只有第一轮值得比——
+        # 同一次对话里后面几轮 messages 本来就在长，不算「意外变化」。
+        if _round == 0:
+            _changed = prefix_changes("telegram-chat", _kw["tools"], _sys)
+            if _changed:
+                # ⚠️ 这不一定是 bug：换模型、开写作模式、我改了人设，都会变。
+                # 但她看到命中率掉的时候，得有人说得出**哪一段**变了。
+                logger.info("缓存前缀变了（%s）——这轮的缓存作废", "＋".join(_changed))
+                LAST_TURN["prefix_changed"] = _changed
+            else:
+                LAST_TURN.pop("prefix_changed", None)
         if _force_speak:
             _kw["tool_choice"] = "none"
             logger.info("tool_choice=none 逼他开口（第 %d 轮，已用 %.1fs）", _round + 1, time.time() - _t0)
@@ -2415,6 +2426,11 @@ async def debug_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"整轮 {LAST_TURN['total_s']}s")
     if LAST_TURN.get("result"):
         lines.append(f"结果 {LAST_TURN['result']}")
+    # 缓存掉了要说得出「哪一段变了」——光报一个百分比没法查
+    # （relay-cache-where-it-breaks §1.2：长度相等 ≠ 内容相等，打指纹别看长度）
+    if LAST_TURN.get("prefix_changed"):
+        lines.append("⚠️ 这轮缓存前缀变了：" + "＋".join(LAST_TURN["prefix_changed"])
+                     + "（所以这轮没吃到缓存）")
     lines.append(_cache_line())
     await update.message.reply_text("\n".join(lines))
 
