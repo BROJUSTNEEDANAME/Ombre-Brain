@@ -1330,3 +1330,13 @@ def test_health_read_never_crashes_the_chat(monkeypatch, tmp_path):
     monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
     reply, _ = asyncio.run(cc.run_cc("在吗", None))   # 不许抛
     assert reply == "hi"
+
+
+def test_her_home_world_book_reaches_the_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "熊将军" in t and "三楼的博士生公寓" in t and "室友是一对姐妹" in t

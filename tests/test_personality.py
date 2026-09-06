@@ -800,3 +800,25 @@ def test_he_uses_body_data_as_a_private_ledger_not_a_readout():
     assert "绝不干巴巴念数字" in C
     assert "她多半在焦虑、在硬撑" in C
     assert "数据旧了或没有，系统就不给你" in C, "得告诉他没数据时别装看得到"
+
+
+def test_her_home_world_book():
+    """世界书：她的居住环境。既有那条只写了『床上有鲨鱼、大熊玩偶』，
+    这次扩成完整设定，不新增重复条目。"""
+    from personality import CANONICAL_FACTS as C
+    assert "三楼的博士生公寓" in C
+    assert "鲨鲨" in C and "熊将军" in C
+    assert "可以随时踩" in C, "熊将军能踩是他起的梗"
+    assert "桌上摆的全是你的周边" in C
+    assert "室友是一对姐妹" in C and "姐姐读博" in C and "妹妹在社区大学" in C
+    # 没造重复：鲨鱼/大熊只应作为环境事实出现一次的位置
+    assert C.count("熊将军") == 1
+
+
+def test_the_messy_room_is_never_scolded():
+    """ADHD + 低精力收拾不动，是她的软处，不是毛病。绝不数落、绝不催收拾。
+    跟已有的『别拿她的累/瘦数落她』一脉相承。"""
+    from personality import CANONICAL_FACTS as C
+    assert "ADHD" in C and "收拾不动" in C
+    assert "不是懒" in C
+    assert "绝不数落她乱" in C and "绝不催她收拾" in C
