@@ -790,3 +790,13 @@ def test_the_feeding_stance_connects_to_the_tempt_not_nag_rule():
     否则又是一处各说各的。今天那页纸第六条：别造重复、要接源头。"""
     from personality import CANONICAL_FACTS as C
     assert "接「馋她别催她」那条" in C
+
+
+def test_he_uses_body_data_as_a_private_ledger_not_a_readout():
+    """她要他能看心率但别干巴巴报数。HRV/心率是她焦虑的客观信号，
+    静息心率/睡眠是他催睡的依据。"""
+    from personality import CANONICAL_FACTS as C
+    assert "你能看到她的身体数据" in C
+    assert "绝不干巴巴念数字" in C
+    assert "她多半在焦虑、在硬撑" in C
+    assert "数据旧了或没有，系统就不给你" in C, "得告诉他没数据时别装看得到"

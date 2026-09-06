@@ -13,7 +13,7 @@ find . -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 
 echo "▶ 语法检查"
 python3 -m py_compile server.py telegram_bot.py personality.py writing_style.py \
-    prompt_cache.py utils.py reply_sanitizer.py memory_guard.py morning.py \
+    prompt_cache.py utils.py reply_sanitizer.py memory_guard.py health_store.py morning.py \
     claude_provider.py restore_memories.py backup_memories.py \
     scripts/_verify_claude_key.py contradiction.py stale_ledger.py \
     sweep_contradictions.py env_file.py backfill_embeddings.py || fail=1
@@ -29,7 +29,8 @@ python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_env_file.py tests/test_web_search.py \
     tests/test_cc_persona.py tests/test_autoupdate.py \
     tests/test_memory_guard.py tests/test_cc_status.py \
-    tests/test_persona_switch.py tests/test_backup_alert.py -q || fail=1
+    tests/test_persona_switch.py tests/test_backup_alert.py \
+    tests/test_health_store.py -q || fail=1
 
 # ⚠️ 上面两步是分开跑的，跨文件的互相污染在分步里永远看不见。
 # 真事：test_cc_persona 和 test_tg_direct_smoke 各塞各的 telegram 替身进全局
@@ -43,7 +44,8 @@ python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
     tests/test_env_file.py tests/test_web_search.py \
     tests/test_cc_persona.py tests/test_autoupdate.py \
     tests/test_memory_guard.py tests/test_cc_status.py \
-    tests/test_persona_switch.py tests/test_backup_alert.py -q || fail=1
+    tests/test_persona_switch.py tests/test_backup_alert.py \
+    tests/test_health_store.py -q || fail=1
 
 echo "▶ 未定义名扫描（抽函数漏依赖专用）"
 python3 - <<'PY' || fail=1

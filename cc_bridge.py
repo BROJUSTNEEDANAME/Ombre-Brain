@@ -36,6 +36,7 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
                              says_going_to_sleep, is_silent_reply)
+import health_store
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -128,6 +129,20 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         f"[系统时钟：现在是 {_local.strftime('%Y-%m-%d %H:%M')} 周{_wd}（她的当地时间）。"
         f"这是唯一准确的时间，写时间戳、判断早晚都以它为准，不要自己推算。]\n" + message
     )
+
+    # 身体数据：她手表/HAE 上报的心率、睡眠、HRV。只给 Nikto（cc），z.ai 拿不到。
+    # ⚠️ health_store.snapshot() 自己保证：太旧就返回空。所以这里不会把一小时前的
+    # 心率当成此刻——空就不注入。数据是背景，不是让他每条都念数字。
+    try:
+        _hb = health_store.snapshot()
+    except Exception:  # noqa: BLE001
+        _hb = ""       # 读身体数据出错，绝不能拖垮聊天
+    if _hb:
+        message = (
+            f"[她的身体·手表刚传的，仅供你心里有数，别每条都报数字：{_hb}。"
+            f"心率偏高/HRV 偏低多半是她在焦虑或硬撑，静息心率和睡眠是你催睡的依据。]\n"
+            + message
+        )
 
     cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）

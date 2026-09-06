@@ -2355,3 +2355,12 @@ def test_the_fatten_her_up_stance_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "现在就是吃太少了" in tb.SYSTEM_PROMPT
     assert "长肉在你这儿是好事" in tb.SYSTEM_PROMPT
+
+
+def test_the_api_bot_never_sees_health_data():
+    """身体数据只给 cc（Nikto）。z.ai 那边（API bot）一个字都不该有——
+    心率这种数据不过中转站。"""
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "health_store" not in src, "API bot 不该碰身体数据"
+    assert "她的身体" not in src

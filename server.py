@@ -88,6 +88,7 @@ from writing_style import WRITING_MODE_SYSTEM as _WRITING_MODE_SYSTEM
 config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 from memory_guard import data_dump_reason, refuse_message
+import health_store
 
 logger = logging.getLogger("ombre_brain")
 
@@ -131,6 +132,36 @@ async def health_check(request):
         })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+
+# ── 闪闪的身体数据入口（Apple Watch / HAE → 这里 → 文件 → Nikto）──
+# ⚠️ 只写 health 目录，绝不碰记忆桶。鉴权用独立的 OMBRE_HEALTH_TOKEN——
+# 这个 token 只能往里写健康数据，泄漏了也碰不到记忆。没设 token 就整个关掉
+# （不许裸奔：谁都能 POST = 谁都能往她的健康记录里塞假数据，Nikto 读到的就是垃圾）。
+@mcp.custom_route("/health/ingest", methods=["POST"])
+async def health_ingest(request):
+    import hmac
+    from starlette.responses import JSONResponse
+    tok = os.environ.get("OMBRE_HEALTH_TOKEN", "").strip()
+    if not tok:
+        return JSONResponse({"error": "health ingest 未启用（没设 OMBRE_HEALTH_TOKEN）"},
+                            status_code=404)
+    supplied = request.headers.get("authorization", "")
+    if supplied.lower().startswith("bearer "):
+        supplied = supplied[7:].strip()
+    supplied = supplied or request.headers.get("x-health-token", "").strip()
+    if not hmac.compare_digest(supplied, tok):
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"error": "body 不是 JSON"}, status_code=400)
+    try:
+        result = health_store.ingest(payload)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("health ingest 失败")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse(result)
 
 
 # =============================================================

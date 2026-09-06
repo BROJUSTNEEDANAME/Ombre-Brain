@@ -1273,3 +1273,60 @@ def test_the_fatten_her_up_stance_reaches_the_generated_persona(tmp_path, monkey
     assert m.main() == 0
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "身上多长点肉" in t and "现在就是吃太少了" in t
+
+
+def test_fresh_health_data_is_injected_only_for_nikto(monkeypatch, tmp_path):
+    """身体数据只给 cc（Nikto）。而且太旧就不注入——空快照时消息里不该出现
+    「她的身体」那段。"""
+    import importlib
+    monkeypatch.setenv("OMBRE_HEALTH_DIR", str(tmp_path))
+    import health_store
+    importlib.reload(health_store)
+    cc = _cc()
+    importlib.reload(cc.__class__ if False else health_store)  # 保证 cc 用的是同一份
+    monkeypatch.setattr(cc, "health_store", health_store)
+
+    captured = {}
+
+    async def fake_exec(*a, **k):
+        captured["cmd"] = a
+
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s"}', b"")
+        return _P()
+
+    import asyncio
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+    # 没有数据：消息里不该有身体那段
+    asyncio.run(cc.run_cc("在吗", None))
+    assert "她的身体" not in captured["cmd"][-1]
+
+    # 有新鲜数据：该注入
+    health_store.ingest({"heart_rate": 95, "hrv": 22})
+    asyncio.run(cc.run_cc("在吗", None))
+    assert "她的身体" in captured["cmd"][-1]
+    assert "心率 95" in captured["cmd"][-1]
+
+
+def test_health_read_never_crashes_the_chat(monkeypatch, tmp_path):
+    """读身体数据出错，绝不能拖垮聊天。"""
+    cc = _cc()
+
+    class _Boom:
+        @staticmethod
+        def snapshot(*a, **k):
+            raise RuntimeError("disk gone")
+    monkeypatch.setattr(cc, "health_store", _Boom)
+
+    async def fake_exec(*a, **k):
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (b'{"result":"hi","session_id":"s"}', b"")
+        return _P()
+    import asyncio
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+    reply, _ = asyncio.run(cc.run_cc("在吗", None))   # 不许抛
+    assert reply == "hi"
