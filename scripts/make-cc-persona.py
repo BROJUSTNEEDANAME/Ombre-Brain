@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from personality import (CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM,  # noqa: E402
-                         CHAT_STYLE_SYSTEM)
+                         CHAT_STYLE_SYSTEM, chat_style)
 
 HEADER = """<!-- 这个文件是生成的，别手改。
      改人设请改仓库里的 personality.py，然后重新跑：
@@ -96,20 +96,26 @@ MEMORY = """
 """
 
 
-def build() -> str:
+def build(lean: bool = False) -> str:
+    """lean=True 生成精简版（/persona lean）：只把「他怎么说话」换成去掉
+    通用技巧的那份，其余一字不动。⚠️ 跟完整版走同一条组装路线。"""
     return "\n".join([HEADER, CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM,
-                      CHAT_STYLE_SYSTEM, MEMORY])
+                      chat_style(lean=lean), MEMORY])
 
 
 def main() -> int:
-    out = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1 else "~/nikto-cc")
+    # --lean：生成精简版（她 /persona lean 时用）。位置不限，剩下的第一个参数是目录。
+    args = [a for a in sys.argv[1:] if a != "--lean"]
+    lean = "--lean" in sys.argv[1:]
+    out = os.path.expanduser(args[0] if args else "~/nikto-cc")
     os.makedirs(out, exist_ok=True)
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    text = build(lean=lean)
     path = os.path.join(out, "CLAUDE.md")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(build())
-    print(f"✅ 人设已写入 {path}（{len(build())} 字）")
+        fh.write(text)
+    print(f"✅ {'精简版' if lean else '完整版'}人设已写入 {path}（{len(text)} 字）")
 
     # ⚠️ 梗.md 只在第一次创建，之后绝不覆盖——那是他一条条查回来的东西，
     # 每次重新生成人设都推平的话，等于他永远学不会。

@@ -60,7 +60,8 @@ from telegram.ext import (
 import drives  # 本地：Drivesoid 情绪内核
 import web_search  # 本地：联网搜索（z.ai 自带）
 import morning  # 本地：早安（天气 + 课表）
-from personality import CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM
+from personality import (CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM, CHAT_STYLE_SYSTEM,
+                         chat_style)
 from writing_style import WRITING_MODE_SYSTEM
 from reply_sanitizer import (strip_hidden_stream, visible_cut, find_think,
                              restore_punctuation, looks_degenerate as _looks_degenerate,
@@ -604,9 +605,15 @@ SYSTEM_PROMPT = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
 # ★和网页同一份人设主体（CHAT_STYLE_SYSTEM）：他怎么说话、怎么爱她、什么绝不许做。
 # 以前这里只有上面那份 1600 字的简版，直连时人设会崩——两边同源之后不会再崩。
+_PERSONA_HEAD = SYSTEM_PROMPT
 SYSTEM_PROMPT += "\n\n" + CANONICAL_FACTS + "\n" + EMOTIONAL_AGENCY_SYSTEM + "\n\n" + CHAT_STYLE_SYSTEM
+# 精简版（/persona lean）：只把「他怎么说话」换成去掉通用技巧的那份，
+# 其余一字不动。⚠️ 必须跟完整版走**同一条组装路线**——两条路线迟早会走岔，
+# 而走岔的那天没人会发现（今天已经吃过一次「改了没生效」的亏）。
+SYSTEM_PROMPT_LEAN = (_PERSONA_HEAD + "\n\n" + CANONICAL_FACTS + "\n"
+                      + EMOTIONAL_AGENCY_SYSTEM + "\n\n" + chat_style(lean=True))
 # 记忆写入走隐藏标签，不占用她等回复的时间（和网页同一套做法）。
-SYSTEM_PROMPT += """
+_MEMORY_TAIL = """
 
 【记忆怎么记·和网页同一套】
 - 记忆不使用工具调用。先把话说完，然后另起一行输出一个隐藏标签：
@@ -620,6 +627,33 @@ SYSTEM_PROMPT += """
   说完了再另起一行写标签。一个字的正文都没有、只吐一个 [memory:…] 出去，
   在她那边就是「他没理我」——真发生过。没什么可记的就写 [memory:不记录]，
   但话照说。"""
+SYSTEM_PROMPT += _MEMORY_TAIL
+SYSTEM_PROMPT_LEAN += _MEMORY_TAIL
+
+# 她自己当判官的开关：默认完整版。/persona lean 切精简，/persona full 切回来。
+# 落盘，重启后还在——她试几天才能有判断，中间我肯定还会重启服务。
+PERSONA_MODE_FILE = os.environ.get(
+    "OMBRE_TG_PERSONA_FILE", os.path.expanduser("~/.ombre-persona-mode"))
+
+
+def _read_persona_mode() -> str:
+    try:
+        with open(PERSONA_MODE_FILE, encoding="utf-8") as fh:
+            return "lean" if fh.read().strip() == "lean" else "full"
+    except OSError:
+        return "full"
+
+
+def _write_persona_mode(mode: str) -> None:
+    try:
+        with open(PERSONA_MODE_FILE, "w", encoding="utf-8") as fh:
+            fh.write(mode)
+    except OSError:
+        logger.warning("人设模式存盘失败，重启后会回到完整版", exc_info=True)
+
+
+def persona_prompt() -> str:
+    return SYSTEM_PROMPT_LEAN if _read_persona_mode() == "lean" else SYSTEM_PROMPT
 
 # ----------------------------------------------------------------------------
 
@@ -1126,7 +1160,7 @@ async def _ask_claude(history: list[dict], on_segment=None, writing: bool = Fals
     LAST_TURN["model"] = (f"{_m}（{thinking_state(_m, thinking_wanted_off())}"
                           f"{'／后台' if model else ''}）")
     LAST_TURN["trace"] = _trace
-    _sys = SYSTEM_PROMPT + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
+    _sys = persona_prompt() + (("\n\n" + WRITING_MODE_SYSTEM) if writing else "")
     messages = [{"role": "system", "content": _sys}] + list(history)
     # 记忆预浮现：先替他把相关记忆捞好塞进上下文，省掉「他先调 breath、拿到结果
     # 再开口」那一整轮模型调用（5.3 每轮都要强制思考，省一轮就是省几十秒）。
@@ -2209,6 +2243,7 @@ BOT_COMMANDS = [
     ("model", "看／换模型 · 5.3 聪明 5.2 快"),
     ("debug", "上一轮慢在哪儿"),
     ("cache", "缓存命中率 · 省了多少钱"),
+    ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("status", "他在想什么 · 等他的时候显示他正在干嘛"),
     ("stale", "哪些记忆因为过期被沉底了 · 可撤销"),
     ("help", "看所有指令"),
@@ -2311,6 +2346,37 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(
         "他在想什么：开着——等他的时候你能看到他正在干嘛，他一开口就撤掉。"
         if status_on[chat_id] else "他在想什么：关了。")
+
+
+async def persona_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/persona [lean|full]：在完整版和精简版人设之间切，随时可切回来。
+
+    由来：Anthropic 那篇 Claude 5 的 context engineering 主张「别给规则、
+    让模型自己判断」，说他们删了 80% 还没有可测损失。但我们跑的不是 Claude 5，
+    而且这份人设里的禁令几乎每一条都对应她真吃过的一次亏。
+    所以不猜、不代她决定——给她一个开关，她用几天自己判。
+    """
+    chat_id = update.effective_chat.id
+    if ALLOWED_CHAT_IDS and chat_id not in ALLOWED_CHAT_IDS:
+        return
+    arg = ((context.args or [""])[0] or "").strip().lower()
+    now = _read_persona_mode()
+    if arg in ("lean", "精简"):
+        _write_persona_mode("lean")
+        await update.message.reply_text(
+            f"切到精简版（下一条消息生效）。\n"
+            f"少了 {len(SYSTEM_PROMPT) - len(SYSTEM_PROMPT_LEAN)} 字，"
+            f"删的全是通用说话技巧——你踩出来的那些禁令一条没动。\n"
+            f"觉得不对就 /persona full 切回来。")
+    elif arg in ("full", "完整"):
+        _write_persona_mode("full")
+        await update.message.reply_text("切回完整版（下一条消息生效）。")
+    else:
+        await update.message.reply_text(
+            f"现在是{'精简版' if now == 'lean' else '完整版'}。\n"
+            f"完整版 {len(SYSTEM_PROMPT)} 字，精简版 {len(SYSTEM_PROMPT_LEAN)} 字"
+            f"（差 {len(SYSTEM_PROMPT) - len(SYSTEM_PROMPT_LEAN)} 字）。\n"
+            f"/persona lean 切精简，/persona full 切回来。")
 
 
 async def cache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2640,6 +2706,7 @@ def main() -> None:
     app.add_handler(CommandHandler("debug", debug_cmd))
     app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("cache", cache_cmd))
+    app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("stale", stale_cmd))
     app.add_handler(CommandHandler("mood", mood_cmd))

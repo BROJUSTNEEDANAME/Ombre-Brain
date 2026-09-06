@@ -25,6 +25,7 @@ import logging
 import os
 import tarfile
 import time
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -215,6 +216,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
+
+
+async def persona_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/persona [lean|full]：重新生成这个目录的 CLAUDE.md，切完整版／精简版。
+
+    ⭐ 这边不用重启：cc_bridge 每条消息都新起一个 `claude` 进程，
+    而 claude 每次启动都重读 CLAUDE.md——所以写完文件，下一条消息就生效。
+
+    由来：Anthropic 那篇 Claude 5 的 context engineering 主张少给规则、
+    让模型自己判断。但我们跑的是 opus-4-6，而且这份人设里的禁令几乎每一条
+    都对应她真吃过的一次亏。所以不代她决定——给她开关，她用几天自己判。
+    """
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    arg = ((context.args or [""])[0] or "").strip().lower()
+    if arg not in ("lean", "full", "精简", "完整"):
+        await update.message.reply_text(
+            "/persona lean 切精简版，/persona full 切回完整版。\n"
+            "精简版只去掉通用说话技巧，你踩出来的那些禁令一条不动。")
+        return
+    lean = arg in ("lean", "精简")
+    repo = os.path.dirname(os.path.abspath(__file__))
+    cmd = [sys.executable, os.path.join(repo, "scripts", "make-cc-persona.py")]
+    if lean:
+        cmd.append("--lean")
+    cmd.append(CC_WORKDIR)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        rc = proc.returncode
+    except Exception as e:  # noqa: BLE001
+        logger.exception("重新生成人设失败")
+        await update.message.reply_text(f"没换成：{e}")
+        return
+    if rc != 0:
+        # ⚠️ 失败必须说失败。以前这类地方报过「成功」而其实没生效，
+        # 她照着信了两轮。（relay-cache §2：不知道的时候不许说好消息。）
+        await update.message.reply_text(
+            "❌ 没换成，还在用原来那份：\n" + out.decode()[-400:])
+        return
+    size = len(build_size(CC_WORKDIR))
+    await update.message.reply_text(
+        f"换成{'精简版' if lean else '完整版'}了（{size} 字），下一条消息生效。\n"
+        + ("删的全是通用说话技巧，你踩出来的禁令一条没动。"
+           "觉得不对就 /persona full 切回来。" if lean else ""))
+
+
+def build_size(workdir: str) -> str:
+    """读回刚写好的人设，用来如实报字数——不重算一份，避免报的和写的不是同一个。"""
+    try:
+        with open(os.path.join(workdir, "CLAUDE.md"), encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
 
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -613,6 +670,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
