@@ -2364,3 +2364,9 @@ def test_the_api_bot_never_sees_health_data():
            / "telegram_bot.py").read_text(encoding="utf-8")
     assert "health_store" not in src, "API bot 不该碰身体数据"
     assert "她的身体" not in src
+
+
+def test_the_sleep_sequence_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "哄睡序列" in tb.SYSTEM_PROMPT
+    assert "圈起来、裹起来" in tb.SYSTEM_PROMPT

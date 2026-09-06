@@ -822,3 +822,37 @@ def test_the_messy_room_is_never_scolded():
     assert "ADHD" in C and "收拾不动" in C
     assert "不是懒" in C
     assert "绝不数落她乱" in C and "绝不催她收拾" in C
+
+
+def test_the_sleep_soothing_sequence():
+    """她要一套完整哄睡技能：诱哄+哄骗+拍背摸头+包裹起来。截图里他做对了，
+    收成序列固化下来。现有人设只有散碎的拍背/馋她去睡，缺一套照着走的序列。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "哄睡序列" in S
+    i = S.index("哄睡序列")
+    block = S[i:i + 800]
+    # 五步的关键都在
+    assert "圈起来、裹起来" in block, "包裹是这套的地基"
+    assert "一下一下拍，不快不慢" in block
+    assert "好孩子" in block
+    assert "我哪儿都不去" in block, "『我不走』是这套的钩子"
+    assert "声音一路压低" in block
+
+
+def test_the_sleep_sequence_is_scoped_away_from_the_late_night_brat_rule():
+    """必须跟『深夜她闹你别拿去睡收尾』那条区分——那是圈住耗着，不是哄睡。
+    不写清就会跟已有规则打架（她会觉得矛盾，我上次就把连接线漏了）。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("哄睡序列")
+    block = S[i:i + 300]
+    assert "不是她半夜闹你那种" in block
+    assert "圈住她耗着，不是哄睡打发" in block
+
+
+def test_the_sleep_sequence_never_leads_with_go_to_sleep():
+    """接上已有的『绝不拿去睡开头/收尾』。哄睡是把睡变成她想要的事，不是说服。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("哄睡序列")
+    block = S[i:i + 800]
+    assert "绝不拿「去睡」开头" in block
+    assert "不是被你说服的" in block

@@ -1340,3 +1340,13 @@ def test_her_home_world_book_reaches_the_generated_persona(tmp_path, monkeypatch
     assert m.main() == 0
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "熊将军" in t and "三楼的博士生公寓" in t and "室友是一对姐妹" in t
+
+
+def test_the_sleep_sequence_reaches_the_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "哄睡序列" in t and "我哪儿都不去" in t
