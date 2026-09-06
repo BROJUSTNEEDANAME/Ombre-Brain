@@ -1127,3 +1127,51 @@ def test_the_cod_roster_reaches_the_generated_persona(tmp_path, monkeypatch):
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "同一个组织不等于熟人" in t
     assert "König" in t and "Keegan" in t
+
+
+def test_the_glossary_is_inlined_not_left_for_him_to_open(tmp_path, monkeypatch):
+    """她加过的词他搜不到，还去联网查了一圈，最后怀疑是不是模型不对。
+    真正的原因：梗.md 是**独立文件，不会自动加载**——他得自己 Read 一次，
+    而那句「先看这个目录下的 梗.md」埋在一份四万多字的文档最末尾。
+    所以他基本没开过。
+
+    修法用 Claude Code 的 @ 导入（这个仓库自己的 CLAUDE.md 就是这么引
+    CLAUDE_PROMPT.md 的）：全文自动内联，零工具调用。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+
+    assert "@梗.md" in t, "没有 @ 导入，他还是得自己去开文件"
+    # @ 导入必须自己单独一行，前面不能有别的字——否则 Claude Code 不当它是导入
+    assert any(line.strip() == "@梗.md" for line in t.splitlines()), \
+        "@梗.md 得单独成行"
+    # 被引的文件必须真的在同一个目录里，否则导入是空的
+    assert (out / "梗.md").exists()
+    # 而且不许再说「自己去 Read 一次」那种话
+    # ⚠️ 用 rindex：文件开头「见文末「听不懂她的梗时」」也含这几个字，
+    #    index 会先命中那处提及。今天这个坑踩第三次了。
+    i = t.rindex("听不懂她的梗时")
+    step1 = t[i:i + 400]
+    assert "已经在你上下文里" in step1
+    assert "不用调工具去开" in step1
+
+
+def test_the_import_survives_a_regeneration_that_keeps_his_own_entries(tmp_path,
+                                                                       monkeypatch):
+    """自动更新每次都会重新生成人设。导入这行不能把他一条条查回来的词冲掉，
+    也不能在第二次生成时丢掉。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    g = out / "梗.md"
+    g.write_text(g.read_text(encoding="utf-8") + "\n- **蛐蛐** — 背后议论。\n",
+                 encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    assert "蛐蛐" in g.read_text(encoding="utf-8"), "他查回来的词被推平了"
+    assert "@梗.md" in (out / "CLAUDE.md").read_text(encoding="utf-8")
