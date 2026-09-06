@@ -57,6 +57,17 @@ TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))  # 她的时区（太
 BUCKETS_DIR = os.environ.get("OMBRE_BUCKETS_DIR", os.path.join(CC_WORKDIR, "buckets"))
 BACKUP_DIR = os.environ.get("OMBRE_BACKUP_DIR", os.path.expanduser("~/ombre-backups"))
 BACKUP_KEEP = int(os.environ.get("OMBRE_BACKUP_KEEP", "14"))
+# 自动备份 + 失败报警。
+# 由来（学自 Jade3551/Sora-mem 的 ops/ 思路，但不抄它的代码——它绑 PostgreSQL，
+# 我们是文件）：记忆桶只有手动 /backup，没有定时。她的服务器这几天又是 .git
+# 权限炸、又是跑旧代码——万一哪天 buckets/ 出事，她会一声不响丢掉全部记忆，
+# 而且发现时已经晚了。
+# ⚠️ 最要紧的一条（relay-cache §2）：一个 0 字节的假备份比没有备份更坏——
+# 它给你「有备份」的错觉。所以打完包必须验证真能打开、真有东西，验不过＝失败。
+BACKUP_EVERY_H = float(os.environ.get("OMBRE_BACKUP_EVERY_HOURS", "24"))
+# 最新备份比这个还旧就报警。默认给定时间隔留一倍余量，偶尔晚一轮不误报。
+BACKUP_STALE_H = float(os.environ.get("OMBRE_BACKUP_STALE_HOURS",
+                                      str(BACKUP_EVERY_H * 2 + 1)))
 
 # 空回复的两次重试话术。一次比一次直接；**都不带她的原话**——
 # 重发原话等于让他把同一轮再答一遍，那正是原来不管用的原因。
@@ -627,6 +638,79 @@ def _do_backup():
     return dest
 
 
+def _verify_backup(path: str) -> str:
+    """打完包验一遍：能打开、里面真有 buckets/、且不是空壳。
+    返回空字符串＝好；返回一句话＝哪儿不对（当失败处理）。
+    ⚠️ tarfile 打不开、被截断、或里面没有真文件，都比「没备份」更危险，
+    因为文件名摆在那儿，你以为有。"""
+    try:
+        if os.path.getsize(path) < 100:
+            return f"备份文件只有 {os.path.getsize(path)} 字节，基本是空的"
+        with tarfile.open(path, "r:gz") as tar:
+            members = tar.getmembers()
+    except Exception as e:  # noqa: BLE001
+        return f"备份打不开（{type(e).__name__}: {e}）——文件坏了"
+    has_bucket = any(m.isfile() and "/buckets/" in ("/" + m.name)
+                     and m.size > 0 for m in members)
+    if not has_bucket:
+        return "备份里没有任何非空的 buckets 文件——打了个空壳"
+    return ""
+
+
+def _newest_backup_age_h() -> float | None:
+    """最新一份备份距现在多少小时。一份都没有返回 None。"""
+    files = glob.glob(os.path.join(BACKUP_DIR, "buckets-*.tar.gz"))
+    if not files:
+        return None
+    return (time.time() - max(os.path.getmtime(f) for f in files)) / 3600.0
+
+
+async def _alert(context, text: str) -> None:
+    """把一句话推给她（备份出事时用）。发给 ALLOWED_CHAT_IDS 里的每个人。
+    ⚠️ 报警本身失败也不能把定时任务带崩——那样连「报警挂了」都没人知道。"""
+    for cid in (ALLOWED_CHAT_IDS or set()):
+        try:
+            await context.bot.send_message(chat_id=cid, text=text)
+        except Exception:  # noqa: BLE001
+            logger.exception("备份报警发不出去 chat=%s", cid)
+
+
+async def auto_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """定时备份 + 三种失败都报警：打包抛异常 / 打包成功但验证不过 / 压根没生成。
+
+    分成两条独立的判断，是故意的（relay-cache §2 的教训）：
+    「这一轮备份成不成功」和「库里到底有没有一份新鲜的备份」是两件事。
+    只看前者，会在「任务悄悄不再运行」时完全沉默——而那恰恰最危险。
+    """
+    dest = None
+    try:
+        dest = await asyncio.to_thread(_do_backup)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("自动备份抛异常")
+        await _alert(context, f"⚠️ 记忆自动备份失败了：{type(e).__name__}: {e}\n"
+                              "先别慌，手动 /backup 试一次；连着几天这样就得上服务器看。")
+    else:
+        if dest is None:
+            await _alert(context, "⚠️ 记忆自动备份没找到 buckets 目录——"
+                                  f"它该在 {BUCKETS_DIR}。是不是路径变了、或者大脑没在这台机器上？")
+        else:
+            bad = _verify_backup(dest)
+            if bad:
+                await _alert(context, f"⚠️ 记忆备份生成了，但验证不过：{bad}\n"
+                                      "这份不能信，当没备份处理。手动 /backup 看看。")
+            else:
+                logger.info("自动备份 OK：%s", os.path.basename(dest))
+
+    # 独立的第二道：不管上面成没成，看看库里最新那份有多旧。
+    # 这条能抓住「任务已经好几轮没真的跑成功」——只靠上面那段是抓不到的。
+    age = _newest_backup_age_h()
+    if age is None:
+        await _alert(context, "⚠️ 一份记忆备份都没有。要么从没成功过，要么备份目录被清了。")
+    elif age > BACKUP_STALE_H:
+        await _alert(context, f"⚠️ 最新的记忆备份已经是 {age:.0f} 小时前的了"
+                              f"（该每 {BACKUP_EVERY_H:.0f} 小时一份）。备份可能悄悄停了。")
+
+
 async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/backup —— 立刻打包记忆并把文件发到这个对话（异地留档，她的底牌）。"""
     cid = update.effective_chat.id
@@ -789,6 +873,12 @@ def main() -> None:
         # 每分钟看一眼；真正的间隔由 NUDGE_MINUTES 判断，这样她刚说完话
         # 到下一次找她之间是准的，不会被 15 分钟的粗粒度拖成 30 分钟。
         app.job_queue.run_repeating(check_inactivity, interval=60, first=60)
+        # 自动备份：每 BACKUP_EVERY_H 小时一次，启动 2 分钟后先跑一次
+        # （这样每次重启都会顺手存一份，也顺手验证一次报警链路通不通）。
+        app.job_queue.run_repeating(auto_backup,
+                                    interval=BACKUP_EVERY_H * 3600, first=120)
+        logger.info("自动备份已开：每 %.0f 小时一份，超过 %.0f 小时没新备份就报警",
+                    BACKUP_EVERY_H, BACKUP_STALE_H)
         logger.info("主动找她已开：每 %d 分钟一次，一段沉默最多 %d 次%s",
                     NUDGE_MINUTES, NUDGE_MAX,
                     f"，{NUDGE_QUIET} 点之间不打扰" if NUDGE_QUIET else "")
