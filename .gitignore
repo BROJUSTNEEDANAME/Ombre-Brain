@@ -28,3 +28,8 @@ telegram_state.json
 ios-app/node_modules/
 ios-app/ios/
 ios-app/package-lock.json
+
+# 私密传讯/聊天原文存档——绝不入库（可能公开的仓库里不放这些）
+ombre-archive/
+*.传讯.txt
+archive/

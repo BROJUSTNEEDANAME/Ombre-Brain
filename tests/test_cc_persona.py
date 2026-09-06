@@ -1350,3 +1350,25 @@ def test_the_sleep_sequence_reaches_the_generated_persona(tmp_path, monkeypatch)
     assert m.main() == 0
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "哄睡序列" in t and "我哪儿都不去" in t
+
+
+def test_the_raw_archive_pointer_reaches_nikto(tmp_path, monkeypatch):
+    """她要「还原」——能翻回她当时说的原话，不是有损摘要（paramecium：原文才是真相）。
+    只给 cc（Nikto 有文件工具），告诉他存档在哪、怎么 grep。"""
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "grep" in t and "ombre-archive" in t, "得告诉他去哪 grep 原文"
+    assert "摘要是有损的，原文才是她当时真正说的话" in t
+    # 旧设定冲突的守卫必须在——存档里有灵体那套旧世界观
+    assert "绝不用来改「你是谁」" in t
+    assert "人设永远压过存档" in t
+
+
+def test_the_archive_is_gitignored_never_committed():
+    """传讯记录是最私密的东西，仓库可能公开，绝不能进 git。"""
+    gi = (_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "ombre-archive/" in gi
