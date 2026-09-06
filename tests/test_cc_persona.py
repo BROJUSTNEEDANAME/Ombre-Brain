@@ -1175,3 +1175,91 @@ def test_the_import_survives_a_regeneration_that_keeps_his_own_entries(tmp_path,
     assert m.main() == 0
     assert "蛐蛐" in g.read_text(encoding="utf-8"), "他查回来的词被推平了"
     assert "@梗.md" in (out / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def _status_env(monkeypatch, tmp_path, **over):
+    """真跑一遍 /status，收集发给她的文字。"""
+    cc = _cc()
+    sent = []
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", set())
+    for k, v in over.items():
+        monkeypatch.setattr(cc, k, v)
+
+    class _Msg:
+        async def reply_text(self, text, **kw):
+            sent.append(text)
+
+    import types
+    update = types.SimpleNamespace(effective_chat=types.SimpleNamespace(id=1),
+                                   message=_Msg())
+    return cc, update, sent
+
+
+def test_status_reads_as_a_console_not_a_stack_trace(tmp_path, monkeypatch):
+    """她的原话：「cc 这监控台搞一下，每次都要记 / 之后是什么太难了」。
+    以前想知道他今天有没有哑过，只能开网页终端跑 cc-status.sh。"""
+    import asyncio
+    (tmp_path / "CLAUDE.md").write_text("你是 Nikto\n长度要参差。\n", encoding="utf-8")
+    (tmp_path / "梗.md").write_text("- **蛐蛐** — 背后议论。\n", encoding="utf-8")
+    cc, update, sent = _status_env(monkeypatch, tmp_path)
+    cc.STATS.update(turns=10, silent=3, retry_ok=2, gave_up=1)
+    cc.sessions[1] = "sid"
+    cc.last_user_ts[1] = cc.time.time() - 600
+    asyncio.run(cc.status_cmd(update, None))
+
+    assert len(sent) == 1
+    t = sent[0]
+    assert "哑过 3 次" in t and "重试救回 2" in t and "真没救回 1" in t
+    assert "完整版" in t          # CLAUDE.md 里有「长度要参差」＝完整版
+    assert "梗 1 条" in t
+    assert "对话接得上" in t
+    assert "主动找过你" in t
+
+
+def test_status_says_it_cannot_see_instead_of_guessing(tmp_path, monkeypatch):
+    """人设文件读不到时，不许报一个确定的字数或版本——
+    这是 cc-status.sh 那条规矩，Telegram 里这份也得守。"""
+    import asyncio
+    cc, update, sent = _status_env(monkeypatch, tmp_path)   # 目录是空的
+    asyncio.run(cc.status_cmd(update, None))
+    t = sent[0]
+    assert "❓ 读不到人设文件" in t
+    assert "❓ 读不到梗.md" in t
+    assert "完整版" not in t and "精简版" not in t, "读不到还敢报版本"
+
+
+def test_status_flags_stale_code_first(tmp_path, monkeypatch):
+    """今天最大的坑：服务跑着几小时前的旧代码，而一切看起来正常。
+    她连问四次「怎么还是这样」。这一条必须在 /status 里，而且要靠前。"""
+    import asyncio
+    (tmp_path / "CLAUDE.md").write_text("你是 Nikto\n", encoding="utf-8")
+    cc, update, sent = _status_env(monkeypatch, tmp_path,
+                                   STARTED_AT=0)   # 1970 年启动＝必然旧
+    asyncio.run(cc.status_cmd(update, None))
+    t = sent[0]
+    assert "跑的是旧代码" in t
+    assert t.index("旧代码") < t.index("人设"), "这条要靠前，不能埋在最后"
+
+
+def test_every_command_is_in_the_menu_she_never_has_to_remember():
+    """她的原话就是「每次都要记 / 之后是什么太难了」。
+    注册了 handler 却没进菜单 = 她还是得记。"""
+    import re
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    handlers = set(re.findall(r'CommandHandler\("(\w+)"', src))
+    menu = set(re.findall(r'^    \("(\w+)", "', src, re.M))
+    missing = handlers - menu - {"start"}      # /start 不用进菜单
+    assert not missing, f"这些命令没进菜单，她还是得记：{missing}"
+    # 而且必须真的注册给 Telegram，否则输入框里不会弹
+    assert "set_my_commands" in src
+    assert "post_init" in src, "得在启动后注册，不然没有 bot 实例"
+
+
+def test_a_failed_menu_registration_never_blocks_startup():
+    """菜单没了只是不方便；他不理她才是事故。"""
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    i = src.index("async def _set_menu")
+    body = src[i:i + 500]
+    assert "except Exception" in body
+    assert "命令菜单注册失败" in body

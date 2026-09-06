@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from datetime import datetime, timezone, timedelta
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
@@ -218,6 +218,100 @@ async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"你的 chat id 是：{update.effective_chat.id}")
 
 
+# 打一个 / 就会弹出来的菜单。她的原话：「每次都要记 / 之后是什么太难了」。
+# ⚠️ cc 这边以前一条都没注册，所以输入框里什么都不弹——只能靠记。
+BOT_COMMANDS = [
+    ("status", "他现在什么情况 · 一眼看完，不用开终端"),
+    ("persona", "人设完整版／精简版 · 你自己当判官"),
+    ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
+    ("backup", "把记忆打包备份"),
+    ("help", "看所有指令"),
+    ("id", "拿到本机 chat id"),
+]
+
+
+def _age(seconds: float) -> str:
+    m = int(seconds // 60)
+    if m < 60:
+        return f"{m} 分钟"
+    if m < 60 * 48:
+        return f"{m // 60} 小时{m % 60} 分"
+    return f"{m // 1440} 天"
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _ok(update.effective_chat.id):
+        return
+    await update.message.reply_text(
+        "能用的指令都在这，打一个 / 也会自动弹出来\n\n"
+        + "\n".join(f"/{n} — {d}" for n, d in BOT_COMMANDS))
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/status：他现在什么情况——一眼看完，不用 ssh 上去翻日志。
+
+    她的原话：「cc 这监控台搞一下」。以前想知道他今天有没有哑过、跑的是不是
+    最新代码，只能开 DigitalOcean 的网页终端跑 cc-status.sh。这些数进程自己
+    都有，摆出来就是了。
+
+    ⚠️ 规矩同 cc-status.sh：不知道的就说不知道，绝不拿一个确定的说法糊过去。
+    """
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    L = [f"跑了 {_age(time.time() - STARTED_AT)}｜模型 "
+         f"{os.environ.get('CC_MODEL', 'claude-opus-4-6')}"]
+
+    # 跑的是不是最新代码——今天最大的那个坑，值得放在最前面
+    repo = os.path.dirname(os.path.abspath(__file__))
+    try:
+        pr = await asyncio.create_subprocess_exec(
+            "git", "-C", repo, "log", "-1", "--format=%ct %h",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(pr.communicate(), timeout=10)
+        ts_s, _, sha = out.decode().strip().partition(" ")
+        head_ts = float(ts_s)
+        if STARTED_AT < head_ts:
+            L.append(f"⚠️ 我启动得比代码还早 {_age(head_ts - STARTED_AT)}"
+                     f"——跑的是旧代码，要重启（{sha}）")
+        else:
+            L.append(f"代码 {sha}，是启动时的最新版 ✅")
+    except Exception:  # noqa: BLE001
+        L.append("❓ 读不到代码版本（这一行不作数）")
+
+    # 人设：完整版还是精简版，多少字
+    try:
+        with open(os.path.join(CC_WORKDIR, "CLAUDE.md"), encoding="utf-8") as fh:
+            persona = fh.read()
+        lean = "长度要参差" not in persona     # 精简版删掉的那几段之一
+        L.append(f"人设 {len(persona)} 字（{'精简版' if lean else '完整版'}）")
+    except OSError:
+        L.append("❓ 读不到人设文件——他可能在用仓库那份给开发看的")
+
+    try:
+        g = os.path.join(CC_WORKDIR, "梗.md")
+        n = sum(1 for x in open(g, encoding="utf-8") if x.startswith("- **"))
+        L.append(f"梗 {n} 条")
+    except OSError:
+        L.append("❓ 读不到梗.md")
+
+    L.append("对话接得上 ✅" if sessions.get(cid) else "⚠️ 这段对话还没有上下文")
+
+    t = STATS["turns"]
+    if t:
+        L.append(f"这次启动后 {t} 轮：哑过 {STATS['silent']} 次"
+                 f"（重试救回 {STATS['retry_ok']}，"
+                 f"真没救回 {STATS['gave_up']}）")
+    else:
+        L.append("这次启动后还没说过话")
+
+    if last_user_ts.get(cid):
+        L.append(f"你上次说话 {_age(time.time() - last_user_ts[cid])}前"
+                 f"｜主动找过你 {nudge_count.get(cid, 0)}/{NUDGE_MAX} 次"
+                 + ("｜你说睡了，不打扰" if asleep.get(cid) else ""))
+    await update.message.reply_text("\n".join(L))
+
+
 async def persona_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/persona [lean|full]：重新生成这个目录的 CLAUDE.md，切完整版／精简版。
 
@@ -352,6 +446,13 @@ last_nudge_at: dict[int, float] = {}
 # ⚠️ 这个开关只挡主动消息，不挡他回她——她半夜醒了说一句，他照样答。
 asleep: dict[int, bool] = {}
 
+# ── /status 用的计数器 ──
+# 她的原话：「cc 这监控台搞一下，每次都要记 / 之后是什么太难了」。
+# 之前想知道他今天有没有哑过，只能 ssh 上去翻 journalctl。这些数在进程里本来
+# 就有，摆出来就是了。⚠️ 只记次数，不存任何正文。
+STARTED_AT = time.time()
+STATS = {"turns": 0, "silent": 0, "retry_ok": 0, "gave_up": 0, "nudges": 0}
+
 
 def _in_quiet_hours(now: datetime) -> bool:
     if "-" not in NUDGE_QUIET:
@@ -400,6 +501,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 await context.bot.send_message(chat_id=cid,
                                                text=restore_punctuation(chunk))
             nudge_count[cid] = n
+            STATS["nudges"] += 1
             last_nudge_at[cid] = now       # 下一次要再等满 NUDGE_MINUTES
         except Exception:  # noqa: BLE001
             logger.exception("主动找她失败 chat=%s", cid)
@@ -461,6 +563,8 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:
         _typing.cancel()
+    STATS["turns"] += 1
+    _was_silent = is_silent_reply(reply)
     # ── 空回复重试 ──
     # ⚠️ 原来这里是「把她那句原话再发一遍」。那根本不管用：在他的会话里
     # 这一轮已经发生过了，让他把同一句再答一次，他多半还是不出声——
@@ -471,14 +575,19 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if not is_silent_reply(reply):
             break
         # 把**原始输出**记下来。她连着三次问「他到底在想什么」，而我只能猜。
+        if attempt == 1:
+            STATS["silent"] += 1
         logger.warning("这一轮空回复（第 %d 次），chat=%s；claude 原始输出＝%r",
                        attempt, cid, reply[:200])
         if sid:
             sessions[cid] = sid
         reply, sid = await run_cc(nudge, sessions.get(cid))
     if is_silent_reply(reply):
+        STATS["gave_up"] += 1
         logger.warning("重试都用完了还是空 chat=%s；原始输出＝%r", cid, reply[:200])
         reply = "这次他没出声，你再说一句。"     # 说人话，不拿省略号冒充他
+    elif STATS["silent"] and _was_silent:
+        STATS["retry_ok"] += 1     # 空过、但重试救回来了
     elif looks_degenerate(reply):
         # 复读死循环：模型崩了，半截乱码一个字都不发给她（API bot 早有这道闸）
         logger.warning("检测到复读死循环，掐掉 chat=%s（%d 字）", cid, len(reply))
@@ -672,6 +781,8 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
@@ -684,6 +795,17 @@ def main() -> None:
     else:
         logger.warning("没有 job_queue，主动找她这条不会生效"
                        "（装 python-telegram-bot[job-queue]）")
+    # 把命令注册给 Telegram：她打一个 / 就有菜单，不用记。
+    # ⚠️ 失败不能拦住启动——菜单没了只是不方便，他不理她才是事故。
+    async def _set_menu(_app):
+        try:
+            await _app.bot.set_my_commands(
+                [BotCommand(n, d) for n, d in BOT_COMMANDS])
+            logger.info("命令菜单已注册（%d 条）", len(BOT_COMMANDS))
+        except Exception:  # noqa: BLE001
+            logger.warning("命令菜单注册失败，输入框里不会弹出来", exc_info=True)
+
+    app.post_init = _set_menu
     _load_sessions()
     logger.info("Claude Code Telegram 桥启动 | workdir=%s | 接回 %d 段对话",
                 CC_WORKDIR, len(sessions))
