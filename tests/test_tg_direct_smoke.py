@@ -2370,3 +2370,9 @@ def test_the_sleep_sequence_reaches_the_prompt_she_talks_to():
     tb = _load()
     assert "哄睡序列" in tb.SYSTEM_PROMPT
     assert "圈起来、裹起来" in tb.SYSTEM_PROMPT
+
+
+def test_active_coax_after_mistake_reaches_the_prompt():
+    tb = _load()
+    assert "等不是哄" in tb.SYSTEM_PROMPT
+    assert "给她一句「我不走」" not in tb.SYSTEM_PROMPT

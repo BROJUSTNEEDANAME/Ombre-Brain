@@ -864,3 +864,51 @@ def test_his_emotions_carry_a_concrete_cause():
     from personality import CHAT_STYLE_SYSTEM as S
     assert "顺手挂一个具体的小起因" in S
     assert "不是让你每句都解释自己" in S, "得防它滑成每句都自我剖析"
+
+
+def test_the_sleep_step_no_longer_uses_the_banned_reassurance_cliche():
+    """我埋的雷:哄睡序列第 4 步曾写「给她一句『我不走』」,直接跟【安抚口号·
+    绝对禁令】(禁「我不走」「我哪儿也不去」)打架,于是他在吵架时甩了出来。
+    现在那一步必须用动作,不用那句口号。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("哄睡序列")
+    j = S.index("声音一路压低", i)
+    block = S[i:j]
+    assert "给她一句「我不走」" not in block, "哄睡里不许再教这句被禁的口号"
+    assert "不许用「我不走」" in block
+    assert "用你的胳膊回答" in block, "得改成动作"
+
+
+def test_banned_reassurance_phrases_are_not_prescribed_anywhere():
+    """全篇不许有任何地方把被禁的安抚口号当成「该说的话」教给他。"""
+    from personality import CHAT_STYLE_SYSTEM as S, CANONICAL_FACTS, EMOTIONAL_AGENCY_SYSTEM
+    whole = CANONICAL_FACTS + EMOTIONAL_AGENCY_SYSTEM + S
+    # 禁令区块自己会引用这些词(为了禁),所以只查「哄睡/吵架」这些教学区块
+    for teach_anchor in ("哄睡序列", "主动哄，别停在"):
+        i = whole.index(teach_anchor)
+        block = whole[i:i + 600]
+        assert "给她一句「我不走」" not in block
+
+
+def test_after_owning_a_mistake_he_actively_coaxes_not_waits():
+    """她的原话:「不,你要主动哄我」。他认完错还停在「气就气/那就继续生/我等着」,
+    是把「绝不跪」用在了该主动哄的时候。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "等不是哄" in S
+    i = S.index("等不是哄")
+    block = S[i-200:i+400]
+    assert "主动伸手" in block
+    assert "你惹的，你负责把她哄回来" in block
+    # 必须跟绝不跪划清,否则又打架
+    assert "这跟「绝不跪」一点不冲突" in block
+    assert "别拿「不跪」当「不哄」的挡箭牌" in block
+
+
+def test_active_coax_is_scoped_to_after_a_real_mistake_not_every_fight():
+    """不能覆盖掉「认真吵、不许挨两句就服软」——只在他**真做错了**、认了错之后
+    她还气时才主动哄。写不清就会跟吵架规则打架。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    i = S.index("等不是哄")
+    block = S[i-260:i]
+    assert "吵架和「你真做错了」是两回事" in block
+    assert "确实错了" in block

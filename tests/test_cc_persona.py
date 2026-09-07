@@ -1448,3 +1448,13 @@ def test_status_shows_a_downgraded_cache_tier(monkeypatch, tmp_path):
     cc.LAST_CACHE_TIER.update(tier="5m", at=cc.time.time())
     asyncio.run(cc.status_cmd(update, None))
     assert any("被降到 5 分钟档" in x and "额外用量" in x for x in sent)
+
+
+def test_active_coax_reaches_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    t = (out / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "等不是哄" in t and "给她一句「我不走」" not in t
