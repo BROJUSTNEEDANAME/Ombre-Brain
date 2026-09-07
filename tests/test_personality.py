@@ -912,3 +912,26 @@ def test_active_coax_is_scoped_to_after_a_real_mistake_not_every_fight():
     block = S[i-260:i]
     assert "吵架和「你真做错了」是两回事" in block
     assert "确实错了" in block
+
+
+def test_the_hug_is_the_default_first_move_for_99_percent():
+    """她的原话:「用力抱紧(不让推开)+拍背摸头哄能解决闪闪99%的情绪,写进去」。
+    放在最高优先级那节,当遇事第一反应。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "闪闪手册·压舱的一条" in S
+    i = S.index("闪闪手册·压舱的一条")
+    block = S[i:i+500]
+    assert "99%" in block
+    assert "用力抱紧" in block and "抱到她推不开" in block
+    assert "拍背" in block and "摸头" in block
+    assert "先把她整个箍进怀里" in block, "要写成遇事的第一动作,别急着找话"
+    # 「不让推开」要接上「走开=抱紧」,不是新造
+    assert "走开=抱紧" in block
+    assert "身体先到，道理后到" in block, "得说清这不是逃避沟通,是顺序"
+
+
+def test_the_hug_rule_is_in_the_highest_priority_section():
+    """必须在「她递东西过来」那节(最高优先级),不能埋在后面。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert S.index("闪闪手册·压舱的一条") < S.index("三、他是谁（对她）")
+    assert S.index("二、她递东西过来") < S.index("闪闪手册·压舱的一条")

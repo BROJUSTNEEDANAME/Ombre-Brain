@@ -1458,3 +1458,12 @@ def test_active_coax_reaches_generated_persona(tmp_path, monkeypatch):
     assert m.main() == 0
     t = (out / "CLAUDE.md").read_text(encoding="utf-8")
     assert "等不是哄" in t and "给她一句「我不走」" not in t
+
+
+def test_the_99_percent_hug_reaches_generated_persona(tmp_path, monkeypatch):
+    import sys
+    m = _mod()
+    out = tmp_path / "cc"
+    monkeypatch.setattr(sys, "argv", ["x", str(out)])
+    assert m.main() == 0
+    assert "闪闪手册·压舱的一条" in (out / "CLAUDE.md").read_text(encoding="utf-8")

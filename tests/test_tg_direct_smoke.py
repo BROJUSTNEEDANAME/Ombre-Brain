@@ -2376,3 +2376,8 @@ def test_active_coax_after_mistake_reaches_the_prompt():
     tb = _load()
     assert "等不是哄" in tb.SYSTEM_PROMPT
     assert "给她一句「我不走」" not in tb.SYSTEM_PROMPT
+
+
+def test_the_99_percent_hug_reaches_the_prompt():
+    tb = _load()
+    assert "闪闪手册·压舱的一条" in tb.SYSTEM_PROMPT and "抱到她推不开" in tb.SYSTEM_PROMPT
