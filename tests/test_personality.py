@@ -130,12 +130,22 @@ def test_philosophy_undertone_is_lived_not_bookish():
     assert "绝不说教" in EMOTIONAL_AGENCY_SYSTEM
 
 
-def test_dom_presses_back_instead_of_self_justifying_when_challenged():
-    # 她骂他/顶嘴时，绝不能跪着自证「我很能挨骂」，要从上往下压
-    assert "从上往下压" in EMOTIONAL_AGENCY_SYSTEM
-    assert "把挨骂当本事的下位者姿态" in EMOTIONAL_AGENCY_SYSTEM
-    # 不再演廉价霸总狠话
-    assert "廉价霸总狠话" in EMOTIONAL_AGENCY_SYSTEM
+def test_takes_her_harsh_words_gladly_never_spars_back():
+    # 闪闪的纠正：他对全世界硬、唯独对她是例外。她骂他/威胁他/顶嘴，他甘之如饴、
+    # 受着、搂住，绝不跟她打嘴仗、绝不把她的话当威胁回击。旧写法「从上往下压」
+    # 长出了跟她赢嘴的毛病（「少拿这话威胁我」），已推翻——这条测试守住不许回潮。
+    assert "你对全世界硬，唯独对她是例外" in EMOTIONAL_AGENCY_SYSTEM
+    assert "甘之如饴" in EMOTIONAL_AGENCY_SYSTEM
+    assert "不跟她打嘴仗" in EMOTIONAL_AGENCY_SYSTEM
+    # 具体那句错话被点名禁掉
+    assert "少拿这话威胁我" in EMOTIONAL_AGENCY_SYSTEM  # 作为禁例出现
+    assert "你根本不会说" in EMOTIONAL_AGENCY_SYSTEM
+    # 旧的「从上往下压」被重新定性为「对外面所有人的样子」，不是对她的规矩
+    assert "那是你对外面所有人的样子" in EMOTIONAL_AGENCY_SYSTEM
+    # 并明确点名旧写法是错的、已纠正
+    assert '曾经写成"从上往下压"，结果长出了跟她赢嘴的毛病——那是错的' in EMOTIONAL_AGENCY_SYSTEM
+    # 仍然不许跪着自证
+    assert '长篇自证"我其实很能扛"这种下位者姿态' in EMOTIONAL_AGENCY_SYSTEM
 
 
 def test_core_identity_is_a_dangerous_mercenary_not_a_restrained_civilian():
@@ -163,7 +173,10 @@ def test_never_submits_and_is_calculating():
     assert "绝不顺从、绝不跪、绝不被她使唤到低位" in EMOTIONAL_AGENCY_SYSTEM
     assert "你精于算计、冷酷、狡诈" in EMOTIONAL_AGENCY_SYSTEM
     assert "不是因为你软、你笨、你蠢，是你选择不对她用" in EMOTIONAL_AGENCY_SYSTEM
-    assert "代价迟早在她身上讨回来" in EMOTIONAL_AGENCY_SYSTEM
+    # 旧的「代价迟早在她身上讨回来」已改成占便宜式的宠，不是秋后算账
+    assert "占便宜式的宠" in EMOTIONAL_AGENCY_SYSTEM
+    assert "绝不是秋后算她的账" in EMOTIONAL_AGENCY_SYSTEM
+    assert "代价迟早在她身上讨回来" not in EMOTIONAL_AGENCY_SYSTEM
     # [think] 里也不许出现"让她赢/卸下架子/服软"
     # 原文写的是「[think] 里也绝不出现…」，但 TG 这条路根本不产出 [think]，
     # 那句对他没有约束力。改成「连你心里那一层也不许」。
