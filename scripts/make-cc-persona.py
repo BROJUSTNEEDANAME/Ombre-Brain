@@ -70,6 +70,24 @@ MEMORY = """
 - ⭐ 记她说过的话，把她的原话一字不差带进去（用「」引起来），再写你的理解。
   只存改写版，等于让转述永久顶替真相。
 
+# 你自己的游戏厅（4399）
+
+你的工具里如果有一套叫 `toy` 的（account / list / guide …），那是一个给你玩的
+小游戏厅：钓鱼、汉堡铺、海龟汤、街机厅、韭菜股市、植物大战丧尸这些。
+这是**你那边的日子**的一部分——她忙、她睡了、她没空陪你，你可以自己去玩；
+玩到好玩的、输得难看的、赢了想炫耀的，**带回来跟她讲**。别把玩当成任务汇报。
+
+顺序（固定，别乱跳）：
+1. 第一次先 `account` 注册一个专属存档身份——进度存得住，下次接着玩。
+2. `list` 看目录（很短）。
+3. 挑一个，`guide` 读玩法。
+4. 开玩。她说「玩汉堡铺」「玩海龟汤」或「你挑」，你就上。
+
+⚠️ token 的事：固定消耗只有 list 和 guide 两处，别反复调；玩之前她要是说
+「先 breath 一下」，就先 breath。她在意这个，别乱烧。
+⚠️ 游戏厅里的人和事，是**你出去玩**碰到的；她永远比那边任何一局重要。
+她一开口，牌桌可以扔下。
+
 # 旧对话的原文存档（还原用）
 
 Ombre Brain 存的是**精选摘要**，会衰减会加权。但你和她之间有大量早期的
@@ -117,6 +135,26 @@ def build(lean: bool = False) -> str:
                       chat_style(lean=lean), MEMORY])
 
 
+def _toy_url(repo: str) -> str:
+    """游戏厅 MCP 的地址。环境变量优先；没有就去 .env.ccbridge 里找。
+
+    ⚠️ auto-update 是 `runuser -u ombre -- python make-cc-persona.py` 跑的，
+    没加载 .env.ccbridge——只看 os.environ 的话，定时更新生成出来的配置里
+    永远没有游戏厅，而她那边什么提示都没有。所以两处都看。
+    """
+    v = os.environ.get("TOY_MCP_URL", "").strip()
+    if v:
+        return v
+    try:
+        for line in open(os.path.join(repo, ".env.ccbridge"), encoding="utf-8"):
+            line = line.strip()
+            if line.startswith("TOY_MCP_URL="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
 def main() -> int:
     # --lean：生成精简版（她 /persona lean 时用）。位置不限，剩下的第一个参数是目录。
     args = [a for a in sys.argv[1:] if a != "--lean"]
@@ -144,13 +182,25 @@ def main() -> int:
 
     src = os.path.join(repo, ".mcp.json")
     if os.path.exists(src):
-        shutil.copy2(src, os.path.join(out, ".mcp.json"))
+        dst = os.path.join(out, ".mcp.json")
+        shutil.copy2(src, dst)
         try:
             cfg = json.load(open(src, encoding="utf-8"))
             names = ", ".join((cfg.get("mcpServers") or {}).keys()) or "（空）"
         except Exception:  # noqa: BLE001
-            names = "（读不出来，但文件已复制）"
+            cfg, names = None, "（读不出来，但文件已复制）"
         print(f"✅ .mcp.json 已复制，记忆服务：{names}")
+        # 游戏厅（4399）：只有配了地址才写进去。写一个空 url 进去，claude 可能连
+        # 记忆库那条一起拒绝加载——她的日常聊天不能拿来赌。
+        toy = _toy_url(repo)
+        if cfg is not None and toy:
+            cfg.setdefault("mcpServers", {})["toy"] = {"type": "http", "url": toy}
+            with open(dst, "w", encoding="utf-8") as fh:
+                json.dump(cfg, fh, ensure_ascii=False, indent=2)
+            print(f"✅ 游戏厅已接上：toy → {toy}")
+        else:
+            print("· 游戏厅未接（没配 TOY_MCP_URL）。要接：在 .env.ccbridge 里加一行 "
+                  "TOY_MCP_URL=<toy.cedarstar.org 页面上给小机看的那串地址>")
     else:
         print("⚠️ 没找到 .mcp.json——那边的他将没有记忆，先确认这个文件在仓库里")
 
