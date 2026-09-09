@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "OMBRE_HOOK_URL=\"${OMBRE_HOOK_URL:-https://ombre-brain-6e05.onrender.com}\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\" 2>/dev/null || true",
+            "command": "OMBRE_HOOK_URL=\"${OMBRE_HOOK_URL:-http://127.0.0.1:8000}\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_breath.py\" 2>/dev/null || true",
             "shell": "bash",
             "timeout": 25,
             "statusMessage": "Ombre Brain 正在浮现记忆..."

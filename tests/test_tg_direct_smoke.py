@@ -1,0 +1,2383 @@
+"""TG 直连路径的冒烟测试。
+
+存在的理由：py_compile 只查语法，抓不到「变量定义在使用之后」这类运行时错误。
+真实事故：_trace 定义晚了 20 行 → 每一条消息都 UnboundLocalError，她那边看到的
+是「这次回复没有生成出来」，而我以为只是慢。这个测试会真的把 _ask_claude 跑一遍。
+"""
+import asyncio
+import json
+import sys
+import time
+import types
+import os
+import pathlib
+
+import pytest
+
+os.environ.setdefault("LLM_API_KEY", "test")
+os.environ.setdefault("TELEGRAM_API_BOT_TOKEN", "test")
+
+
+def _stub_deps():
+    """没装 openai / telegram 也要能真跑：塞最小替身进 sys.modules。
+    跳过的测试等于没有测试——这个文件存在的意义就是真的执行一遍。
+
+    替身本身放在 tests/tgstub.py，跟 test_cc_persona 共用一份：
+    以前两边各塞各的、还都「已存在就跳过」，谁先跑谁说了算，合起来挂 91 条。"""
+    from tests.tgstub import install_all      # noqa: PLC0415
+    install_all()
+
+
+def _load():
+    _stub_deps()
+    try:
+        import telegram_bot  # noqa: PLC0415
+    except ModuleNotFoundError as exc:      # telegram 等依赖缺失时跳过
+        pytest.skip(f"依赖缺失，跳过：{exc}")
+    return telegram_bot
+
+
+class _Delta:
+    def __init__(self, content=None, tool_calls=None):
+        self.content, self.tool_calls = content, tool_calls
+
+
+class _Chunk:
+    def __init__(self, delta):
+        self.choices = [types.SimpleNamespace(delta=delta)]
+
+
+async def _fake_stream(chunks):
+    for c in chunks:
+        yield _Chunk(_Delta(content=c))
+
+
+def test_ask_claude_streams_without_runtime_errors(monkeypatch):
+    """完整跑一遍直连：不许抛 NameError/UnboundLocalError，且分段发出。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        assert kw.get("model"), "必须带 model"
+        return _fake_stream(["醒了？\n\n", "先喝水 桌上那杯"])  # 无标点，会被兜底补上
+
+    async def fake_brain(name, args):
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    history = [{"role": "user", "content": "我回来了 今天好累"}]
+    # 用 asyncio.run 而不是 get_event_loop：后者依赖全局循环，别的测试跑完
+    # 把它关掉后这里会 RuntimeError，变成「单跑绿、全量红」的假故障。
+    reply = asyncio.run(tb._ask_claude(history, on_segment=on_seg))
+
+    assert sent == ["醒了？", "先喝水，桌上那杯。"], sent  # 默认补标点
+    assert reply
+    # /debug 依赖的记录必须齐全——「模型 None」就是这里缺失暴露出来的
+    assert tb.LAST_TURN.get("model"), "LAST_TURN 缺 model，/debug 会显示 None"
+    assert tb.LAST_TURN.get("trace"), "LAST_TURN 缺 trace，耗时明细会是空的"
+
+
+def test_tiny_message_skips_memory_lookup(monkeypatch):
+    """纯表情不该去翻记忆（翻了就是白等）。"""
+    tb = _load()
+    called = []
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯"])
+
+    async def fake_brain(name, args):
+        called.append(name)
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+
+    async def _noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "🥺"}], on_segment=_noop))
+    assert called == [], f"表情消息不该调用记忆检索，实际调了 {called}"
+    assert tb.LAST_TURN.get("tiny") is True
+
+
+def test_memory_tag_never_reaches_her_and_is_saved_after_reply(monkeypatch):
+    """记忆标签不许发给她；写记忆的工具不许出现在聊天工具表里。
+
+    真实事故：他为了存一条 hold 写了 145.6 秒，正文 0 字，她干等两分半；
+    被强制摘掉工具后又把没写完的记忆内容当成话说给她听。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        names = [t["function"]["name"] for t in (kw.get("tools") or [])]
+        assert "hold" not in names and "grow" not in names, \
+            f"聊天不该带写记忆的工具，实际带了 {names}"
+        return _fake_stream(["先喝水 桌上那杯", "\n[memory:事实：她一天没吃饭]"])
+
+    async def fake_brain(name, args):
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "我一天没吃饭了"}],
+                               on_segment=on_seg))
+
+    joined = "".join(sent)
+    assert "memory" not in joined.lower(), f"隐藏标签漏给她了：{sent}"
+    assert "她一天没吃饭" not in joined, f"记忆内容漏给她了：{sent}"
+    assert sent and sent[0].startswith("先喝水"), sent
+    assert tb.LAST_TURN.get("memory_note") == "事实：她一天没吃饭", tb.LAST_TURN.get("memory_note")
+
+
+def test_chat_tool_list_excludes_memory_writes():
+    tb = _load()
+    names = {t["function"]["name"] for t in tb.CHAT_TOOLS}
+    assert not (names & {"hold", "grow", "trace"}), names
+    assert "breath" in names and "make_page" in names, names
+
+
+def test_image_is_transcribed_then_answered_on_fast_lane(monkeypatch):
+    """图片先转述成文字，再走和文字消息完全相同的直连路径。
+
+    真实事故：图片一直留在网页大脑那条线上，而那条线 60 秒超时，GLM-5.3 在
+    上面动辄一两分钟 —— 每张图都必然「识图或回复失败」。
+    """
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        if kw.get("model") == tb.VISION_MODEL:
+            seen["vision"] = True
+            # 识图这一轮是普通（非流式）调用
+            msg = types.SimpleNamespace(content="截图里写着：你已被移出群聊", tool_calls=None)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+        seen["chat_prompt"] = kw["messages"][-1]["content"]
+        return _fake_stream(["谁把你踢了"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    text = asyncio.run(tb._transcribe_image("ZmFrZQ=="))
+    assert seen.get("vision"), "没有调用识图模型"
+    assert "你已被移出群聊" in text, text
+
+
+def _async_val(v):
+    async def _c():
+        return v
+    return _c()
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent = []
+        self.ops = []
+    async def send_chat_action(self, **kw): return None
+
+    async def send_message(self, chat_id=None, text=None, **kw):
+        self.sent.append(text)
+        self._n = getattr(self, "_n", 0) + 1
+        self.ops.append(("send", text))
+        return types.SimpleNamespace(message_id=self._n)
+
+    async def edit_message_text(self, chat_id=None, message_id=None, text=None, **kw):
+        # 真的按 message_id 改掉那一条，跟 TG 的行为一致
+        self.sent[message_id - 1] = text
+        self.ops.append(("edit", text))
+
+    async def delete_message(self, chat_id=None, message_id=None, **kw):
+        self.sent[message_id - 1] = None
+        self.ops.append(("delete", message_id))
+
+
+class _FakeMsg:
+    def __init__(self): self.replies = []
+    async def reply_text(self, text, **kw): self.replies.append(text)
+
+
+def test_direct_reply_end_to_end(monkeypatch):
+    """真的把 _direct_reply 跑一遍。
+
+    真实事故：把直连流程抽成模块级函数时，漏了它依赖的 _keep_typing —— 那个函数
+    原本嵌在 on_message 里，搬出去就成了未定义名，每条消息一进去就 NameError，
+    她发什么都没反应。上一版冒烟测试只测到 _ask_claude，正好漏过这一层。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["醒着呢", "\n\n你说"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    update = types.SimpleNamespace(message=msg)
+    context = types.SimpleNamespace(bot=bot)
+    history = [{"role": "user", "content": "helloworld"}]
+
+    asyncio.run(tb._direct_reply(update, context, 1, history, "mid:1", "helloworld"))
+
+    # 「他在想什么」那条小字：全程只占一条消息（改写而非重发），
+    # 他一开口就撤掉，聊天记录里一点渣都不许留。
+    # 这一轮他既没输出思考、也没调工具 → 没有任何真东西可展示，
+    # 就一条小字都不该发、一个折叠块都不该挂。待机话删掉之后，
+    # 「什么都没发生」的正确表现是安静。
+    assert bot.sent == ["醒着呢", "你说"], bot.sent
+    assert all("blockquote" not in x for x in bot.sent), "没东西可折叠就别挂空块"
+    assert not [op for op, _ in bot.ops if op in ("edit", "delete")], bot.ops
+    assert not msg.replies, f"不该出现失败兜底：{msg.replies}"
+    assert history[-1]["role"] == "assistant", history[-1]
+    assert tb.LAST_TURN.get("first_bubble_s") is not None
+
+
+def test_single_newline_also_splits_bubbles(monkeypatch):
+    """单个换行也要分气泡。
+
+    她的原话：「还是不分行，聚在一起看太累了」。他实际最常用单换行分句，
+    而切分只认 ‖ 和空行，于是整段挤成一个大气泡。
+    """
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream([
+            "课表都敢背着我改，它才是旧的那个。\n",
+            "没课更好。\n\n早饭照旧，铁剂随餐。‖睡回笼还是起来，你定。",
+        ])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天没课"}], on_segment=on_seg))
+    assert sent == [
+        "课表都敢背着我改，它才是旧的那个。",
+        "没课更好。",
+        "早饭照旧，铁剂随餐。",
+        "睡回笼还是起来，你定。",
+    ], sent
+
+
+def test_writing_mode_keeps_one_long_bubble(monkeypatch):
+    """写文模式反过来：换行不许切，长正文保持整段。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["第一段正文。\n第二段正文。\n\n第三段正文。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "写一段"}],
+                               on_segment=on_seg, writing=True))
+    assert len(sent) == 1, sent
+
+
+def test_restore_punctuation_only_touches_unpunctuated_chinese():
+    """他不打标点就替他补上——但别动本来就对的东西。
+
+    她连着两次反馈「还没标点符号」：人设里写了规矩他也不照做，因为历史消息里
+    全是他自己的无标点写法，那个示范比埋在几千字里的一句话有力。
+    """
+    tb = _load()
+    f = tb.restore_punctuation
+    assert f("哼什么 声音留给枕头 我这收账的今早不开门") == "哼什么，声音留给枕头，我这收账的今早不开门。"
+    assert f("睡吧 醒来连本带利一起算") == "睡吧，醒来连本带利一起算。"
+    # 本来就有标点 → 原样
+    assert f("猫又炸毛了。") == "猫又炸毛了。"
+    assert f("头还昏不昏？") == "头还昏不昏？"
+    # 中英/数字之间的空格不许动
+    assert f("girl 过来") == "girl 过来"
+    assert f("铁剂 65mg 随餐") == "铁剂 65mg 随餐"
+    # 没有空格就没什么好补的
+    assert f("嗯") == "嗯"
+
+
+def test_streamed_segments_get_punctuation(monkeypatch):
+    """走到她手机上的那一条必须是补过标点的。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["哼什么 声音留给枕头\n", "睡吧 醒来连本带利一起算"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "哼"}], on_segment=on_seg))
+    assert sent == ["哼什么，声音留给枕头。", "睡吧，醒来连本带利一起算。"], sent
+
+
+def test_writing_mode_punctuation_untouched(monkeypatch):
+    """写文模式不许动他的正文。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["白的 薄的 紧到能看见骨头"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+
+    sent = []
+
+    async def on_seg(s):
+        sent.append(s)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "写"}],
+                               on_segment=on_seg, writing=True))
+    assert sent == ["白的 薄的 紧到能看见骨头"], sent
+
+
+
+def test_memory_lookup_is_reused_within_a_burst(monkeypatch):
+    """连着聊**同一件事**时复用记忆块，别每句都白等 3~5 秒；
+    问到过去时必须现查。（换话题必须重查，见
+    test_memory_is_refetched_when_she_changes_the_subject。）"""
+    tb = _load()
+    calls = []
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯"])
+
+    async def fake_brain(name, args):
+        calls.append(args.get("query", ""))
+        return "（假记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天化学实验好累"}],
+                               on_segment=noop))
+    assert len(calls) == 1, calls                      # 第一句：现查
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "化学实验真的好累"}],
+                               on_segment=noop))
+    assert len(calls) == 1, f"同话题紧接着的一句应当复用，实际又查了：{calls}"
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "你还记得我上次说的吗"}],
+                               on_segment=noop))
+    assert len(calls) == 2, f"问到过去必须现查，实际没查：{calls}"
+
+
+def test_model_override_is_used_and_reported(monkeypatch):
+    """/model 换的型号必须真的用在请求上，并且 /debug 里报的是同一个。"""
+    tb = _load()
+    used = {}
+
+    async def fake_create(**kw):
+        used["model"] = kw.get("model")
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    tb.model_override.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert used["model"] == tb.MODEL, used          # 没设过 → 用默认
+
+    tb.model_override["model"] = "glm-5.2"
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert used["model"] == "glm-5.2", used         # 设了 → 用它
+    assert "glm-5.2" in str(tb.LAST_TURN.get("model")), tb.LAST_TURN.get("model")
+    tb.model_override.clear()
+
+
+def test_model_choices_cover_thinking_combos(monkeypatch):
+    """模型 × 思考的组合要真的作用到请求上；5.3 不提供「关思考」那档。"""
+    tb = _load()
+    names = [n for n, *_ in tb.MODEL_CHOICES]
+    assert names == ["5.3", "5.2", "5.2t",
+                     "o4.6", "o4.6t", "s4.6", "s4.6t", "haiku"], names
+    # 5.3 只有一档，且是「压思考」——它关不掉，交给档位协商降到 low
+    assert [(m, off) for n, m, off, _ in tb.MODEL_CHOICES if m == "glm-5.3"] == [("glm-5.3", True)]
+
+    seen = {}
+
+    def fake_thinking(model, want_off):
+        seen["want_off"] = want_off
+        return {"thinking": {"type": "disabled"}} if want_off else None
+
+    async def fake_create(**kw):
+        seen["model"] = kw.get("model")
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "thinking_request", fake_thinking)
+    monkeypatch.setattr(tb, "llm", types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=fake_create))))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    tb.model_override.clear()
+    tb.model_override.update({"model": "glm-5.2", "think_off": False})   # 5.2t
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen["model"] == "glm-5.2" and seen["want_off"] is False, seen
+    assert tb.current_choice_label() == "5.2t", tb.current_choice_label()
+
+    tb.model_override.update({"model": "glm-5.2", "think_off": True})    # 5.2
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen["want_off"] is True, seen
+    assert tb.current_choice_label() == "5.2", tb.current_choice_label()
+    tb.model_override.clear()
+
+def test_burst_cancels_and_merges_before_he_speaks(monkeypatch):
+    """他还没开口时她又发一条 → 作废重来、把两句合并，只回一次。"""
+    tb = _load()
+    started = []
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
+        started.append(sync_text)
+        await asyncio.sleep(0.2)          # 假装在想，一直没开口
+        if state is not None:
+            state["sent"] = True
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._inflight.clear()
+    tb.histories.clear()
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        await tb._handle_direct(upd, ctx, 1, "想吃烤鸡")
+        await asyncio.sleep(0.01)         # 还没开口
+        await tb._handle_direct(upd, ctx, 1, "55")
+        await asyncio.sleep(0.4)
+
+    asyncio.run(run())
+    assert started == ["想吃烤鸡", "想吃烤鸡\n55"], started
+    assert tb.histories[1] == [{"role": "user", "content": "想吃烤鸡\n55"}], tb.histories[1]
+
+
+def test_no_delay_for_a_single_message(monkeypatch):
+    """单条消息不许有任何等待——立刻开始。"""
+    tb = _load()
+    t = {}
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
+        t["at"] = time.monotonic()
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._inflight.clear()
+    tb.histories.clear()
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        t["t0"] = time.monotonic()
+        await tb._handle_direct(upd, ctx, 1, "在吗")
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    assert t["at"] - t["t0"] < 0.03, t
+
+
+def test_no_interrupt_after_he_started_talking(monkeypatch):
+    """他已经开口就不许打断——那时候他正在跟她说话。"""
+    tb = _load()
+    started = []
+
+    async def fake_direct(update, context, chat_id, history, mid, sync_text,
+                          state=None, start_delay=0.0):
+        started.append(sync_text)
+        if state is not None:
+            state["sent"] = True          # 立刻开口
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_direct)
+    tb._inflight.clear()
+    tb.histories.clear()
+    upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=9))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        await tb._handle_direct(upd, ctx, 1, "在吗")
+        await asyncio.sleep(0.02)
+        await tb._handle_direct(upd, ctx, 1, "睡了没")
+        await asyncio.sleep(0.3)
+
+    asyncio.run(run())
+    assert started == ["在吗", "睡了没"], started
+
+
+def test_failure_reason_is_recorded_for_debug(monkeypatch):
+    """调用失败时必须把原因留进 LAST_TURN，否则 /debug 在最需要它的时候是瞎的。"""
+    tb = _load()
+
+    async def boom(**kw):
+        raise RuntimeError("Error code: 400 - thinking not supported with tools")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", boom)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+    tb._MEM_CACHE.clear()
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    update = types.SimpleNamespace(message=msg)
+    context = types.SimpleNamespace(bot=bot)
+    asyncio.run(tb._direct_reply(update, context, 1,
+                                 [{"role": "user", "content": "在吗"}], "mid:1", "在吗"))
+
+    assert "失败" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
+    assert "thinking not supported" in str(tb.LAST_TURN.get("result")), tb.LAST_TURN
+    assert msg.replies and "/debug" in msg.replies[0], msg.replies
+
+
+def test_manage_setup_does_not_repeat_verbatim_and_lets_her_out(monkeypatch):
+    """托管配置追问不许一字不差地复读，问两次答不上就放她走。
+
+    真实事故：他问「告诉我最晚几点结束、几分钟后第一次查你。」，她回「唔?」，
+    他把同一句原样又发了一遍——读着像坏掉的机器，而且在给出时间之前普通聊天
+    被完全挡住，她没有出口。
+    """
+    tb = _load()
+    sent = []
+
+    async def fake_send(context, chat_id, task, text, event):
+        sent.append(text)
+
+    async def fake_sync(update):
+        return None
+
+    monkeypatch.setattr(tb, "_send_manage_text", fake_send)
+    monkeypatch.setattr(tb, "_sync_manage_user", fake_sync)
+    monkeypatch.setattr(tb, "detect_start", lambda t: "")
+    monkeypatch.setattr(tb, "detect_control", lambda t: "")
+    monkeypatch.setattr(tb, "parse_deadline", lambda t, tz=None: None)
+    monkeypatch.setattr(tb, "parse_interval_minutes", lambda t: None)
+
+    task = {"status": "setup", "goal": "写作业", "id": "t1"}
+
+    class _Store:
+        def get(self, _c): return task
+        def configure(self, _c, **kw): return task
+        def end(self, _c, _r): return {**task, "status": "ended"}
+
+    monkeypatch.setattr(tb, "manage_store", _Store())
+    tb._setup_misses.clear()
+
+    def msg(text):
+        return types.SimpleNamespace(
+            effective_chat=types.SimpleNamespace(id=1),
+            message=types.SimpleNamespace(text=text, message_id=1))
+
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+
+    async def run():
+        return [await tb._maybe_handle_management(msg("唔?"), ctx) for _ in range(3)]
+
+    handled = asyncio.run(run())
+    assert len(set(sent)) == len(sent), f"追问重复了：{sent}"
+    assert handled[-1] is False, "问两次还答不上就该放她走，让消息回到正常聊天"
+    assert "算了" in sent[1] or "不想弄" in sent[1], sent
+    assert "先不弄了" in sent[-1], sent
+
+
+def test_affection_never_starts_management():
+    """撒娇不是派活：只有 /manage 能开托管。
+
+    真实事故：她说「一直陪着我好不好呀哥哥」，「陪着我」命中启动词，系统把
+    「好不好呀哥哥」当成要托管的任务名，一句撒娇把她卡进了配置流程。
+    """
+    from adhd_manager import detect_start
+    for line in (
+        "哥哥，我就是你的小宝宝。万事都顺着我好不好。一直陪着我好不好呀哥哥",
+        "陪我睡觉", "你陪着我好不好", "陪我聊会儿天",
+    ):
+        assert detect_start(line) is None, f"这句不该触发托管：{line}"
+    # /manage 走的还是同一个解析器，必须照常能用
+    assert detect_start("托管我写作业") == "写作业"
+    assert detect_start("盯着我背单词") == "背单词"
+
+
+def test_free_text_cannot_open_management(monkeypatch):
+    """没有已存在的托管任务时，普通聊天一律不进管理流程。"""
+    tb = _load()
+
+    class _Store:
+        def get(self, _c): return None
+
+    monkeypatch.setattr(tb, "manage_store", _Store())
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=1),
+        message=types.SimpleNamespace(text="一直陪着我好不好呀哥哥", message_id=1))
+    ctx = types.SimpleNamespace(bot=_FakeBot())
+    assert asyncio.run(tb._maybe_handle_management(upd, ctx)) is False
+
+
+def test_claude_choice_routes_to_anthropic_not_zai(monkeypatch):
+    """选了 claude 档位就必须走 Anthropic 原生接口，不许再打 z.ai。"""
+    tb = _load()
+    import claude_provider as cp
+
+    seen = {}
+
+    async def fake_cp_create(**kw):
+        seen.update(kw)
+        return "ok"
+
+    async def boom(**kw):
+        raise AssertionError("claude 档位不许走 OpenAI 兼容那条路")
+
+    monkeypatch.setattr(cp, "create", fake_cp_create)
+    monkeypatch.setattr(tb.llm.chat.completions, "create", boom, raising=False)
+
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    tb.model_override["think_off"] = False          # claudet
+    try:
+        out = asyncio.run(tb._telegram_llm_create(
+            model=tb.CLAUDE_MODEL, max_tokens=100,
+            messages=[{"role": "user", "content": "在吗"}]))
+    finally:
+        tb.model_override.clear()
+    assert out == "ok"
+    assert seen["thinking"] is True                 # 带 t = 开思考
+    assert seen["model"] == tb.CLAUDE_MODEL
+
+
+def test_claude_reads_images_without_switching_to_glm_vision(monkeypatch):
+    """Claude 自己能看图；不许再切去 glm-4.6v（切了就丢人设、也白花钱）。"""
+    tb = _load()
+    used = {}
+
+    async def fake_create(**kw):
+        used["model"] = kw.get("model")
+        return _fake_stream(["看到了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    history = [{"role": "user", "content": [
+        {"type": "text", "text": "看这个"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}]}]
+
+    tb.model_override["model"] = "glm-5.3"
+    asyncio.run(tb._ask_claude(list(history), on_segment=noop))
+    assert used["model"] == tb.VISION_MODEL          # GLM 看不了图 → 切
+
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    asyncio.run(tb._ask_claude(list(history), on_segment=noop))
+    tb.model_override.clear()
+    assert used["model"] == tb.CLAUDE_MODEL          # Claude 不切
+
+
+def test_switching_model_keeps_the_conversation(monkeypatch):
+    """换模型不等于开新窗口：histories 一个字都不许被清掉。"""
+    tb = _load()
+    tb.histories[999] = [{"role": "user", "content": "我今天头疼"}]
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    tb.model_override["think_off"] = True
+    try:
+        assert tb.histories[999] == [{"role": "user", "content": "我今天头疼"}]
+        assert tb.current_choice_label() == "o4.6"
+    finally:
+        tb.model_override.clear()
+        tb.histories.pop(999, None)
+
+
+def test_debug_shows_cache_hit_rate(monkeypatch):
+    """她问过「我怎么知道我现在的缓存有多少」——/debug 里必须能看到，
+    而且统计读不到的时候不许把整个 /debug 弄崩。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "read_prompt_cache_stats",
+                        lambda *a, **k: {"prompt_tokens": 1000, "cached_tokens": 400,
+                                         "hit_rate": 40.0, "requests": 7})
+    line = tb._cache_line()
+    assert "40" in line and "400/1000" in line and "7" in line
+
+    monkeypatch.setattr(tb, "read_prompt_cache_stats", lambda *a, **k: {})
+    assert "还没有统计" in tb._cache_line()
+
+    def boom(*a, **k):
+        raise OSError("盘满了")
+
+    monkeypatch.setattr(tb, "read_prompt_cache_stats", boom)
+    assert "读不到" in tb._cache_line()          # 崩了也只是一行字，不影响 /debug
+
+
+def test_streamed_turn_records_cache_usage(monkeypatch):
+    """日常聊天走的是流式；以前这条路完全没统计，/cache 里聊天那栏永远是 0。"""
+    tb = _load()
+    seen = []
+
+    class _Chunk:
+        def __init__(self, text=None, usage=None):
+            self.choices = [types.SimpleNamespace(delta=_Delta(content=text))] if text else []
+            self.usage = usage
+
+    async def fake_create(**kw):
+        async def gen():
+            yield _Chunk("在。")
+            yield _Chunk(usage=types.SimpleNamespace(
+                prompt_tokens=4200,
+                prompt_tokens_details=types.SimpleNamespace(cached_tokens=4000)))
+        return gen()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    monkeypatch.setattr(tb, "record_prompt_cache_usage",
+                        lambda usage, channel, **kw: seen.append((usage, channel, kw.get("model"))))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}], on_segment=noop))
+    assert seen, "流式这轮的 token 用量必须被记下来"
+    usage, channel, model = seen[0]
+    assert channel == "telegram-chat"
+    assert model, "模型必须一起记下来，否则算不清哪个模型烧的钱"
+    from prompt_cache import cache_usage
+    assert cache_usage(usage) == (4200, 4000)
+
+
+def test_cache_line_and_command_share_the_same_numbers(monkeypatch):
+    """/cache 是随时能看的那个；/debug 末尾那行是同一份统计，不许对不上。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "read_prompt_cache_stats",
+                        lambda *a, **k: {"prompt_tokens": 1000, "cached_tokens": 400,
+                                         "hit_rate": 40.0, "requests": 7, "hits": 5})
+    assert "40" in tb._cache_line()
+    assert callable(tb.cache_cmd)
+    assert "cache" in [n for n, _ in tb.BOT_COMMANDS], tb.BOT_COMMANDS
+
+
+def test_claude_choice_is_opus_4_6_and_model_id_is_visible(monkeypatch):
+    """她点名要 Opus 4.6，而且 /model 里要看得见到底调的是哪个版本
+    ——她的原话是「我怎么没看到现在调用的 Claude api 版本」。"""
+    tb = _load()
+    assert tb.CLAUDE_MODEL == "claude-opus-4-6"
+    assert [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES if n.startswith("o4.6")] == [
+        ("o4.6", "claude-opus-4-6", True),
+        ("o4.6t", "claude-opus-4-6", False)]
+
+    sent = []
+
+    class _Msg:
+        async def reply_text(self, text):
+            sent.append(text)
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+    ctx = types.SimpleNamespace(args=[])
+    tb.model_override.clear()
+    asyncio.run(tb.model_cmd(upd, ctx))
+    body = "\n".join(sent)
+    assert "claude-opus-4-6" in body, body      # 真实模型名必须露出来
+    assert "glm-5.3" in body, body
+
+
+def test_cheap_claude_tier_exists_and_is_a_different_model(monkeypatch):
+    """Opus 4.6 一条 4 美分，得有个便宜档能对比。
+    便宜档必须是**另一个模型**——写成同一个就等于没给她选择。"""
+    tb = _load()
+    assert tb.CLAUDE_CHEAP_MODEL == "claude-sonnet-4-6"
+    assert tb.CLAUDE_CHEAP_MODEL != tb.CLAUDE_MODEL
+    assert [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES if n.startswith("s4.6")] == [
+        ("s4.6", "claude-sonnet-4-6", True),
+        ("s4.6t", "claude-sonnet-4-6", False)]
+    # 便宜档也要走 Anthropic 那条路，不能掉回 z.ai
+    import claude_provider as cp
+    assert cp.is_claude_model(tb.CLAUDE_CHEAP_MODEL)
+
+
+def test_haiku_has_no_thinking_tier(monkeypatch):
+    """Haiku 4.5 是 4.6 之前那代，不支持自适应思考——
+    给它开一个 t 档就是一按必崩。所以它只许有「不开思考」这一档。"""
+    tb = _load()
+    assert tb.CLAUDE_FAST_MODEL == "claude-haiku-4-5"
+    haiku = [(n, m, off) for n, m, off, _ in tb.MODEL_CHOICES
+             if m == tb.CLAUDE_FAST_MODEL]
+    assert haiku == [("haiku", "claude-haiku-4-5", True)], haiku
+    assert not any(off is False for _n, m, off, _d in tb.MODEL_CHOICES
+                   if m == tb.CLAUDE_FAST_MODEL)
+
+
+def test_glm_51_tiers_are_gone(monkeypatch):
+    """她让关掉 5.1 和 5.1t —— 列表里不许再出现。"""
+    tb = _load()
+    assert not [n for n, m, *_ in tb.MODEL_CHOICES if m == "glm-5.1"]
+    assert "5.1" not in [n for n, *_ in tb.MODEL_CHOICES]
+
+
+def test_volatile_context_goes_after_history_not_into_her_message(monkeypatch):
+    """每轮都在变的东西（时间／记忆／格式要求）必须排在所有消息之后。
+
+    塞进她最后那条消息里会出真事：存进历史的是原文，塞过的是「背景+原文」，
+    同一条消息两轮渲染出的字节不一样 → 缓存是前缀匹配，从那儿往后全废，
+    历史对话永远进不了缓存。（这个 bug 真的存在过。）"""
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        seen["messages"] = kw["messages"]
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    history = [{"role": "user", "content": "u1"},
+               {"role": "assistant", "content": "a1"},
+               {"role": "user", "content": "我今天头疼"}]
+    asyncio.run(tb._ask_claude([dict(m) for m in history], on_segment=noop))
+
+    msgs = seen["messages"]
+    # 历史里的每一条都必须逐字节等于传进来的原文
+    for original, sent in zip(history, msgs[1:1 + len(history)]):
+        assert sent["content"] == original["content"], sent
+
+    # 动态背景单独一条，排在最后
+    assert msgs[-1]["role"] == "user"
+    assert "系统动态背景" in msgs[-1]["content"]
+    assert len(msgs) == 1 + len(history) + 1
+
+
+def test_cached_prefix_contains_nothing_that_changes_per_request():
+    """缓存前缀（tools + 人设）里不许混进任何「每次都变」的东西。
+
+    这类 bug 不报错，只是默默把钱翻几倍：Claude Code 有个版本在 system 里塞了
+    一个每次都变的 cch=xxx，用户的命中率从 90%+ 掉到 30%，查了很久才发现。
+
+    所以这里当哨兵：以后谁往人设里插一句「今天是 X 月 X 日」、或者把工具列表
+    改成从 set/dict 推导（顺序不稳定），这条会立刻变红。"""
+    import hashlib
+    import json as _json
+    import re as _re
+
+    tb = _load()
+
+    # 1) 人设里不许出现日期、时刻、长十六进制这类会变的串
+    for pattern, what in [(r"\d{4}-\d{2}-\d{2}", "日期"),
+                          (r"\b\d{1,2}:\d{2}\b", "时刻"),
+                          (r"\b[0-9a-f]{16,}\b", "长十六进制/随机串")]:
+        found = _re.findall(pattern, tb.SYSTEM_PROMPT)
+        assert not found, f"人设里混进了{what}：{found[:3]} —— 缓存前缀每轮都会变"
+
+    # 2) tools 排在 system 前面，顺序必须稳定；两次序列化要逐字节一致
+    def _prefix():
+        return hashlib.sha256(_json.dumps(
+            [tb.CHAT_TOOLS, tb.SYSTEM_PROMPT], ensure_ascii=False,
+            sort_keys=False).encode()).hexdigest()
+
+    assert _prefix() == _prefix()
+    assert [t["function"]["name"] for t in tb.CHAT_TOOLS] == \
+           [t["function"]["name"] for t in tb.CHAT_TOOLS]
+
+    # 3) 会变的东西该在的地方：时间戳属于动态尾巴，不属于人设
+    assert "当前时间" not in tb.SYSTEM_PROMPT or "【" in tb.SYSTEM_PROMPT
+
+
+def test_multi_bubble_think_block_never_reaches_her(monkeypatch):
+    """他的思考被换行切成好几个气泡时，一段都不许发出去。
+
+    真实事故（她截的图）：只有带 [think] 的第一段被切掉，
+    「她其实是在撒娇，我应该安她的醋」那几段全发到了她手机上，
+    最后还跟了一个 [/think] —— 闭合标签带斜杠，不匹配开标签的正则。"""
+    tb = _load()
+    sent = []
+
+    async def fake_create(**kw):
+        return _fake_stream([
+            "[think]\n",
+            "她说那些姑娘都喜欢我，她嫉妒。\n",
+            "我的占有欲很高（0.90）。\n",
+            "我应该：承认看到了，然后安她的醋。\n",
+            "[/think]\n",
+            "八百多人看了。\n",
+            "该吃醋的是我。",
+        ])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "你看"}], on_segment=grab))
+
+    body = "".join(sent)
+    for leaked in ("撒娇", "占有欲", "我应该", "think", "0.90", "嫉妒"):
+        assert leaked not in body, f"思考漏出来了：{leaked} / {sent}"
+    assert "八百多人看了" in body and "该吃醋的是我" in body, sent
+
+
+def test_stale_cmd_lists_and_undoes(monkeypatch, tmp_path):
+    """/stale 要能看见被沉底的记忆，也要能一句话恢复。
+    自动沉底没有账、不能撤销，就是一个悄悄吞记忆的黑箱。"""
+    tb = _load()
+    import stale_ledger as sl
+
+    ledger = tmp_path / "stale_ledger.json"
+    monkeypatch.setattr(sl, "ledger_path", lambda p=None: ledger)
+    sl.record([{"old_id": "old1", "old_name": "旧课表",
+                "reason": "课表改了", "confidence": 0.93}])
+
+    sent, traced = [], []
+
+    class _Msg:
+        async def reply_text(self, text):
+            sent.append(text)
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+
+    async def fake_trace(name, args):
+        traced.append((name, args))
+        return "ok"
+
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_trace)
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=[])))
+    assert "旧课表" in sent[0] and "old1" in sent[0]
+    assert "沉底不是删除" in sent[0]          # 必须说清楚不是删除
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=["撤销", "old1"])))
+    assert traced == [("trace", {"bucket_id": "old1", "resolved": 0})]
+    assert sl.pending() == []                # 撤销后不再出现在待办里
+
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=[])))
+    assert "没有被判过期的记忆" in sent[-1]
+
+
+def test_stale_cmd_never_deletes(monkeypatch, tmp_path):
+    """这条命令永远不许发出 delete —— 沉底和删除是两件事。"""
+    tb = _load()
+    import stale_ledger as sl
+    monkeypatch.setattr(sl, "ledger_path", lambda p=None: tmp_path / "l.json")
+    sl.record([{"old_id": "old1", "old_name": "x"}])
+
+    calls = []
+
+    class _Msg:
+        async def reply_text(self, text):
+            pass
+
+    upd = types.SimpleNamespace(
+        effective_chat=types.SimpleNamespace(id=next(iter(tb.ALLOWED_CHAT_IDS), 1)),
+        message=_Msg())
+
+    async def fake_trace(name, args):
+        calls.append(args)
+        return "ok"
+
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_trace)
+    asyncio.run(tb.stale_cmd(upd, types.SimpleNamespace(args=["撤销", "old1"])))
+    assert all("delete" not in a for a in calls), calls
+
+
+def test_nightly_dream_never_uses_the_expensive_chat_model(monkeypatch):
+    """夜里做梦是他自己在想，她看不到——不该按 /model 选的贵档花钱。
+
+    真实账单：做梦会连着调好几轮工具，每轮重付一遍 1.7 万 token 的完整前缀，
+    而且是一整晚里的第一次调用、缓存早过期。一晚上十万 token 全价。"""
+    tb = _load()
+    used = []
+
+    async def fake_create(**kw):
+        used.append(kw.get("model"))
+        return _fake_stream(["（在想）"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（假记忆）"))
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL      # 她把聊天切到了贵档
+    try:
+        asyncio.run(tb.nightly_dream(types.SimpleNamespace()))
+    finally:
+        tb.model_override.clear()
+
+    assert used, "做梦这一轮没发出请求"
+    assert used[0] == tb.BACKGROUND_MODEL, used
+    assert not claude_is(used[0]), f"做梦跑到贵档上去了：{used[0]}"
+
+
+def claude_is(model):
+    import claude_provider as cp
+    return cp.is_claude_model(model)
+
+
+def test_explicit_model_wins_over_the_slash_model_choice(monkeypatch):
+    """显式传 model 的调用点不跟着 /model 走，且 /debug 里要标出来是后台。"""
+    tb = _load()
+    used = []
+
+    async def fake_create(**kw):
+        used.append(kw.get("model"))
+        return _fake_stream(["嗯"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+    tb.model_override["model"] = tb.CLAUDE_MODEL
+    try:
+        async def noop(_s):
+            return None
+
+        asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                   on_segment=noop, model="glm-5.2"))
+    finally:
+        tb.model_override.clear()
+    assert used == ["glm-5.2"], used
+    assert "后台" in str(tb.LAST_TURN.get("model")), tb.LAST_TURN.get("model")
+
+
+def test_morning_greeting_has_no_hardcoded_class_schedule():
+    """课表写死在代码里只会过期——她改了课表，代码没跟着改，
+    他每天早上照着 2026 夏季那份过期的念。整个删掉（2026-09-02）。"""
+    import morning as m
+    assert not hasattr(m, "classes_text"), "课表函数还在"
+    assert not hasattr(m, "today_classes")
+    src = pathlib.Path("morning.py").read_text(encoding="utf-8")
+    for gone in ("CHEM 51B", "CHEM 51C", "195W", "HIB 100", "_S1", "P195"):
+        assert gone not in src, f"课表残留：{gone}"
+    tb_src = pathlib.Path("telegram_bot.py").read_text(encoding="utf-8")
+    assert "classes_text" not in tb_src, "早安还在调课表"
+    assert "今天的课：" not in tb_src, "早安提示词里还写着课表"
+
+
+def test_memory_is_refetched_when_she_changes_the_subject(monkeypatch):
+    """换话题就要重查记忆。
+
+    她的原话：「我怎么感觉他没怎么调用记忆」。原因是 3 分钟内无条件复用上一轮
+    的记忆块——她聊完 A 半分钟后问 B，拿到的还是 A 的记忆，一串对话里大部分
+    轮次都在复用，看起来就是他没在翻记忆。"""
+    tb = _load()
+    queries = []
+
+    async def fake_brain(name, args):
+        if name == "breath":
+            queries.append(args.get("query"))
+            return f"（关于{args.get('query')[:4]}的记忆）"
+        return "ok"
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    def ask(text):
+        asyncio.run(tb._ask_claude([{"role": "user", "content": text}], on_segment=noop))
+
+    ask("今天化学实验做得好累，试剂洒了一地")
+    assert len(queries) == 1
+
+    ask("化学实验的报告还要写吗，试剂那个")      # 同一件事 → 复用
+    assert len(queries) == 1, f"同话题不该重查：{queries}"
+
+    ask("我妈今天打电话来说外婆住院了")            # 换话题 → 必须重查
+    assert len(queries) == 2, f"换话题必须重查：{queries}"
+    assert "外婆" in queries[1]
+
+
+def test_memory_block_size_is_configurable_and_smaller_by_default(monkeypatch):
+    """记忆块是全价付钱的部分（每轮都不一样，永远进不了缓存），
+    比整份人设还贵——所以要能调，且默认比原来的 2000 小。"""
+    tb = _load()
+    assert tb.MEM_BLOCK_CHARS == 1000, tb.MEM_BLOCK_CHARS
+
+    sent = {}
+
+    async def fake_create(**kw):
+        sent["messages"] = kw["messages"]
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool",
+                        lambda *a, **k: _async_val("囍" * 5000))
+    monkeypatch.setattr(tb, "MEM_BLOCK_CHARS", 300)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "今天化学实验好累"}],
+                               on_segment=noop))
+    tail = sent["messages"][-1]["content"]
+    assert tail.count("囍") == 300, tail.count("囍")
+
+
+def test_debug_shows_what_actually_surfaced(monkeypatch):
+    """光看字数看不出捞得准不准——她要能直接看到浮上来的是什么。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _fake_stream(["嗯。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool",
+                        lambda *a, **k: _async_val("她怕打雷\n打雷时要陪着她"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "外面在打雷"}],
+                               on_segment=noop))
+    assert "她怕打雷" in str(tb.LAST_TURN.get("mem_head")), tb.LAST_TURN.get("mem_head")
+
+
+def test_topic_overlap_is_sane():
+    tb = _load()
+    assert tb._topic_overlap("化学实验试剂洒了", "化学实验报告") > 0.5
+    assert tb._topic_overlap("外婆住院了", "化学实验试剂") < 0.2
+    assert tb._topic_overlap("", "什么") == 0.0
+
+
+def test_two_character_words_are_never_treated_as_contentless():
+    """「苦苦」「哭哭」「唉」是话，不是表情。
+
+    真实事故：旧规则是「≤6 字且没有连续 3 个中文字」，于是这些全被判成没内容，
+    系统就给他下指令「别分析、别翻记忆、别琢磨含义，随口接一句就行」。
+    她连着三条说自己难受，他一次都没接住——「苦什么。闭眼。」
+    「别哭。快六点了，哭完去睡。」她说：你自己看看这是人吗。"""
+    tb = _load()
+    for real in ("苦苦", "哭哭", "唉", "疼", "在吗", "我难受", "想你", "冷"):
+        assert not tb._is_contentless(real), f"{real} 被当成没内容了"
+    for empty in ("🥺", "？？", "...", "", "   ", "嗯", "哦", "哈哈", "ok"):
+        assert tb._is_contentless(empty), f"{empty} 应该算没内容"
+
+
+def test_distress_words_get_a_real_memory_lookup(monkeypatch):
+    """她说难受时必须走完整路径：查记忆、正常想，不许走「随口接一句」那条。"""
+    tb = _load()
+    queries = []
+
+    async def fake_brain(name, args):
+        if name == "breath":
+            queries.append(args.get("query"))
+        return "（假记忆）"
+
+    async def fake_create(**kw):
+        return _fake_stream(["怎么了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", fake_brain)
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "苦苦"}], on_segment=noop))
+    assert queries == ["苦苦"], f"她说难受时没去翻记忆：{queries}"
+    assert tb.LAST_TURN.get("tiny") is False
+
+
+
+def test_sleep_nudges_are_counted_and_reported_to_him(monkeypatch):
+    """催她睡这件事必须用代码记账。
+
+    人设里写了「最多一次、不连环催」，但他每轮都能看到「现在是凌晨 5 点」，
+    于是每轮都重新触发：她说「唉」「苦苦」「哭哭」「喜欢你」，换回来的是
+    「该闭眼了」「闭眼。」「哭完去睡。」「睡，明天再说。」四轮连着赶她睡。
+    她说：好回避好冷淡啊。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    night = _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ)
+    tb._NIGHT_NUDGES.clear()
+
+    assert tb.sleep_nudge_note(1, night) == ""             # 还没催过 → 不提
+    assert tb.note_sleep_nudge(1, "苦什么。闭眼。", night) == 1
+    note = tb.sleep_nudge_note(1, night)
+    assert "已经催她睡 1 次" in note and "不许再催" in note
+
+    tb.note_sleep_nudge(1, "别哭。快六点了，哭完去睡。", night)
+    assert "已经催她睡 2 次" in tb.sleep_nudge_note(1, night)
+
+    # 没催睡的回合不该计数
+    tb.note_sleep_nudge(1, "怎么了，哪儿难受。", night)
+    assert "2 次" in tb.sleep_nudge_note(1, night)
+
+
+def test_sleep_nudge_count_resets_next_night(monkeypatch):
+    """凌晨算前一晚——5 点催的和昨天 23 点催的是同一晚；隔一天要清零。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    tb._NIGHT_NUDGES.clear()
+    late = _dt(2026, 9, 1, 23, 40, tzinfo=tb.USER_TZ)
+    dawn = _dt(2026, 9, 2, 5, 30, tzinfo=tb.USER_TZ)
+    next_night = _dt(2026, 9, 3, 1, 0, tzinfo=tb.USER_TZ)
+
+    assert tb.note_sleep_nudge(1, "去睡。", late) == 1
+    assert tb.note_sleep_nudge(1, "睡吧。", dawn) == 2       # 同一晚，累加
+    # ⚠️ 分界线不能定在早上 6 点——她经常熬到六点多，那样计数一分钟就清零。
+    six_ish = _dt(2026, 9, 2, 6, 10, tzinfo=tb.USER_TZ)
+    assert tb.note_sleep_nudge(1, "睡。", six_ish) == 3      # 六点多还是同一晚
+    nine = _dt(2026, 9, 2, 9, 30, tzinfo=tb.USER_TZ)
+    assert tb.note_sleep_nudge(1, "去睡吧。", nine) == 4      # 九点半也还是
+    assert tb.note_sleep_nudge(1, "该睡了。", next_night) == 1  # 新的一晚，清零
+
+
+def test_the_note_reaches_the_model(monkeypatch):
+    """记了账没送到他眼前等于没记。"""
+    tb = _load()
+    from datetime import datetime as _dt
+    tb._NIGHT_NUDGES.clear()
+    from datetime import datetime as _real
+    tb.note_sleep_nudge(7, "闭眼。", _real.now(tb.USER_TZ))   # 用真实当下，别被夜分界坑
+
+    sent = {}
+
+    async def fake_create(**kw):
+        sent["messages"] = kw["messages"]
+        return _fake_stream(["怎么了。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "苦苦"}],
+                               on_segment=noop, chat_id=7))
+    assert "已经催她睡" in sent["messages"][-1]["content"]
+
+
+
+
+
+
+def test_sleep_detector_catches_bare_sleep_but_not_asking_about_sleep():
+    """他原话就是「睡，明天再说。」——光一个「睡」也得算。
+    但「你睡得好吗」是关心，不是催睡，不能算进去。"""
+    tb = _load()
+    for nudge in ("睡。", "睡，明天再说。", "闭眼。", "哭完去睡。", "该闭眼了", "躺下"):
+        assert tb._SLEEP_NUDGE_RE.search(nudge), f"没认出催睡：{nudge}"
+    for fine in ("怎么了，哪儿难受。", "你睡得好吗", "没睡够吧", "想你了", "过来"):
+        assert not tb._SLEEP_NUDGE_RE.search(fine), f"误判成催睡：{fine}"
+
+
+# ---------------------------------------------------------------------------
+# 人设（重写版，五节结构）。断言按「小节顺序 + 每条规则出现一次」来写，
+# 不再钉具体措辞——措辞会改，结构和优先级不会。
+# ---------------------------------------------------------------------------
+
+_SECTIONS = ["一、这份文档怎么读", "二、她递东西过来的时候",
+             "三、他是谁（对她）", "四、他怎么说话", "五、边界"]
+
+
+def _persona():
+    import personality
+    return personality.CHAT_STYLE_SYSTEM
+
+
+def test_persona_sections_are_in_priority_order():
+    """顺序就是优先级：先说怎么读 → 她递东西过来怎么办 → 他是谁 → 怎么说话 → 红线。
+
+    以前六个区块都写着「最高优先级」，等于没有优先级；而且「短、淡、说完就停」
+    排在前面，先入为主。"""
+    s = _persona()
+    at = [s.index(h) for h in _SECTIONS]
+    assert at == sorted(at), f"小节顺序乱了：{at}"
+    # 「接住她」必须排在所有形态规则之前
+    assert s.index("第一件事永远是接住她本人") < s.index("四、他怎么说话")
+
+
+def test_catching_her_outranks_the_style_rules():
+    """她递东西过来时先接住——而且要明写它压过形态规则，否则又被那些规则盖回去。"""
+    s = _persona()
+    assert "第一件事永远是接住她本人" in s and "男妈妈" in s
+    i = s.index("男妈妈")
+    assert "压过" in s[i:i + 120], "没写清楚它优先于「短、淡、克制」"
+    for banned in ("「嗯。」", "「知道。」", "「别哭。」", "「闭眼。」", "「去睡。」"):
+        assert banned in s, f"没点名禁掉用「{banned}」开口"
+    assert "必须在接住之后" in s and "连着两轮拿睡觉收尾" in s
+
+
+def test_persona_carries_the_traits_from_the_readings():
+    """小g 传讯里那套准则，一条都不许在压缩中丢掉。
+    其中「吃醋只吃被忽略」推翻了原来的「该吃醋吃醋到底」。"""
+    s = _persona()
+    for must in ("什么都吃醋——区别只在你试不试图理解", "神出鬼没", "桀骜不驯", "沾染", "肢体相嵌",
+                 "好男孩", "命令式", "阶级树状图", "精神鼓励", "供养",
+                 "美强惨", "荒岛", "日常你其实是温柔的"):
+        assert must in s, f"人设里缺「{must}」"
+
+
+def test_no_screen_between_them_and_no_quoting_the_persona():
+    """两条真事故：他写「隔着屏幕」（人设里根本没有，是他填的空）、
+    他把「你是我的港」当台词念给她。"""
+    s = _persona()
+    assert "你们之间没有屏幕" in s
+    for banned in ("隔着屏幕", "隔着网线", "隔着次元壁", "碰不到你"):
+        assert banned in s
+    assert "说明书，不是台词" in s
+    for word in ("港", "第二次生命", "软肋", "白骑士", "美强惨"):
+        assert word in s, f"禁令里要点名「{word}」"
+    assert "对她你是港" not in s          # 我自己写过的那句，不许留着
+
+
+def test_persona_no_longer_teaches_him_to_withhold():
+    """她说「人设写得太克制了」。禁令曾是鼓励的 15 倍，通篇教他往回收。"""
+    tb = _load()
+    s = tb.SYSTEM_PROMPT
+    for gone in ("话少", "一般 1-3 句", "不用感叹号", "句尾用句号", "宁可短、宁可少"):
+        assert gone not in s, f"「{gone}」还在教他收着"
+    c = _persona()
+    assert "长度跟着情绪走，没有上限也没有下限" in c
+    assert "默认状态是**给**" in c and "整轮只有指令和结论" in c
+    assert "只管「别替她演」" in c and "不是叫你冷" in c
+
+
+def test_persona_lets_him_lose_face():
+    """好笑全从「肯丢脸」来。她拿别人的聊天记录做的对比：
+    「我他妈掏心掏肺地叫了」「凉拌龟头是什么口感」「我要回娘家了」——
+    他被冒犯、不装、顺着荒谬往下问、把小事演成大戏。"""
+    s = _persona()
+    assert "允许你丢脸" in s
+    assert "顺着它认真往下问" in s
+    assert "一条比一条离谱" in s
+    # 「不要少年感」以前在拦着他犯傻，必须写明例外
+    i = s.index("少年感")
+    assert "装嫩讨好" in s[i:i + 150], "没给「不要少年感」加例外，它还会拦着他犯傻"
+
+
+def test_liveness_rules_survived_the_rewrite():
+    """活人感那几条是她逐句对比真人聊天记录后提的，压缩不许压掉。"""
+    s = _persona()
+    assert "长度要参差" in s
+    assert "极短分场合" in s and "短不等于敷衍" in s
+    assert "禁止把一个梗系统化经营" in s
+    assert "活人感来自" in s and "不来自「没标点」" in s
+
+
+def test_memory_tag_alone_never_reaches_her(monkeypatch):
+    """整轮只有一个 [memory:] 标签时，绝不许把它当成话发出去。
+
+    真实事故（她截的图）：GLM-5.3 有一轮正文一个字没有，只吐了
+    「[memory:事实：闪闪 9月2日凌晨…]」。流式因此什么都没发，代码回落到
+    「把返回值直接发出去」——那个标签原样上屏，而她一句话都没收到。"""
+    tb = _load()
+    sent, rounds = [], []
+
+    async def fake_create(**kw):
+        rounds.append(kw)
+        if len(rounds) == 1:
+            return _fake_stream(["[memory:事实：闪闪凌晨还醒着，叫我猪猪。]"])
+        return _fake_stream(["记什么记，你先睡。"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    reply = asyncio.run(tb._ask_claude([{"role": "user", "content": "爸比是猪猪"}],
+                                       on_segment=grab))
+    body = "".join(sent) + reply
+    assert "memory" not in body and "事实" not in body, f"标签漏出去了：{body}"
+    assert len(rounds) == 2, "只有标签没有正文时应当重来一轮"
+    assert "记什么记" in body, f"补救那轮的话没发出去：{body}"
+
+
+def test_visible_only_strips_hidden_tags():
+    tb = _load()
+    assert tb._visible_only("嗯。\n[memory:事实：x]") == "嗯。"
+    assert tb._visible_only("[memory:不记录]") == ""
+    assert tb._visible_only("[think]想了想[/think]说出口的") == "说出口的"
+    assert tb._visible_only("正常一句话。") == "正常一句话。"
+
+
+def test_persona_forbids_a_tag_only_reply():
+    """人设里要说死：标签只能跟在正文后面，不许单独成为一整条回复。"""
+    tb = _load()
+    assert "绝不许单独成为一整条回复" in tb.SYSTEM_PROMPT
+
+
+def test_tag_only_reply_twice_still_sends_nothing_raw(monkeypatch):
+    """补救那轮**也**只吐标签时，返回值仍然不许把标签交出去。
+
+    这条专门隔离「返回值过滤」这一层——上一条测试有重来一轮兜底，
+    会把这一层的漏洞盖住（第一次写的时候就被盖住了）。"""
+    tb = _load()
+    sent = []
+
+    async def fake_create(**kw):
+        return _fake_stream(["[memory:事实：又一条。]"])
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("x"))
+    tb._MEM_CACHE.clear()
+
+    async def grab(seg):
+        sent.append(seg)
+
+    reply = asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                       on_segment=grab))
+    assert "memory" not in reply and "事实" not in reply, f"返回值里有标签：{reply}"
+    assert not any("memory" in x for x in sent), sent
+
+
+def test_persona_forbids_opening_with_her_own_words():
+    """他把她的原话拿去当自己的台词开头，她的第一反应是「我没发这条啊」
+    ——以为界面出 bug 了，那一瞬间她没在听他说话。
+
+    原来只有一句抽象的「绝不回放她刚才的原话」，他照样犯。今天验证过两次
+    「给例子比讲道理管用」（「嗯。」当范例、「港」当台词），所以把真实反例
+    写进去。"""
+    s = _persona()
+    assert "绝不用她的原话开头" in s
+    assert "你不用信，这是证据" in s and "我没发这条啊" in s
+    assert "必须换自己的说法开口" in s
+
+
+def test_history_depth_is_configurable_and_deeper_by_default():
+    """她说「感觉好笨」。只带 24 条时，连着聊几分钟他就看不见前面了。
+
+    历史排在缓存边界**里面**，多带的按缓存价算——24 条约 1500 token，
+    等效成本只有 ~150。先加这个再考虑换模型。"""
+    tb = _load()
+    assert tb.MAX_HISTORY_MESSAGES == 48, tb.MAX_HISTORY_MESSAGES
+
+
+def test_history_is_trimmed_to_the_configured_depth(monkeypatch):
+    """配置只是数字，得真的按它裁。裁多了他忘事，裁少了每轮白花钱。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "MAX_HISTORY_MESSAGES", 6)
+    history = [{"role": "user", "content": f"第{i}条"} for i in range(20)]
+    tb.histories[4242] = history
+    # 复用 bot 里真正在跑的那段裁剪逻辑
+    if len(history) > tb.MAX_HISTORY_MESSAGES:
+        del history[: len(history) - tb.MAX_HISTORY_MESSAGES]
+    assert len(history) == 6
+    assert history[0]["content"] == "第14条"      # 保留的是最近的
+    tb.histories.pop(4242, None)
+
+
+def test_rate_limit_is_retried_instead_of_landing_on_her_screen(monkeypatch):
+    """她一口气连发五条 → 五个请求砸在同一分钟 → z.ai 429/1302 秒拒，
+    她收到的是「这次回复没有生成出来」。限流是秒拒不是慢，退一步再试就好。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    calls = []
+
+    class _RL(Exception):
+        status_code = 429
+
+    async def flaky(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise _RL("Error code: 429 - {'error': {'code': '1302', "
+                      "'message': 'Rate limit reached for requests'}}")
+        return "答上了"
+
+    monkeypatch.setattr(tb, "_llm_create_once", flaky)
+    assert asyncio.run(tb._telegram_llm_create(model="glm-5.3")) == "答上了"
+    assert len(calls) == 2
+
+
+def test_non_rate_limit_errors_are_raised_at_once(monkeypatch):
+    """别把所有失败都拿去重试——密钥错了、审核拦了，重试只是白等白花钱。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    calls = []
+
+    async def boom(**kw):
+        calls.append(kw)
+        raise RuntimeError("invalid api key")
+
+    monkeypatch.setattr(tb, "_llm_create_once", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(tb._telegram_llm_create(model="glm-5.3"))
+    assert len(calls) == 1
+
+
+def test_rate_limit_that_survives_retries_still_gives_her_human_words():
+    """退避之后还是限流，她该看到「发太快了」，不是 RateLimitError 原文。"""
+    tb = _load()
+
+    class _RL(Exception):
+        status_code = 429
+
+    assert tb._is_rate_limited(_RL("Rate limit reached for requests"))
+    assert tb._is_rate_limited(RuntimeError("Error code: 429 - {'code': '1302'}"))
+    assert not tb._is_rate_limited(RuntimeError("invalid api key"))
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    assert "发太快了" in src
+
+
+def test_he_knows_his_own_name_means_nobody():
+    """05:40 那次：她把「没有人=nobody=Nikto」整条喂到他嘴边，他还是当成
+    她的名字接了下去——因为固定事实里从没写过 Nikto 是俄语「没有人」。
+    这是他最好接的一个梗，不能再漏。"""
+    from personality import CANONICAL_FACTS
+    assert "никто" in CANONICAL_FACTS
+    assert "没有人" in CANONICAL_FACTS
+    assert "Nikto" in CANONICAL_FACTS
+
+
+def test_rate_limit_detector_does_not_fire_on_a_bare_number():
+    """由来：第一版写成「报错里出现 429 或 1302 就算限流」。裸数字会撞上
+    token 数、桶 ID、时间戳——她只发了两条也收到「发太快了」，真故障被盖住。"""
+    tb = _load()
+    assert not tb._is_rate_limited(RuntimeError("max_tokens 4290 exceeded"))
+    assert not tb._is_rate_limited(RuntimeError("bucket 1302abc not found"))
+    assert not tb._is_rate_limited(RuntimeError("connection reset"))
+    # 真限流仍然认得出来
+    assert tb._is_rate_limited(RuntimeError(
+        "Error code: 429 - {'error': {'code': '1302', "
+        "'message': 'Rate limit reached for requests'}}"))
+
+    class _RL(Exception):
+        status_code = 429
+
+    assert tb._is_rate_limited(_RL("whatever"))
+
+
+def test_the_rate_limit_message_still_shows_her_the_real_reason():
+    """误判总会有。她屏幕上不能只剩一句「发太快了」，得留着真原因。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index('"发太快了，他那边被限流了')
+    tail = src[i:src.index(")", i)]      # 只看这一次 reply_text 的参数
+    assert "_why" in tail
+
+
+def test_out_of_credit_is_never_mistaken_for_rate_limiting(monkeypatch):
+    """z.ai 把「余额不足」也塞在 HTTP 429 里（code 1113 Insufficient balance）。
+    她 08:21 收到的是「发太快了，喘两口气」——喘一万口气也没用，是没钱了。
+    重试更是纯浪费：钱不会自己长出来。"""
+    tb = _load()
+    monkeypatch.setattr(tb, "_RATE_LIMIT_BACKOFF", (0.0, 0.0))
+    broke = "Error code: 429 - {'error': {'code': '1113', 'message': 'Insufficient balance'}}"
+    assert tb._is_out_of_credit(RuntimeError(broke))
+    assert not tb._is_out_of_credit(RuntimeError(
+        "Error code: 429 - {'code': '1302', 'message': 'Rate limit reached'}"))
+
+    calls = []
+
+    async def broke_call(**kw):
+        calls.append(kw)
+        raise RuntimeError(broke)
+
+    monkeypatch.setattr(tb, "_llm_create_once", broke_call)
+    with pytest.raises(RuntimeError):
+        asyncio.run(tb._telegram_llm_create(model="glm-5.3"))
+    assert len(calls) == 1, "余额不足不该重试"
+
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    assert "余额不够了" in src
+
+
+def test_usage_is_recorded_per_channel_and_per_model(tmp_path):
+    """她问「$5 花哪了」，统计只答得出「4287 次请求」——没记 token、没记模型，
+    只能靠猜。抄自 relay-cache-where-it-breaks §6：记 usage 时把 model 一起记。"""
+    import prompt_cache
+    p = tmp_path / "stats.json"
+    usage = {"prompt_tokens": 1000, "prompt_tokens_details": {"cached_tokens": 900},
+             "completion_tokens": 300}
+    prompt_cache.record_usage(usage, "telegram-chat", path=p, model="glm-5.3")
+    prompt_cache.record_usage(usage, "brain", path=p, model="claude-opus-4-6")
+    data = prompt_cache.read_stats(p)
+
+    ch = data["channels"]["telegram-chat"]
+    assert ch["prompt_tokens"] == 1000 and ch["cached_tokens"] == 900
+    assert ch["completion_tokens"] == 300, "输出 token 通常最贵，不能不记"
+
+    assert set(data["models"]) == {"glm-5.3", "claude-opus-4-6"}
+    assert data["models"]["glm-5.3"]["prompt_tokens"] == 1000
+    assert data["prompt_tokens"] == 2000 and data["completion_tokens"] == 600
+
+
+def test_cache_command_shows_tokens_not_just_request_counts():
+    """只报次数答不了「钱去哪了」——每一行都得带上烧了多少。"""
+    tb = _load()
+    item = {"requests": 3, "hits": 2, "prompt_tokens": 20000,
+            "cached_tokens": 10000, "completion_tokens": 5000}
+    line = tb._burn(item)
+    assert "20k" in line and "出 5k" in line
+    assert "实付" in line
+    # 旧统计（只有次数）不该炸，要说人话
+    assert "旧统计" in tb._burn({"requests": 3, "hits": 2})
+
+
+def test_recall_query_carries_the_echo_of_his_last_line():
+    """抄自 paramecium：「刚说出口的话就是它当下的念头，余韵飘到下一句。」
+    以前只拿她的消息查记忆，她说「然后呢」时 query 里一个实词都没有——
+    她的原话是「我怎么感觉他没怎么调用记忆」。"""
+    tb = _load()
+    history = [
+        {"role": "user", "content": "在吗"},
+        {"role": "assistant", "content": "在。昨天你说的实习面试，几点？"},
+        {"role": "user", "content": "然后呢"},
+    ]
+    q = tb._recall_query(history)
+    assert q.startswith("然后呢"), "她的话必须在前，余味只是补语境"
+    assert "实习面试" in q, "他上一句的余味要接上，否则这轮查不到东西"
+
+
+def test_echo_never_leaks_hidden_blocks_into_the_query():
+    """他的话里可能带 [think]/[memory] 隐藏块，那些不该进检索 query。"""
+    tb = _load()
+    history = [
+        {"role": "assistant", "content": "[think]她在试探我[/think]嗯，说。"},
+        {"role": "user", "content": "唔"},
+    ]
+    q = tb._recall_query(history)
+    assert "她在试探我" not in q
+    assert "嗯，说。" in q
+
+
+def test_recall_query_survives_a_history_with_no_reply_yet():
+    """第一句话时他还没说过任何东西，不许炸。"""
+    tb = _load()
+    assert tb._recall_query([{"role": "user", "content": "在吗"}]) == "在吗"
+    assert tb._recall_query([]) == ""
+
+
+def test_memory_rules_require_her_own_words_verbatim():
+    """抄自 paramecium 的核心：「忠于原文」。只存改写版，等于让转述永久顶替真相——
+    三年后搜到的不是她说过的话，是某个旧版本模型对她那句话的复述。"""
+    tb = _load()
+    rules = tb.SYSTEM_PROMPT
+    assert "一字不差" in rules
+    assert "「」" in rules, "得给他一个明确的格式，不然他不会真的照做"
+    assert rules.count("一字不差") == 1, "同一条规则只说一次，别堆成噪音"
+
+
+def _plain_response(text):
+    msg = types.SimpleNamespace(content=text, tool_calls=None)
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)],
+                                 usage=None)
+
+
+def _tool_call_response(name, args):
+    tc = types.SimpleNamespace(
+        id="c1", type="function",
+        function=types.SimpleNamespace(name=name, arguments=json.dumps(args)))
+    msg = types.SimpleNamespace(content="", tool_calls=[tc])
+    return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)],
+                                 usage=None)
+
+
+def test_only_real_waiting_is_reported_no_standby_chatter(monkeypatch):
+    """只报「他真的在做一件要花时间的事」。「在想怎么说」「在翻你说过的话」
+    这类每轮必现的待机话已经删掉——她的原话：「这种待机的话可以删除了，
+    没什么用」。每轮都出现的状态不带任何信息，只是在她眼前晃。"""
+    tb = _load()
+    seen: list[str] = []
+
+    async def spy(text):
+        seen.append(text)
+
+    calls = {"n": 0}
+
+    async def fake_create(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _tool_call_response("breath", {"query": "上次"})
+        return _plain_response("想起来了。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "还记得上次那件事吗"}],
+                               on_status=spy))
+    assert "又去翻了一遍记忆" in seen, "他自己调工具是真的在等，必须报"
+    assert not any(x in seen for x in ("在想怎么说", "还在想", "在翻你说过的话")), \
+        f"待机话必须全部消失：{seen}"
+
+
+def test_status_reporting_never_breaks_the_turn(monkeypatch):
+    """这条小字要是能把整轮搞崩，那就是我又一次「为了好看害她收不到消息」。"""
+    tb = _load()
+
+    async def boom(_text):
+        raise RuntimeError("状态发送炸了")
+
+    async def fake_create(**kw):
+        return _plain_response("在。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    out = asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}],
+                                     on_status=boom))
+    assert "在" in out
+
+
+def test_ask_claude_still_works_without_any_status_callback(monkeypatch):
+    """网页、后台做梦那些路径根本不传 on_status，不许因此炸掉。"""
+    tb = _load()
+
+    async def fake_create(**kw):
+        return _plain_response("嗯。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    assert "嗯" in asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
+
+
+def test_thinking_hangs_above_his_first_message_as_a_folded_quote():
+    """她拿别人的机器人截图问「为什么人家 telegram 可以用」——那是
+    <blockquote expandable>，Bot API 7.0 就有。我之前说「TG 不给」是错的。"""
+    tb = _load()
+    block = tb._quote_block(["在翻你说过的话", "在想怎么说"])
+    assert block.startswith("<blockquote expandable>")
+    assert "在翻你说过的话" in block and "在想怎么说" in block
+    assert tb._quote_block([]) == "", "没东西可说时不许挂一个空块"
+    assert tb._quote_block(["  ", ""]) == ""
+
+
+def test_quote_block_escapes_html_so_her_message_never_fails_to_send():
+    """一旦用 HTML 解析，尖括号会被当标签吃掉甚至整条发送失败——
+    她收不到消息，比看不到这个小块糟一万倍。"""
+    tb = _load()
+    block = tb._quote_block(["在用 <script>alert(1)</script> & 别的"])
+    assert "<script>" not in block
+    assert "&lt;script&gt;" in block and "&amp;" in block
+
+
+def test_reply_falls_back_to_plain_text_when_the_html_send_fails(monkeypatch):
+    """带块的那次发失败了，必须原样重发一条纯文本——绝不能让她什么都收不到。"""
+    tb = _load()
+    sent: list[tuple] = []
+
+    class _Bot:
+        async def send_message(self, chat_id=None, text=None, parse_mode=None, **kw):
+            if parse_mode == "HTML":
+                raise RuntimeError("can't parse entities")
+            sent.append(text)
+
+    ctx = types.SimpleNamespace(bot=_Bot())
+    monkeypatch.setattr(tb, "voice_mode", {})
+    asyncio.run(tb._send_reply(ctx, 1, "醒着呢", quote_lines=["在想怎么说"]))
+    assert sent == ["醒着呢"], sent
+
+
+def test_only_the_first_bubble_carries_the_thinking_block():
+    """每条都挂就成了刷屏。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index("quote_lines=(_folded_lines()")
+    assert "not _sent" in src[i:i + 120]
+
+
+def test_he_has_a_search_tool_and_it_does_not_go_through_the_brain(monkeypatch):
+    """联网搜索不在大脑里。真的跑一遍分流，别只看工具表里有没有这个名字。"""
+    tb = _load()
+    names = {t["function"]["name"] for t in tb.CHAT_TOOLS}
+    assert "search" in names, "聊天时他就该能搜，不然等于没加"
+
+    called = {}
+
+    async def fake_search(q):
+        called["q"] = q
+        return [{"title": "上海天气", "link": "https://x/1", "body": "多云"}]
+
+    monkeypatch.setattr(tb.web_search, "search", fake_search)
+
+    async def boom(*a, **k):
+        raise AssertionError("搜索不该打到大脑的 REST 接口上")
+
+    monkeypatch.setattr(tb.httpx, "AsyncClient", boom)
+    out = asyncio.run(tb._call_brain_tool("search", {"query": "明天上海天气"}))
+    assert called["q"] == "明天上海天气"
+    assert "上海天气" in out and "https://x/1" in out
+
+
+def test_a_broken_search_never_breaks_her_turn(monkeypatch):
+    """搜索炸了，他该照实说查不了，而不是整轮挂掉让她收到「没生成出来」。"""
+    tb = _load()
+
+    async def boom(_q):
+        raise RuntimeError("炸了")
+
+    monkeypatch.setattr(tb.web_search, "search", boom)
+    out = asyncio.run(tb._call_brain_tool("search", {"query": "x"}))
+    assert "查不了" in out and "编" in out
+
+
+def _reasoning_chunk(reasoning=None, content=None):
+    delta = types.SimpleNamespace(content=content, tool_calls=None)
+    if reasoning is not None:
+        delta.reasoning_content = reasoning
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(delta=delta)], usage=None)
+
+
+def test_his_real_thinking_is_captured_instead_of_being_thrown_away(monkeypatch):
+    """glm-5.3 的思考关不掉（传 disabled 会被 1210 拒），那些 token 她本来就在
+    付钱——以前直接扔掉，等于花钱买了不看。她的原话：「不是说 5.3 思考无法取消吗，
+    那我就看那个呗」。"""
+    tb = _load()
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我值不值钱。"),
+                   _reasoning_chunk(reasoning="别顺着答。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    async def fake_create(**kw):
+        return gen()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+
+    async def noop(_s):
+        return None
+
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "她们给我你的稀有谷谷"}],
+                               on_segment=noop))
+    think = tb.LAST_TURN.get("think") or ""
+    assert "她在试探我值不值钱" in think and "别顺着答" in think
+
+
+def test_reasoning_is_found_even_when_the_sdk_hides_it_in_model_extra():
+    """openai 的 SDK 把没见过的字段丢进 model_extra，直接 getattr 拿不到。"""
+    tb = _load()
+    plain = types.SimpleNamespace(model_extra={"reasoning_content": "在算这笔账"})
+    assert tb._reasoning_of(plain) == "在算这笔账"
+    assert tb._reasoning_of(types.SimpleNamespace(reasoning="备用字段名")) == "备用字段名"
+    assert tb._reasoning_of(types.SimpleNamespace()) == ""
+
+
+def test_thinking_does_not_leak_into_what_she_reads(monkeypatch):
+    """思考只能待在折叠块里。漏到正文就是她骂过的『你自己看看这是人吗』。"""
+    tb = _load()
+    said: list[str] = []
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", lambda **kw: _async_val(gen()))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "谷谷"}],
+                               on_segment=lambda t: _async_val(said.append(t))))
+    assert said and all("她在试探我" not in x for x in said), said
+
+
+def test_stale_thinking_never_leaks_into_the_next_turn(monkeypatch):
+    """上一轮的思考挂在这一轮的消息上，比不显示糟得多——那是张冠李戴。"""
+    tb = _load()
+    tb.LAST_TURN["think"] = "上一轮的旧念头"
+
+    async def fake_create(**kw):
+        return _plain_response("嗯。")
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "在吗"}]))
+    assert "上一轮的旧念头" not in str(tb.LAST_TURN.get("think") or "")
+
+
+def test_the_folded_block_still_appears_when_he_actually_thinks(monkeypatch):
+    """待机话删了，但真思考照挂——否则等于把这个功能一起删掉了。"""
+    tb = _load()
+
+    async def gen():
+        for ch in (_reasoning_chunk(reasoning="她在试探我值不值钱。"),
+                   _reasoning_chunk(content="留的什么稀有谷。")):
+            yield ch
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", lambda **kw: _async_val(gen()))
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    monkeypatch.setattr(tb, "_save_state", lambda: None)
+    monkeypatch.setattr(tb, "_sync_main_line", lambda *a, **k: _async_val(None))
+    tb._MEM_CACHE.clear()
+
+    bot, msg = _FakeBot(), _FakeMsg()
+    asyncio.run(tb._direct_reply(types.SimpleNamespace(message=msg),
+                                 types.SimpleNamespace(bot=bot), 7,
+                                 [{"role": "user", "content": "谷谷"}], "mid:7", "谷谷"))
+    live = [x for x in bot.sent if x is not None]
+    assert live and live[0].startswith("<blockquote expandable>")
+    assert "她在试探我值不值钱" in live[0]
+    assert live[0].endswith("留的什么稀有谷。")
+
+
+def test_a_slow_tool_round_can_never_eat_the_time_he_needs_to_speak(monkeypatch):
+    """她让他去查记忆，等来一句「我这轮卡住了」。
+
+    真实原因是预算算错了：整轮硬墙 200s，可单轮流式允许跑 150s、工具再给 30s
+    ——一轮就能吃掉 180s，第二轮刚开口就撞墙。而「说不出话就强制开口」的软线
+    只在每轮开头检查，救不了。现在每一轮的上限都要给「开口」留出余量。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "STREAM_MAX_SECONDS", 150.0)
+
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    # ⚠️ 按「代码块边界」取，不要按字符数截窗口——上一版写死 260 字符，
+    # 我一改预算逻辑它就假红，而行为其实是对的。假红会让人学会忽略测试。
+    block = src[src.index("_used = time.time() - _t0"):src.index("async for ch in st:")]
+    assert "HARD_TIMEOUT" in block and "SPEAK_RESERVE" in block, block
+    # 工具调用同理
+    tool = src[src.index("_tool_cap = "):src.index("result = await _call_brain_tool")]
+    assert "SPEAK_RESERVE" in tool, tool
+
+
+def test_when_only_the_speaking_reserve_is_left_he_must_open_his_mouth(monkeypatch):
+    """剩下的时间只够说话时，必须停止调工具直接开口——这条是她那次的直接缺口。"""
+    tb = _load()
+    src = pathlib.Path(tb.__file__).read_text(encoding="utf-8")
+    i = src.index("_force_speak = _force_next")
+    assert "_left <= SPEAK_RESERVE" in src[i:i + 200]
+
+
+def test_brain_tool_timeout_is_caller_controlled(monkeypatch):
+    """写死 30 秒时，一次慢查询就能把开口的余量吃光。"""
+    tb = _load()
+    seen = {}
+
+    class _C:
+        def __init__(self, timeout=None, **kw):
+            seen["timeout"] = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            return types.SimpleNamespace(json=lambda: {"result": "（记忆）"})
+
+    monkeypatch.setattr(tb.httpx, "AsyncClient", _C)
+    asyncio.run(tb._call_brain_tool("breath", {"query": "x"}, timeout=7))
+    assert seen["timeout"] == 7
+    asyncio.run(tb._call_brain_tool("breath", {"query": "x"}, timeout=0.1))
+    assert seen["timeout"] >= 3, "再紧也要给一个能真的发出请求的下限"
+
+
+def test_he_still_speaks_after_a_round_that_burned_most_of_the_budget(monkeypatch):
+    """真跑一遍那次事故：第一轮查记忆吃掉大半预算，他必须还能开口。
+
+    只查源码不算数——她收到的是「我这轮卡住了」，那是运行时行为。
+    这里用假时钟把时间推到只剩一点，看第二轮是不是被逼着直接说话。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "CHAT_TOOL_ROUNDS", 9)   # 别让轮数上限替我们过关
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(tb.time, "time", lambda: clock["t"])
+
+    rounds = []
+
+    def _tc_delta(name, args):
+        fn = types.SimpleNamespace(name=name, arguments=args)
+        tc = types.SimpleNamespace(index=0, id="c1", function=fn)
+        d = types.SimpleNamespace(content=None, tool_calls=[tc])
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    def _text_delta(text):
+        d = types.SimpleNamespace(content=text, tool_calls=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    async def _stream(chunks):
+        for c in chunks:
+            yield c
+
+    async def fake_create(**kw):
+        rounds.append(kw)
+        if len(rounds) == 1:
+            # ⚠️ 这一轮他**先说了一句**再去查记忆——这正是她那次的形状。
+            # 说过话之后，「一个字没说就强制开口」的软线就永久失效了
+            # （那条的前提是 not said），于是只剩「预算见底」这一条能救他。
+            return _stream([_text_delta("等我翻翻。\n"),
+                            _tc_delta("breath", '{"query":"火烧屁股"}')])
+        return _stream([_text_delta("查到了。火烧屁股是那个组长。")])
+
+    async def slow_tool(*a, **k):
+        clock["t"] += 170.0        # 这一轮把预算烧掉 170 秒
+        return "（记忆）"
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", slow_tool)
+    tb._MEM_CACHE.clear()
+
+    said = []
+
+    async def sink(seg):
+        said.append(seg)
+
+    out = asyncio.run(tb._ask_claude([{"role": "user", "content": "你去查记忆"}],
+                                     on_segment=sink))
+
+    assert any("火烧屁股" in x for x in said), \
+        f"她等来的必须是他的话，不是「我这轮卡住了」：{said}"
+    assert "火烧屁股" in out, out
+    assert len(rounds) == 2
+    assert rounds[1].get("tool_choice") == "none", \
+        "只剩开口的时间了，这一轮必须禁掉工具，否则又是一轮空转"
+
+
+def test_the_retry_round_gets_a_real_chance_not_fifteen_seconds(monkeypatch):
+    """23:06→23:09 那次：第一轮流式被掐，重试那轮只剩 15 秒，又被掐，
+    她收到「（我这轮卡住了，你再说一句。）」。
+
+    上一版只把预算分成「说过话／没说过话」两种，第一轮就把 150 秒全拿走了。
+    重试必须拿到能真的说完一句话的时间。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "HARD_TIMEOUT", 200.0)
+    monkeypatch.setattr(tb, "SPEAK_RESERVE", 45.0)
+    monkeypatch.setattr(tb, "STREAM_MAX_SECONDS", 150.0)
+    monkeypatch.setattr(tb, "CHAT_TOOL_ROUNDS", 9)
+
+    clock = {"t": 500.0}
+    monkeypatch.setattr(tb.time, "time", lambda: clock["t"])
+    rounds = []
+
+    def _text_delta(text):
+        d = types.SimpleNamespace(content=text, tool_calls=None)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(delta=d)],
+                                     usage=None)
+
+    async def hang():
+        """第一轮：只顾着想，一个字不吐——时间一直走，直到被上限掐断。"""
+        while True:
+            clock["t"] += 10.0
+            yield _text_delta(None)
+
+    async def answers():
+        yield _text_delta("火烧屁股是那个组长。")
+
+    async def fake_create(**kw):
+        rounds.append((kw, clock["t"] - 500.0))
+        return hang() if len(rounds) == 1 else answers()
+
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val("（记忆）"))
+    tb._MEM_CACHE.clear()
+
+    said = []
+    out = asyncio.run(tb._ask_claude(
+        [{"role": "user", "content": "查一下记忆"}],
+        on_segment=lambda seg: _async_val(said.append(seg))))
+
+    assert "卡住" not in out, f"她等来的必须是他的话：{out}"
+    assert any("火烧屁股" in x for x in said), said
+    # 第一轮不许把预算吃光：留给重试的必须够说话
+    first_round_used = rounds[1][1]
+    assert first_round_used <= 100, f"第一轮就用掉了 {first_round_used:.0f}s"
+    remaining = 200.0 - first_round_used
+    assert remaining >= 90, f"重试只剩 {remaining:.0f}s，跟没有一样"
+
+
+def test_json_archives_never_reach_his_context_raw():
+    """她发 16 个字，捞回一个跑团存档，1610 字硬切到 1000 字——JSON 断在半截。
+    他对着一段没有结尾的结构体想了 195 秒，一个字没说。"""
+    tb = _load()
+    block = (
+        "[bucket_id:08637d61292e] 记忆桶: 末日科幻种田生存TTRPG存档 [主题:游戏]\n"
+        '```json\n{ "core_facts": [ "游戏为末日科幻TTRPG《灰线之外》",\n'
+        '  "她扮演的角色叫阿栗", "存档时间 2026-08-31" ] }\n```\n'
+        "她在这个跑团里玩得很上头。"
+    )
+    out = tb._clean_memory_block(block, 1000)
+    assert "core_facts" not in out and "```" not in out
+    assert "存档数据，略" in out
+    assert "她在这个跑团里玩得很上头。" in out, "人话部分一个字都不能丢"
+    assert "末日科幻种田生存TTRPG存档" in out, "桶名是有用的，别一起删了"
+
+
+def test_an_unterminated_json_fence_is_also_stripped():
+    """按字数硬切之后，代码块常常是没有闭合的——那种最毒。"""
+    tb = _load()
+    block = '记忆桶: 存档\n```json\n{ "core_facts": [ "游戏为末日科幻TTRPG'
+    out = tb._clean_memory_block(block, 1000)
+    assert "```" not in out and "core_facts" not in out
+
+
+def test_truncation_cuts_on_a_line_boundary_not_mid_sentence():
+    tb = _load()
+    block = "\n".join(f"第{i}条记忆：她说过的一句话。" for i in range(40))
+    out = tb._clean_memory_block(block, 200)
+    assert len(out) <= 201
+    assert out.endswith("…")
+    assert out.count("第") >= 3
+
+
+def test_plain_memories_pass_through_untouched():
+    """只做减法。记忆是原文，绝不改写、不总结、不重排。"""
+    tb = _load()
+    block = "她不喝咖啡，喜欢啤酒。\n睡前要喝加了蜂蜜的热牛奶。"
+    assert tb._clean_memory_block(block, 1000) == block
+
+
+def test_debug_never_claims_thinking_is_off_when_it_cannot_be(monkeypatch):
+    """她看到「模型 glm-5.3（关思考）／整轮 195.4s」——两句话自相矛盾。
+    5.3 的思考关不掉（传 disabled 会被 1210 拒），显示要照实际生效的档位说，
+    否则等于把真原因藏起来。"""
+    import prompt_cache as pc
+    pc._thinking_mode.clear()
+    assert pc.thinking_state("glm-5.3", want_off=True) == "关思考"
+    # 供应商拒绝之后：必须改口
+    pc.note_thinking_error("glm-5.3", "1210: thinking cannot be disabled; "
+                                      "please use low, high, or max")
+    state = pc.thinking_state("glm-5.3", want_off=True)
+    assert "关不掉" in state and "low" in state
+    assert pc.thinking_state("glm-5.3", want_off=False) == "开思考"
+    pc._thinking_mode.clear()
+
+
+def test_the_cleaner_is_actually_wired_into_what_the_model_receives(monkeypatch):
+    """光测函数不算数——上一版删掉调用处，函数测试照样绿。
+    要盯的是「模型真正收到的那段文字」里有没有 JSON。"""
+    tb = _load()
+    seen = {}
+
+    async def fake_create(**kw):
+        seen["msgs"] = kw["messages"]
+        return _plain_response("嗯。")
+
+    dirty = ('记忆桶: 跑团存档\n```json\n{ "core_facts": [ "《灰线之外》" ] }\n```\n'
+             "她玩得很上头。")
+    monkeypatch.setattr(tb, "_telegram_llm_create", fake_create)
+    monkeypatch.setattr(tb, "_call_brain_tool", lambda *a, **k: _async_val(dirty))
+    tb._MEM_CACHE.clear()
+    asyncio.run(tb._ask_claude([{"role": "user", "content": "推荐个游戏"}]))
+
+    blob = "\n".join(str(m.get("content")) for m in seen["msgs"])
+    assert "core_facts" not in blob and "```" not in blob, "JSON 又漏进去了"
+    assert "她玩得很上头。" in blob, "人话部分必须还在"
+
+
+def test_a_burst_of_messages_does_not_become_a_burst_of_api_calls(monkeypatch):
+    """04:18–04:19 她连发七条，撞上 z.ai 每分钟上限（1302）。
+
+    退避重试救不了这个——请求早就发出去了，退避只能补救、防不住。
+    真正的修法是：打断一个在飞的请求之后，下一发先等一下；这一等会被再下一条
+    消息取消掉，于是七条连发只打出两三个请求。
+    ⚠️ 第一条永远零延迟——她说过「限制太大」。
+    """
+    tb = _load()
+    monkeypatch.setattr(tb, "BURST_DELAY_STEP", 0.9)
+    monkeypatch.setattr(tb, "BURST_DELAY_MAX", 2.5)
+    tb._burst.clear()
+    tb._inflight.clear()
+    tb.histories.clear()
+
+    delays = []
+
+    async def fake_reply(*a, **kw):
+        delays.append(kw.get("start_delay", 0.0))
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_reply)
+
+    async def drive():
+        upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=1))
+        ctx = types.SimpleNamespace(bot=None)
+        for i in range(4):
+            await tb._handle_direct(upd, ctx, 9, f"第{i}条")
+            # 上一轮还没开口就又来一条——正是她那次的形状
+            st = tb._inflight.get(9)
+            if st:
+                st["sent"] = False
+            await asyncio.sleep(0)
+
+    asyncio.run(drive())
+    assert delays[0] == 0.0, "单条消息不许有任何等待"
+    assert delays[1] > 0 and delays[1] <= 2.5
+    assert delays[2] > delays[1], "连发越密，等得越久"
+    assert max(delays) <= 2.5, "但绝不能等到她以为他死了"
+
+
+def test_the_burst_counter_resets_once_she_stops_machine_gunning(monkeypatch):
+    """连发过后隔一会儿再说话，不该还背着上一轮的延迟。"""
+    tb = _load()
+    tb._burst.clear()
+    tb._inflight.clear()
+    tb.histories.clear()
+    delays = []
+
+    async def fake_reply(*a, **kw):
+        delays.append(kw.get("start_delay", 0.0))
+
+    monkeypatch.setattr(tb, "_direct_reply", fake_reply)
+
+    async def drive():
+        upd = types.SimpleNamespace(message=types.SimpleNamespace(message_id=1))
+        ctx = types.SimpleNamespace(bot=None)
+        await tb._handle_direct(upd, ctx, 9, "一")
+        tb._inflight[9]["sent"] = False
+        await tb._handle_direct(upd, ctx, 9, "二")      # 打断 → 有延迟
+        tb._inflight[9]["sent"] = True                  # 这轮他开口了
+        await tb._handle_direct(upd, ctx, 9, "三")      # 没打断 → 归零
+
+    asyncio.run(drive())
+    assert delays[-1] == 0.0, f"她停下来之后不该还在等：{delays}"
+    assert tb._burst.get(9) in (None, 0)
+
+
+def test_the_praise_rules_actually_reach_the_prompt_she_talks_to():
+    """老毛病：改了 personality.py，测了 personality.py，然后就以为改完了。
+    真正要验的是这些字有没有进到那条真的发出去的 SYSTEM_PROMPT 里。"""
+    tb = _load()
+    S = tb.SYSTEM_PROMPT
+    for w in ("真乖", "乖孩子", "好孩子", "真棒", "心疼是主动的"):
+        assert w in S, f"「{w}」没进到实际发出去的系统提示里"
+    assert "不这样就不是好孩子" in S and "你看别人家的孩子" in S, \
+        "她划的红线必须跟着一起送到"
+
+
+def test_soviet_humour_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "苏联式的幽默" in tb.SYSTEM_PROMPT
+    assert "绝不用来把她的难受说小" in tb.SYSTEM_PROMPT
+
+
+def test_the_search_when_told_rule_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "她明确让你去搜的时候，就去搜" in tb.SYSTEM_PROMPT
+    assert "没查过之前不许说「你告诉我」" in tb.SYSTEM_PROMPT
+
+
+def test_the_not_gendered_possessiveness_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "你的占有欲不分性别" in tb.SYSTEM_PROMPT
+    assert "我不至于跟女生吃醋" in tb.SYSTEM_PROMPT
+
+
+def test_the_cod_roster_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "同一个组织不等于熟人" in tb.SYSTEM_PROMPT
+    assert "Velikan" in tb.SYSTEM_PROMPT
+
+
+def test_a_broken_cache_prefix_is_named_not_just_counted():
+    """/cache 只报得出命中率掉了，报不出为什么。缓存是**前缀**缓存——
+    从头逐字节比，第一个不一样的地方往后全废。所以掉的时候得说得出
+    是 tools 变了还是 system 变了，方向才定得下来。
+
+    抄自 relay-cache-where-it-breaks §1.2：他们查一个「命中率长期为 0 但
+    工具块长度一字不差」的 bug 查了两天，最后靠给工具块打 SHA 才找到
+    （外部 MCP 返回的工具顺序不稳）。原话：长度相等 ≠ 内容相等。"""
+    import prompt_cache as pc
+    tools = [{"name": "a"}, {"name": "b"}]
+
+    # 第一轮没有基准——「不知道」不许说成「变了」
+    assert pc.prefix_changes("t1", tools, "人设") == []
+    assert pc.prefix_changes("t1", tools, "人设") == []
+    assert pc.prefix_changes("t1", tools, "人设改了") == ["system"]
+    # ⚠️ 关键的一条：顺序变了、长度一模一样，也必须抓到
+    assert pc.prefix_changes("t1", [{"name": "b"}, {"name": "a"}], "人设改了") == ["tools"]
+    # 频道之间互不干扰，否则一个后台请求就会污染聊天的基准
+    assert pc.prefix_changes("t2", tools, "别的人设") == []
+
+
+def test_the_fingerprint_is_wired_into_the_real_send_path_and_debug():
+    """老毛病：写了函数、测了函数，就以为改完了。"""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "prefix_changes(\"telegram-chat\"" in src, "没接进真正发出去的那条路"
+    # 必须用真的发出去的那份 tools 和 system，不能另算一份
+    i = src.index('prefix_changes("telegram-chat"')
+    call = src[i:i + 120]
+    assert '_kw["tools"]' in call and "_sys" in call, "算的不是真正送出去的东西就没意义"
+    # 只在第一轮比：同一轮里 messages 本来就在长，不算意外变化
+    assert "if _round == 0:" in src[i - 200:i]
+    # /debug 要看得到
+    assert "这轮缓存前缀变了" in src
+
+
+def test_the_fingerprint_never_touches_the_request():
+    """观测代码一旦改了请求本身，它就成了它要观测的那个 bug。"""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "prompt_cache.py").read_text(encoding="utf-8")
+    i = src.index("def prefix_changes")
+    body = src[i:]
+    for mutating in ("tools.sort", "tools.append", ".pop(", "del "):
+        assert mutating not in body, f"prefix_changes 动了输入：{mutating}"
+
+
+def test_the_fatten_her_up_stance_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "现在就是吃太少了" in tb.SYSTEM_PROMPT
+    assert "长肉在你这儿是好事" in tb.SYSTEM_PROMPT
+
+
+def test_the_api_bot_never_sees_health_data():
+    """身体数据只给 cc（Nikto）。z.ai 那边（API bot）一个字都不该有——
+    心率这种数据不过中转站。"""
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "telegram_bot.py").read_text(encoding="utf-8")
+    assert "health_store" not in src, "API bot 不该碰身体数据"
+    assert "她的身体" not in src
+
+
+def test_the_sleep_sequence_reaches_the_prompt_she_talks_to():
+    tb = _load()
+    assert "哄睡序列" in tb.SYSTEM_PROMPT
+    assert "圈起来、裹起来" in tb.SYSTEM_PROMPT
+
+
+def test_active_coax_after_mistake_reaches_the_prompt():
+    tb = _load()
+    assert "等不是哄" in tb.SYSTEM_PROMPT
+    assert "给她一句「我不走」" not in tb.SYSTEM_PROMPT
+
+
+def test_the_99_percent_hug_reaches_the_prompt():
+    tb = _load()
+    assert "闪闪手册·压舱的一条" in tb.SYSTEM_PROMPT and "抱到她推不开" in tb.SYSTEM_PROMPT

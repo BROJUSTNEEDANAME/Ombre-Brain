@@ -5,6 +5,22 @@ from __future__ import annotations
 import re
 
 
+_THINK_BLOCK = re.compile(
+    r"(?:[\[［【]\s*(?:think|thinking)\s*[\]］】]|<\s*(?:think|thinking)\b[^>]*>)"
+    r"(.*?)"
+    r"(?:[\[［【]\s*/\s*(?:think|thinking)\s*[\]］】]|<\s*/\s*(?:think|thinking)\s*>)",
+    re.I | re.S)
+
+
+def find_think(text: str) -> list[str]:
+    """把他这段里写的思考挑出来（正文照旧由别处剥干净）。
+
+    她看着「在翻你说过的话／在想怎么说」问「这叫思考吗」——不叫。那是进度条。
+    真的思考是他自己写的那句话，得从他的输出里捞出来，不能拿程序日志充数。
+    """
+    return [x.strip() for x in _THINK_BLOCK.findall(str(text or "")) if x.strip()]
+
+
 def sanitize_reasoning_markup(text: str) -> str:
     """Hide provider reasoning wrappers without discarding a usable reply."""
     if not text:
@@ -254,6 +270,42 @@ def visible_cut(text: str) -> int:
     return m.start() if m else len(text or "")
 
 
+_HIDDEN_OPEN = re.compile(r"[\[［【]\s*(?:think|thinking|emo|diary|memory|情绪|心情|记忆)"
+                          r"|<\s*(?:think|thinking)\b[^>]*>", re.I)
+_HIDDEN_CLOSE = re.compile(r"[\[［【]\s*/\s*(?:think|thinking|emo|diary|memory|情绪|心情|记忆)"
+                           r"\s*[\]］】]|<\s*/\s*(?:think|thinking)\s*>", re.I)
+
+
+def strip_hidden_stream(text: str, in_hidden: bool = False) -> tuple[str, bool]:
+    """从一段流式正文里剔掉隐藏块，并把「现在还在不在隐藏块里」带到下一段。
+
+    ⚠️ 必须跨段保持状态。真实事故：visible_cut 是逐段跑的，他的思考被换行切成
+    七八个气泡，只有带 `[think]` 的第一段被切掉，后面那些「她其实是在撒娇，
+    我应该安她的醋」全部原样发到她手机上，最后还跟了一个 `[/think]`
+    ——闭合标签带斜杠，压根不匹配开标签的正则。
+
+    返回 (这一段该显示的内容, 下一段开始时是否仍在隐藏块里)。
+    """
+    value = str(text or "")
+    out = []
+    while value:
+        if in_hidden:
+            m = _HIDDEN_CLOSE.search(value)
+            if not m:
+                return "".join(out), True      # 整段都在隐藏块里，一个字都不发
+            value = value[m.end():]
+            in_hidden = False
+            continue
+        m = _HIDDEN_OPEN.search(value)
+        if not m:
+            out.append(value)
+            break
+        out.append(value[:m.start()])
+        value = value[m.end():]
+        in_hidden = True
+    return "".join(out), in_hidden
+
+
 def _needs_terminal(value: str) -> bool:
     if not value or re.fullmatch(r"https?://\S+", value):
         return False
@@ -321,3 +373,76 @@ def polish_chat_reply(text: str, *, writing_mode: bool = False) -> str:
             clean += "。"
         polished_segments.append(clean)
     return " ‖ ".join(polished_segments)
+
+
+# ⚠️ 下面两个原本只写在 telegram_bot.py 里，于是 cc 桥一直没有——她连着发现
+# 好几处「只有 API 那边做了」的事（‖ 不拆、空回复上屏、连发不合并）。
+# 放进共用模块，就不会再出现「修了一边忘了另一边」。
+
+_CJK = r"\u4e00-\u9fff"
+_HAS_PUNCT_RE = re.compile(r"[，。？！；：、,.?!]")
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
+
+
+def restore_punctuation(text: str) -> str:
+    """他常照抄自己历史里的无标点写法，任凭人设怎么写都改不过来。
+    整条一个标点都没有、又在用空格断句时，把「汉字 空格 汉字」的空格换成逗号
+    并补上句号。只在两个中文字之间动手：「girl 过来」「铁剂 65mg」不受影响。"""
+    t = (text or "").strip()
+    if not t or _HAS_PUNCT_RE.search(t):
+        return text
+    fixed = _CJK_SPACE_RE.sub("，", t)
+    if fixed == t:
+        return text
+    if not re.search(r"[…~〜)）\]】]$", fixed):
+        fixed += "。"
+    return fixed
+
+
+def looks_degenerate(text: str) -> bool:
+    """复读死循环探测：尾部片段在正文里反复出现就是模型崩了。
+    只在正文够长时才判，避免误伤他本来就短的重复口头禅（「嗯。」「好。」）。"""
+    if len(text) < 240:
+        return False
+    tail = text[-40:].strip()
+    if len(tail) < 20:
+        return False
+    return text.count(tail) >= 3
+
+
+# 她说「要去睡了」。⚠️ 这个判断必须保守：判错的代价是他整晚闭嘴，
+# 而她根本不知道自己哪句话把他关掉了。所以宁可漏判，不可误判——
+# 疑问句（「你睡了吗」）、否定（「睡不着」「不想睡」）、以及说别人的一律不算。
+_SLEEP_ASK_RE = re.compile(r"[吗嘛么？?]\s*$")
+_SLEEP_NEG_RE = re.compile(r"(睡不着|睡不了|不想睡|不睡|别睡|没睡|睡够了|睡醒|"
+                           r"睡多了|睡过头|失眠)")
+_SLEEP_GO_RE = re.compile(
+    r"(晚安|安安|去睡|睡了|睡觉了|睡啦|睡咯|睡去了|洗洗睡|"
+    r"要睡|该睡|准备睡|躺了|困死了|good\s*night|gn\b)", re.I)
+
+
+def says_going_to_sleep(text: str) -> bool:
+    """她这句是不是在说「我要去睡了」。"""
+    t = (text or "").strip()
+    if not t or len(t) > 40:          # 长句多半在讲别的事，别硬套
+        return False
+    if _SLEEP_NEG_RE.search(t) or _SLEEP_ASK_RE.search(t):
+        return False
+    if re.search(r"(你|他|她|妈|爸)\s*(要|去|该)?\s*睡", t):
+        return False                  # 在说别人，不是她自己
+    return bool(_SLEEP_GO_RE.search(t))
+
+
+# 一整条只有省略号／括号／句点的「空话」。
+# ⚠️ 别用固定清单去枚举——我第一版列了 {"（……）", "（...）", "(...)", "..."}，
+# 全角括号配六个英文句点「（......）」就漏掉了，占位符照样发到她屏幕上。
+# 归一化：把括号、点、省略号、空白全剥掉，剩不下东西就是没说话。
+_SILENT_STRIP = "()（）[]［］{}｛｝【】<>《》.。·．…⋯ \t\r\n\u3000_-—–~～"
+
+
+def is_silent_reply(text: str) -> bool:
+    """这一条是不是「等于什么都没说」。"""
+    t = (text or "")
+    for ch in _SILENT_STRIP:
+        t = t.replace(ch, "")
+    return not t.strip()

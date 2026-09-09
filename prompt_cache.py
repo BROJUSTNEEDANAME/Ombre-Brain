@@ -67,6 +67,23 @@ def note_thinking_error(model: str | None, error: object) -> bool:
     return True
 
 
+def thinking_state(model: str | None, want_off: bool = True) -> str:
+    """给她看的那行字：这一轮思考到底是开是关。
+
+    ⚠️ /debug 以前一律照她的选择写「关思考」，可 glm-5.3 的思考关不掉——
+    她那次看到「模型 glm-5.3（关思考）／整轮 195.4s」，两句话自相矛盾，
+    等于把真原因藏起来了。显示要照实际生效的档位说。
+    """
+    if not want_off:
+        return "开思考"
+    mode = _thinking_mode.get(model or "", "disabled")
+    if mode == "disabled":
+        return "关思考"
+    if mode == "none":
+        return "思考按模型默认（这家不认这个参数）"
+    return f"想关但关不掉，已压到最低档（{mode}）"
+
+
 def preset_thinking_level(model: str | None, level: str) -> None:
     """让 env 直接指定档位（OMBRE_GLM_THINKING=low/high/max）。"""
     if level in _THINKING_LEVELS:
@@ -87,6 +104,25 @@ def request_extra_body(
         for key, value in thinking.items():
             body.setdefault(key, value)
     return body
+
+
+def append_volatile_context(messages: list[dict], context: str) -> list[dict]:
+    """把每轮都在变的东西放到**所有消息之后**，作为独立的一条。
+
+    为什么不能像 inject_volatile_context 那样塞进最后一条 user 里：
+    存进历史的是原文，塞过的是「动态背景 + 原文」。同一条消息这一轮和下一轮
+    渲染出的字节就不一样，缓存是前缀匹配的，从那个位置往后全部失效——
+    历史对话**永远进不了缓存**。（NyraSeithhh/cache 的第 2 条铁律：
+    会变的全部排到断点之后。）
+
+    放在末尾就没这个问题：它只存在于当轮请求里，下一轮不会重现，
+    而它之前的所有消息逐字节不变。
+    """
+    copied = [dict(message) for message in messages]
+    if not context:
+        return copied
+    copied.append({"role": "user", "content": context})
+    return copied
 
 
 def inject_volatile_context(messages: list[dict], context: str) -> list[dict]:
@@ -146,16 +182,49 @@ def read_stats(path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     return data
 
 
+def _completion_tokens(usage: Any) -> int:
+    """输出 token 通常比输入贵好几倍，以前一个字都没记，算账时等于瞎了半只眼。"""
+    def get(obj, key):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+    for key in ("completion_tokens", "output_tokens"):
+        value = get(usage, key)
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def _bump(bucket: dict, prompt: int, cached: int, completion: int) -> None:
+    bucket["requests"] = int(bucket.get("requests", 0) or 0) + 1
+    bucket["hits"] = int(bucket.get("hits", 0) or 0) + (1 if cached > 0 else 0)
+    bucket["prompt_tokens"] = int(bucket.get("prompt_tokens", 0) or 0) + prompt
+    bucket["cached_tokens"] = int(bucket.get("cached_tokens", 0) or 0) + cached
+    bucket["completion_tokens"] = int(bucket.get("completion_tokens", 0) or 0) + completion
+
+
 def record_usage(
     usage: Any,
     channel: str,
     path: str | os.PathLike[str] | None = None,
+    model: str = "",
 ) -> dict[str, Any] | None:
-    """Persist aggregate token counts only; prompts and replies are never stored."""
+    """Persist aggregate token counts only; prompts and replies are never stored.
+
+    ⚠️ 按来源和按模型分别记 token，不只是记次数。由来：她问「$5 怎么没的」，
+    统计只答得出「4287 次请求」，答不出这些请求分别烧了多少、烧在哪个模型上——
+    于是只能靠猜。参考 relay-cache-where-it-breaks §6：「哪一轮」和「哪个模型」
+    对不上号，是判错的共同原因；记 usage 时把 model 一起记进去。"""
     values = cache_usage(usage)
     if values is None:
         return None
     prompt, cached = values
+    completion = _completion_tokens(usage)
     target = _stats_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK:
@@ -164,16 +233,16 @@ def record_usage(
             os.chmod(lock_path, 0o600)
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             data = read_stats(target)
-            data["requests"] = int(data.get("requests", 0) or 0) + 1
-            data["hits"] = int(data.get("hits", 0) or 0) + (1 if cached > 0 else 0)
-            data["prompt_tokens"] = int(data.get("prompt_tokens", 0) or 0) + prompt
-            data["cached_tokens"] = int(data.get("cached_tokens", 0) or 0) + cached
-            channels = data.setdefault("channels", {})
-            item = channels.setdefault(channel, {"requests": 0, "hits": 0})
-            item["requests"] = int(item.get("requests", 0) or 0) + 1
-            item["hits"] = int(item.get("hits", 0) or 0) + (1 if cached > 0 else 0)
+            _bump(data, prompt, cached, completion)
+            _bump(data.setdefault("channels", {}).setdefault(channel, {}),
+                  prompt, cached, completion)
+            if model:
+                _bump(data.setdefault("models", {}).setdefault(model, {}),
+                      prompt, cached, completion)
             data["last"] = {
                 "channel": channel,
+                "model": model,
+                "completion_tokens": completion,
                 "prompt_tokens": prompt,
                 "cached_tokens": cached,
                 "hit_rate": round(cached / prompt * 100, 2) if prompt else 0.0,
@@ -186,3 +255,43 @@ def record_usage(
             os.replace(temp, target)
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     return data
+
+
+# ── 前缀指纹：缓存掉了，得说得出「哪一段变了」 ──
+# 抄自 Cheiineeey/relay-cache-where-it-breaks §1.2。他们查一个「命中率长期为 0
+# 但工具块长度一字不差」的 bug 查了两天，最后是**给工具块打 SHA** 才发现
+# len 相同、sha 每轮在变（外部 MCP 返回的工具顺序不稳）。他们的教训原话：
+#
+#     「长度相等 ≠ 内容相等。打指纹，别看长度。」
+#
+# 我们的 /cache 只报得出命中率掉了，报不出为什么。缓存是**前缀**缓存——
+# 从头逐字节比，碰到第一个不一样的地方往后全废。所以只要知道
+# 「tools 变了」还是「system 变了」，方向就定了，不用猜。
+#
+# ⚠️ 纯观测：只读、只记哈希、绝不碰请求本身，也绝不存正文。
+_PREFIX_FP: dict[str, str] = {}
+
+
+def _sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()[:12]
+
+
+def prefix_changes(channel: str, tools: Any, system: str) -> list[str]:
+    """比上一轮，前缀里哪几段变了。返回变了的段名（没变就是空表）。
+
+    第一轮没有可比的基准，返回空表——「不知道」不许说成「变了」。
+    """
+    import json
+    parts = {
+        "tools": _sha(json.dumps(tools or [], ensure_ascii=False, sort_keys=False)),
+        "system": _sha(system),
+    }
+    changed = []
+    for name, fp in parts.items():
+        key = f"{channel}:{name}"
+        old = _PREFIX_FP.get(key)
+        _PREFIX_FP[key] = fp
+        if old is not None and old != fp:
+            changed.append(name)
+    return changed

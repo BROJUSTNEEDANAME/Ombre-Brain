@@ -35,6 +35,9 @@ OMBRE_MCP_URL=http://127.0.0.1:8000/mcp
 # GLM 模型
 OMBRE_BOT_MODEL=glm-5.3
 
+# 想在 Telegram 里用 /model claude 切到 Claude 就填这个（不用就留空）
+OMBRE_ANTHROPIC_KEY=
+
 # 时区
 OMBRE_BOT_TZ=America/Los_Angeles
 ENVEOF

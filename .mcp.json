@@ -2,7 +2,7 @@
   "mcpServers": {
     "ombre-brain": {
       "type": "http",
-      "url": "${OMBRE_MCP_URL:-https://ombre-brain-6e05.onrender.com/mcp}"
+      "url": "${OMBRE_MCP_URL:-http://127.0.0.1:8000/mcp}"
     }
   }
 }

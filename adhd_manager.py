@@ -20,7 +20,9 @@ DEFAULT_TZ = ZoneInfo("America/Los_Angeles")
 ACTIVE_STATUSES = {"setup", "active", "paused", "lost", "limit_wait"}
 
 _START_PATTERNS = (
-    re.compile(r"(?:请|你|爸爸|爸比)?(?:来)?(?:托管|监督|盯着|陪着|陪我|管着)我(?:做|去)?(?P<goal>.+)"),
+    # ⚠️ 不含「陪着我／陪我」：那是撒娇不是派活。她说「一直陪着我好不好呀哥哥」
+    # 曾被当成要托管「好不好呀哥哥」这件事。要陪≠要人盯着做任务。
+    re.compile(r"(?:请|你|爸爸|爸比)?(?:来)?(?:托管|监督|盯着|管着)我(?:做|去)?(?P<goal>.+)"),
     re.compile(r"帮我记一下(?:要|去|做)?(?P<goal>.+)"),
 )
 _CONTROL_WORDS = {
