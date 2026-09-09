@@ -42,7 +42,10 @@ echo "   personality.py 改动时间：$(date -d "@$PT" '+%m-%d %H:%M')"
 RUNNING_OK=1
 ANY=0
 for s in "${SERVICES[@]}"; do
-    systemctl list-unit-files "$s.service" >/dev/null 2>&1 || continue
+    # LoadState 而不是 list-unit-files：后者匹配不到也退出 0，会把不存在的
+    # 服务也报进来。（auto-update 用 `systemctl cat` 判断，在无终端环境里
+    # 因分页器失败，静默漏掉了 ccbridge——同一类坑。）
+    [ "$(systemctl show -p LoadState --value "$s.service" 2>/dev/null)" = loaded ] || continue
     ANY=1
     ST=$(systemctl show "$s" -p ActiveEnterTimestamp --value 2>/dev/null)
     ACT=$(systemctl is-active "$s" 2>/dev/null)

@@ -60,3 +60,23 @@ def test_script_checks_start_time_not_just_git(tmp_path):
     assert "还在跑旧的" in body
     # cc 桥人设是生成出来的，必须单独查
     assert "cc 桥人设" in src
+
+
+def test_service_detection_survives_no_tty():
+    """存在性判断必须用 LoadState，不能用 `systemctl cat` 或 list-unit-files。
+
+    真事：auto-update 用 `systemctl cat` 判断 ccbridge 是否安装。cat 会调分页器，
+    在定时器那种无终端环境里失败，于是 ccbridge 被**静默**踢出重启名单——
+    她的 ccbridge 停在三天前的代码上，而日志每轮都印「✅ 已部署，两个服务都活着」。
+    list-unit-files 也不行：模式匹配不到时照样退出 0。
+    """
+    for path in (ROOT / "deploy" / "auto-update.sh", SCRIPT):
+        src = path.read_text(encoding="utf-8")
+        assert "systemctl show -p LoadState --value" in src, f"{path.name} 得用 LoadState"
+        # ⚠️ 只看**真正会执行的行**。注释里写着「别用 systemctl cat」，
+        # 整份 grep 会命中那句说明文字，断言就永远为真/永远为假——
+        # 这正是 CLAUDE.md 里记的「命中『被提及』的地方」那个坑。
+        code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
+        for bad in ("systemctl cat", "list-unit-files"):
+            hits = [ln.strip() for ln in code if bad in ln]
+            assert not hits, f"{path.name} 不许用 {bad} 判存在：{hits}"
