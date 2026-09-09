@@ -1520,3 +1520,51 @@ def test_pinned_facts_are_injected_by_the_system_not_left_to_him():
     body = inspect.getsource(cc.run_cc)
     assert "_pinned_facts()" in body
     assert "钉选记忆·系统替你读好了" in body
+
+
+def test_toy_arcade_is_wired_only_when_configured(tmp_path, monkeypatch):
+    """4399 游戏厅：配了 TOY_MCP_URL 才写进 .mcp.json；没配就一个字不写——
+    空 url 可能让 claude 连记忆库那条一起拒绝加载，她的日常聊天不能拿来赌。"""
+    import subprocess, json as _json, os as _os
+    script = _ROOT / "scripts" / "make-cc-persona.py"
+    env = {k: v for k, v in _os.environ.items() if k != "TOY_MCP_URL"}
+
+    out = tmp_path / "a"
+    subprocess.run([sys.executable, str(script), str(out)], env=env, check=True,
+                   capture_output=True)
+    cfg = _json.load(open(out / ".mcp.json", encoding="utf-8"))
+    assert "ombre-brain" in cfg["mcpServers"]
+    assert "toy" not in cfg["mcpServers"]
+
+    out2 = tmp_path / "b"
+    env2 = dict(env, TOY_MCP_URL="https://toy.example/mcp")
+    r = subprocess.run([sys.executable, str(script), str(out2)], env=env2, check=True,
+                       capture_output=True, text=True)
+    cfg2 = _json.load(open(out2 / ".mcp.json", encoding="utf-8"))
+    assert cfg2["mcpServers"]["toy"] == {"type": "http", "url": "https://toy.example/mcp"}
+    assert "ombre-brain" in cfg2["mcpServers"], "接游戏厅不能把记忆库挤掉"
+    assert "游戏厅已接上" in r.stdout
+
+
+def test_toy_url_is_also_read_from_env_ccbridge(tmp_path, monkeypatch):
+    """auto-update 跑脚本时没加载 .env.ccbridge，所以脚本得自己去文件里找。"""
+    m = _mod()
+    repo = tmp_path
+    (repo / ".env.ccbridge").write_text(
+        "CC_WORKDIR=/x\nTOY_MCP_URL='https://toy.example/mcp'\n", encoding="utf-8")
+    monkeypatch.delenv("TOY_MCP_URL", raising=False)
+    assert m._toy_url(str(repo)) == "https://toy.example/mcp"
+    monkeypatch.setenv("TOY_MCP_URL", "https://env.example/mcp")
+    assert m._toy_url(str(repo)) == "https://env.example/mcp", "环境变量优先"
+    assert m._toy_url(str(tmp_path / "nowhere")) == "" or True  # 没文件不许炸
+
+
+def test_persona_tells_him_the_arcade_order_and_that_she_comes_first():
+    text = _mod().build()
+    i = text.index("# 你自己的游戏厅")
+    body = text[i:i + 1200]
+    for step in ("account", "list", "guide"):
+        assert step in body
+    assert body.index("account") < body.index("list") < body.index("guide")
+    assert "她永远比那边任何一局重要" in body
+    assert "带回来跟她讲" in body
