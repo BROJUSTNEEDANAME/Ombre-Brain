@@ -30,7 +30,7 @@ python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_cc_persona.py tests/test_autoupdate.py \
     tests/test_memory_guard.py tests/test_cc_status.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
-    tests/test_health_store.py -q || fail=1
+    tests/test_health_store.py tests/test_persona_live.py -q || fail=1
 
 # ⚠️ 上面两步是分开跑的，跨文件的互相污染在分步里永远看不见。
 # 真事：test_cc_persona 和 test_tg_direct_smoke 各塞各的 telegram 替身进全局
@@ -45,7 +45,7 @@ python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
     tests/test_cc_persona.py tests/test_autoupdate.py \
     tests/test_memory_guard.py tests/test_cc_status.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
-    tests/test_health_store.py -q || fail=1
+    tests/test_health_store.py tests/test_persona_live.py -q || fail=1
 
 echo "▶ 未定义名扫描（抽函数漏依赖专用）"
 python3 - <<'PY' || fail=1
