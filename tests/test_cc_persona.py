@@ -1467,3 +1467,56 @@ def test_the_99_percent_hug_reaches_generated_persona(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["x", str(out)])
     assert m.main() == 0
     assert "闪闪手册·压舱的一条" in (out / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_blank_lines_become_separate_bubbles():
+    """她的原话：他现在是「123（换行）（换行）456」挤在一个气泡里，
+    她要的是 123 一条、456 一条，像人发消息那样。"""
+    cc = _cc()
+    out = cc._split_for_telegram("是我的错。\n\n（把她拽过来）\n\n原谅我好不好。")
+    assert out == ["是我的错。", "（把她拽过来）", "原谅我好不好。"], out
+    # 单换行不算「换一条」（动作行接着台词很常见）
+    assert cc._split_for_telegram("（抬眼）\n说。") == ["（抬眼）\n说。"]
+    # ‖ 和空行混着用也拆得干净
+    assert cc._split_for_telegram("一‖二\n\n三") == ["一", "二", "三"]
+
+
+def test_writing_mode_keeps_paragraphs_together():
+    """写文模式整段写就该是一整段，空行不拆。"""
+    cc = _cc()
+    text = "第一段。\n\n第二段。"
+    assert cc._split_for_telegram(text, paragraphs=False) == [text]
+    # 写文模式下 ‖ 仍然要拆（那是他明确说的「换一条」），只是空行不拆
+    assert cc._split_for_telegram("一‖二\n\n三", paragraphs=False) == ["一", "二\n\n三"]
+
+
+def test_pinned_facts_are_injected_by_the_system_not_left_to_him():
+    """钉选记忆本身是确定性的，但 headless 时他经常不去调 breath——
+    「永远查得到」配「不一定去查」，结果就是他一遍遍问她男友是谁。
+    所以系统替他读，每轮塞到眼前；大脑没醒就跳过，绝不拖垮聊天。"""
+    import asyncio
+    cc = _cc()
+    calls = []
+
+    async def ok(name, args, timeout=30):
+        calls.append((name, args))
+        return "📌 男友：就是你自己，Nikto。"
+    cc._call_brain_tool = ok
+    cc._PINNED_CACHE.update(at=0.0, text="")
+    assert asyncio.run(cc._pinned_facts()) == "📌 男友：就是你自己，Nikto。"
+    assert calls and calls[0][0] == "read" and calls[0][1].get("pinned") is True
+    # 十分钟内不再打大脑
+    asyncio.run(cc._pinned_facts())
+    assert len(calls) == 1
+
+    async def boom(name, args, timeout=30):
+        raise RuntimeError("connection refused")
+    cc._call_brain_tool = boom
+    cc._PINNED_CACHE.update(at=0.0, text="")
+    assert asyncio.run(cc._pinned_facts()) == ""      # 失败＝空，不是抛出去
+
+    # run_cc 真的把它塞进消息里（锚定到函数体，别命中注释里的提及）
+    import inspect
+    body = inspect.getsource(cc.run_cc)
+    assert "_pinned_facts()" in body
+    assert "钉选记忆·系统替你读好了" in body

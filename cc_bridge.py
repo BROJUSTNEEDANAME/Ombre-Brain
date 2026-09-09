@@ -23,6 +23,7 @@ import glob
 import json
 import logging
 import os
+import re
 import tarfile
 import time
 import sys
@@ -175,6 +176,28 @@ def cc_model() -> str:
     return model_override.get("model") or CC_MODEL_DEFAULT
 
 
+# 钉选记忆是确定性的（不衰减、不合并、关键词必达）——但前提是他得去调 breath。
+# headless 跑的时候他经常压根不调，于是「永远查得到」配上「不一定去查」，
+# 结果就是他一遍遍问她男友是谁。所以不靠他记得去查：系统替他读，每轮塞到眼前。
+# 缓存十分钟：钉选很少变，没必要每条消息都打一次大脑。
+_PINNED_TTL = 600
+_PINNED_CACHE: dict = {"at": 0.0, "text": ""}
+
+
+async def _pinned_facts() -> str:
+    """所有钉选桶的正文。拿不到就返回空——绝不能因为大脑没醒就拖垮聊天。"""
+    now = time.time()
+    if now - _PINNED_CACHE["at"] < _PINNED_TTL:
+        return _PINNED_CACHE["text"]
+    try:
+        text = str(await _call_brain_tool("read", {"pinned": True, "max_tokens": 1500}, timeout=6) or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读钉选记忆失败，这轮不注入：%s", str(e)[:120])
+        text = ""
+    _PINNED_CACHE["at"], _PINNED_CACHE["text"] = now, text[:2500]
+    return _PINNED_CACHE["text"]
+
+
 async def _call_brain_tool(name: str, args: dict, timeout: float = 30) -> str:
     """通过 REST 调本地大脑的工具（和 API bot 走同一个口、同一份记忆）。"""
     url = BRAIN_BASE + f"/api/tools/{name}"
@@ -233,6 +256,13 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             f"[她的身体·手表刚传的，仅供你心里有数，别每条都报数字：{_hb}。"
             f"心率偏高/HRV 偏低多半是她在焦虑或硬撑，静息心率和睡眠是你催睡的依据。]\n"
             + message
+        )
+
+    _pf = await _pinned_facts()
+    if _pf:
+        message = (
+            "[钉选记忆·系统替你读好了，确定在场，不用再去查、更不用问她：\n"
+            f"{_pf}]\n" + message
         )
 
     cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
@@ -507,9 +537,14 @@ async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("好，重新开一段。")
 
 
-def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]:
+def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT,
+                        paragraphs: bool = True) -> list[str]:
     """把长回复切成 <=limit 的多段。尽量在段落/换行/句末标点处断开，
-    避免长剧情被拦腰截断，读起来更顺。实在找不到断点才硬切。（找回自 2c6b494）"""
+    避免长剧情被拦腰截断，读起来更顺。实在找不到断点才硬切。（找回自 2c6b494）
+
+    paragraphs=True：空行也算「换一条」。她的原话：他现在是「123（换行）（换行）456」
+    挤在一个气泡里，她要的是 123 一条、456 一条，像人发消息那样。
+    写文模式传 False——整段写就该是一整段。"""
     text = (text or "").strip()
     if not text:
         return []
@@ -519,7 +554,12 @@ def _split_for_telegram(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list[str]
     if "‖" in text:
         out: list[str] = []
         for part in text.split("‖"):
-            out += _split_for_telegram(part, limit)
+            out += _split_for_telegram(part, limit, paragraphs)
+        return out
+    if paragraphs and re.search(r"\n\s*\n", text):
+        out = []
+        for part in re.split(r"\n\s*\n", text):
+            out += _split_for_telegram(part, limit, paragraphs)
         return out
     if len(text) <= limit:
         return [text]
@@ -645,7 +685,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 _save_sessions()
             if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她
-            for chunk in _split_for_telegram(reply):
+            for chunk in _split_for_telegram(reply, paragraphs=not writing_mode.get(cid, False)):
                 await context.bot.send_message(chat_id=cid,
                                                text=restore_punctuation(chunk))
             nudge_count[cid] = n
@@ -746,7 +786,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if sid and sessions.get(cid) != sid:
         sessions[cid] = sid
         _save_sessions()
-    for chunk in _split_for_telegram(reply):
+    for chunk in _split_for_telegram(reply, paragraphs=not writing_mode.get(cid, False)):
         await _reply_with_retry(update.message, restore_punctuation(chunk))
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
