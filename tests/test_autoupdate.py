@@ -16,10 +16,19 @@ def test_the_cc_bridge_is_updated_too():
 
 
 def test_the_cc_bridge_is_only_touched_when_it_is_installed():
-    """写死了的话，没装 cc 桥的机器每轮都会 restart 一个不存在的服务、刷红日志。"""
+    """写死了的话，没装 cc 桥的机器每轮都会 restart 一个不存在的服务、刷红日志。
+
+    但判断方式必须靠得住：原来用 `systemctl cat`，它会调分页器，在 timer 那种
+    无终端环境里失败，于是**装了也检测不到**——她的 ccbridge 因此停在三天前的
+    代码上，日志却每轮都报「已部署，两个服务都活着」。改用 LoadState。
+    """
     i = SH.index("SERVICES+=(ombre-ccbridge)")
     guard = SH[SH.index("SERVICES=(ombre-brain"):i]
-    assert "systemctl cat ombre-ccbridge.service" in guard
+    guard_code = "\n".join(
+        ln for ln in guard.splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert "systemctl show -p LoadState --value ombre-ccbridge.service" in guard_code
+    assert "systemctl cat" not in guard_code, "分页器会让它在无终端环境里静默失败"
 
 
 def test_the_generated_persona_is_regenerated_before_restart():
@@ -50,8 +59,11 @@ def test_rollback_and_blocklist_are_still_there():
 def test_the_success_line_no_longer_hardcodes_two_services():
     """原文写死「两个服务都活着」。加了 cc 桥之后那句就是错的——
     她看到的会是一句自信但不准确的捷报。"""
-    assert "两个服务都活着" not in SH
-    assert "${#SERVICES[@]}" in SH
+    # ⚠️ 只扫**会执行的行**：注释里引用了那句错话当反面教材，
+    # 整份 grep 会命中说明文字而不是代码（CLAUDE.md 记过的「命中被提及处」）。
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "两个服务都活着" not in code
+    assert "${#SERVICES[@]}" in code
 
 
 def test_a_service_running_older_code_than_HEAD_is_restarted_even_when_git_is_current():
