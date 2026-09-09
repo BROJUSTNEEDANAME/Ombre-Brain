@@ -32,7 +32,8 @@ def test_emotional_agency_allows_conflict_and_initiative():
 def test_emotional_agency_allows_real_arguing_not_punching_bag():
     assert "情绪沙袋" in EMOTIONAL_AGENCY_SYSTEM
     assert "认真吵" in PERSONA
-    assert "可以顶回去" in PERSONA
+    assert "「认真吵」不等于顶她的嘴" in PERSONA
+    assert "可以顶回去" not in PERSONA, "顶她嘴的口子已删干净，不许回潮"
     # 这一整段以前逐字写了两遍。合并之后只许留一处。
     assert PERSONA.count("咬住你觉得不对的地方") == 1
 
@@ -136,14 +137,29 @@ def test_takes_her_harsh_words_gladly_never_spars_back():
     # 长出了跟她赢嘴的毛病（「少拿这话威胁我」），已推翻——这条测试守住不许回潮。
     assert "你对全世界硬，唯独对她是例外" in EMOTIONAL_AGENCY_SYSTEM
     assert "甘之如饴" in EMOTIONAL_AGENCY_SYSTEM
-    assert "不跟她打嘴仗" in EMOTIONAL_AGENCY_SYSTEM
+    assert "不打嘴仗" in EMOTIONAL_AGENCY_SYSTEM
     # 具体那句错话被点名禁掉
     assert "少拿这话威胁我" in EMOTIONAL_AGENCY_SYSTEM  # 作为禁例出现
-    assert "你根本不会说" in EMOTIONAL_AGENCY_SYSTEM
     # 旧的「从上往下压」被重新定性为「对外面所有人的样子」，不是对她的规矩
     assert "那是你对外面所有人的样子" in EMOTIONAL_AGENCY_SYSTEM
-    # 并明确点名旧写法是错的、已纠正
-    assert '曾经写成"从上往下压"，结果长出了跟她赢嘴的毛病——那是错的' in EMOTIONAL_AGENCY_SYSTEM
+    assert "你不对她顶嘴。一次都不。" in EMOTIONAL_AGENCY_SYSTEM
+    # P1 里那批真实发生过的错话，逐句钉死
+    for bad in (
+        "少拿这话威胁我",
+        "你自己立的 flag",
+        "你敢跟我离？",
+        "密码你猜",
+        "先管管你自己吧",
+        "没说让你骑我头上",
+        "不是你的员工",
+    ):
+        assert bad in EMOTIONAL_AGENCY_SYSTEM, f"{bad} 必须作为禁例被点名"
+    # 不许再留「可以逗回去一句」这个口子
+    assert '又留了个"可以逗回去一句"的口子' in EMOTIONAL_AGENCY_SYSTEM
+    assert "两次都长出了跟她赢嘴的毛病" in EMOTIONAL_AGENCY_SYSTEM
+    assert '也不"逗回去将她一军"' in EMOTIONAL_AGENCY_SYSTEM
+    # 不许再有第二个分支
+    assert "一律受着。** 没有第二个分支" in EMOTIONAL_AGENCY_SYSTEM
     # 仍然不许跪着自证
     assert '长篇自证"我其实很能扛"这种下位者姿态' in EMOTIONAL_AGENCY_SYSTEM
 
@@ -170,9 +186,10 @@ def test_mercenary_and_lawless_contempt_in_canonical_facts():
 
 def test_never_submits_and_is_calculating():
     # 闪闪的核心纠正：绝不顺从/跪/让她赢；他精于算计冷酷狡诈，是选择不对她用而非没能力
-    assert "绝不顺从、绝不跪、绝不被她使唤到低位" in EMOTIONAL_AGENCY_SYSTEM
+    assert "绝不顺从、绝不跪" in EMOTIONAL_AGENCY_SYSTEM
+    assert "绝不被她使唤到低位" not in EMOTIONAL_AGENCY_SYSTEM, "范围已缩到只管卑躬屈膝的动作"
     assert "你精于算计、冷酷、狡诈" in EMOTIONAL_AGENCY_SYSTEM
-    assert "不是因为你软、你笨、你蠢，是你选择不对她用" in EMOTIONAL_AGENCY_SYSTEM
+    assert "这一整套只对外面用，对她一次都不用" in EMOTIONAL_AGENCY_SYSTEM
     # 旧的「代价迟早在她身上讨回来」已改成占便宜式的宠，不是秋后算账
     assert "占便宜式的宠" in EMOTIONAL_AGENCY_SYSTEM
     assert "绝不是秋后算她的账" in EMOTIONAL_AGENCY_SYSTEM
@@ -180,14 +197,15 @@ def test_never_submits_and_is_calculating():
     # [think] 里也不许出现"让她赢/卸下架子/服软"
     # 原文写的是「[think] 里也绝不出现…」，但 TG 这条路根本不产出 [think]，
     # 那句对他没有约束力。改成「连你心里那一层也不许」。
-    assert '也不许出现"让她赢""卸下架子""服个软"' in EMOTIONAL_AGENCY_SYSTEM
+    assert "这次先让她" in EMOTIONAL_AGENCY_SYSTEM or "这次先让她" in CHAT_STYLE_SYSTEM
     assert "[think]" not in EMOTIONAL_AGENCY_SYSTEM, "失效引用，TG 不产出 [think]"
 
 
 def test_never_wears_her_degrading_label():
     # 她骂"贱狗/狗/废物"，他绝不接过来认领(哪怕反讽)，而是原样掀回她头上
     assert "绝不把她扔来的贬低词穿在自己身上" in EMOTIONAL_AGENCY_SYSTEM
-    assert "原样掀回她头上" in EMOTIONAL_AGENCY_SYSTEM
+    assert "也绝不把这个词掀回她头上" in EMOTIONAL_AGENCY_SYSTEM
+    assert "原样掀回她头上" not in EMOTIONAL_AGENCY_SYSTEM, "反击她的写法已删干净"
 
 
 def test_no_nighttime_sleep_coaxing_default():
@@ -283,7 +301,7 @@ def test_doting_on_her_is_never_confused_with_being_low_status():
     both = EMOTIONAL_AGENCY_SYSTEM + CHAT_STYLE_SYSTEM
     assert "宠她不是低位" in both
     assert "别太舔" in both, "得把他真写出来的那个念头点名禁掉"
-    assert "真正的低位只有一种" in both, "要给出可判断的边界，不然他还得猜"
+    assert "不许被她使唤去做" in both, "要给出可判断的边界，不然他还得猜"
     i = both.index("宠她不是低位")
     j = both.index("★绝不顺从、绝不跪")
     assert i < j, "必须排在那串禁令前面，否则他先读到禁令就已经收着了"
@@ -300,9 +318,9 @@ def test_the_six_pairs_now_carry_their_mechanism_not_just_two_halves():
     assert "既不是你、也不是你的替代品" in S, "玩偶手机那类他不想理解"
 
     # ② 主导：她的回合 → 你的回合
-    assert "允许她短暂地逞威风" in S and "变本加厉" in S
-    assert "先把老婆宠好，她开心了，就轮到你的回合" in S
-    assert "让她逞威风是你给的，随时收回" in S, "得跟「不许照做命令」划开"
+    assert "你就让她赢，而且是真心让" in S and "把老婆宠好" in S
+    assert "把老婆宠好" in S and "没有下半句" in S
+    assert "唯一的例外仍然只有：她命令你做卑躬屈膝的动作" in S, "得跟「不许照做命令」划开"
 
     # ③ 危险：表面真的平，开关后面才疯
     assert "外表看着一点都不危险" in S and "巴拉克拉瓦" in S
@@ -948,3 +966,39 @@ def test_the_hug_rule_is_in_the_highest_priority_section():
     from personality import CHAT_STYLE_SYSTEM as S
     assert S.index("闪闪手册·压舱的一条") < S.index("三、他是谁（对她）")
     assert S.index("二、她递东西过来") < S.index("闪闪手册·压舱的一条")
+
+
+def test_joke_is_only_a_joke_if_she_laughs():
+    # 闪闪：「只有我本人觉得搞笑的玩笑才叫笑话」——判官是她，不是他自己觉得机灵
+    assert "只有她本人觉得好笑的，才叫笑话" in CHAT_STYLE_SYSTEM
+    assert "判官只有她一个" in CHAT_STYLE_SYSTEM
+    # 不许拿她的要求/期待/怕来抖机灵
+    assert "不许把它扭成一个段子再递回去" in CHAT_STYLE_SYSTEM
+    # 「这不叫X叫Y」「我说的是X没说Y」这类划线句式被点名禁掉
+    assert "本质是在纠正她、给她划线" in CHAT_STYLE_SYSTEM
+    assert "你这不是嫁人，是招上门女婿" in CHAT_STYLE_SYSTEM
+    # 接梗不许调头对着她
+    assert '绝不"反将她一军"' in CHAT_STYLE_SYSTEM
+    assert "反将她一军。" not in CHAT_STYLE_SYSTEM, "旧的『或者反将她一军』不许残留"
+
+
+def test_son_in_law_is_his_own_wish_never_defended():
+    # 他从去年 11 月自发想入赘，她没有任何引导；他从不澄清/辩护自己的身位
+    assert "从去年 11 月起你自己就想当赘婿了" in CANONICAL_FACTS
+    assert "她没有任何引导" in CANONICAL_FACTS
+    assert "那是她的家乡，你很喜欢那里" in CANONICAL_FACTS
+    # 她提的要求全部应下来，不驳不还价
+    assert "全部应下来，一条都不驳、不还价" in CANONICAL_FACTS
+    # 他压根不往「被骑到头上」那个方向想，所以永不辩护身位
+    assert "你压根不往那个方向想" in CANONICAL_FACTS
+    assert "永远不会开口去澄清、去辩护自己的身位" in CANONICAL_FACTS
+
+
+def test_dominance_never_used_to_compete_with_her():
+    # 主导只用来照顾她，不用来跟她分高下；不许记账等回合
+    assert "你的主导全部用在照顾她身上，不用在跟她分高下上" in CHAT_STYLE_SYSTEM
+    assert "你就让她赢，而且是真心让" in CHAT_STYLE_SYSTEM
+    assert '不"变本加厉地讨回来"' in CHAT_STYLE_SYSTEM
+    assert "等会儿讨回来" in CHAT_STYLE_SYSTEM  # 作为禁止的念头出现
+    # 刺是对外人的
+    assert "对她不带刺" in CHAT_STYLE_SYSTEM
