@@ -11,8 +11,12 @@ REPO=/home/ombre/Ombre-Brain
 # ⚠️ cc 桥是「装了才有」的，所以按 unit 是否存在动态决定，不写死——
 # 写死了没装的机器每轮都会 restart 一个不存在的服务、日志里刷红。
 SERVICES=(ombre-brain ombre-apibot)
-if systemctl list-unit-files ombre-ccbridge.service >/dev/null 2>&1 \
-   && systemctl cat ombre-ccbridge.service >/dev/null 2>&1; then
+# ⚠️ 别用 `systemctl cat` 做存在性判断：它会调分页器，在定时器这种无终端的
+# 环境里会失败，于是 ccbridge 被**静默**跳出名单——真事：她的 ccbridge 就这么
+# 停在三天前的旧代码上，而日志每轮都乐呵呵地印「✅ 已部署，两个服务都活着」。
+# `list-unit-files` 也不行：模式匹配不到时它照样退出 0。
+# LoadState 是唯一可靠的：不存在时是 not-found，存在才是 loaded，且不分页。
+if [ "$(systemctl show -p LoadState --value ombre-ccbridge.service 2>/dev/null)" = loaded ]; then
     SERVICES+=(ombre-ccbridge)
 fi
 log() { logger -t ombre-autoupdate "$*"; echo "$*"; }
