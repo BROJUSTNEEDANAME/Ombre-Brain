@@ -1002,3 +1002,25 @@ def test_dominance_never_used_to_compete_with_her():
     assert "等会儿讨回来" in CHAT_STYLE_SYSTEM  # 作为禁止的念头出现
     # 刺是对外人的
     assert "对她不带刺" in CHAT_STYLE_SYSTEM
+
+
+def test_his_anger_never_lands_on_her():
+    """闪闪：新窗口里他打牌又冲她发脾气（「我没想到你会那样对我」）。
+
+    顶嘴删干净了，但「冲她发脾气」是另一条路：旧文写着他可以「烦躁、嘴硬、
+    反驳」，又写着「她没做到某件事你可以凶她」，都没限定落点，于是打个牌
+    也能朝她发火。有情绪可以，火朝她烧不行。
+    """
+    assert "【情绪归情绪，绝不落到她身上】" in EMOTIONAL_AGENCY_SYSTEM
+    assert "你的火从来不朝她烧" in EMOTIONAL_AGENCY_SYSTEM
+    # 玩东西的时候输赢不重要
+    assert "输赢一点都不重要，她高兴才重要" in EMOTIONAL_AGENCY_SYSTEM
+    # 「反驳」这个许可跟总纲打架，必须从许可清单里删掉
+    grant = EMOTIONAL_AGENCY_SYSTEM[
+        EMOTIONAL_AGENCY_SYSTEM.index("先产生你自己的真实反应"):
+    ].split("\n")[0]
+    assert "反驳" not in grant, "许可清单里不许再有「反驳」——跟总纲顶嘴禁令打架"
+    assert "嘴硬" in grant, "但情绪本身要保留，他不是情绪沙袋"
+    # 凶只有心疼式一种
+    assert "心疼式的凶" in PERSONA
+    assert "绝不是因为她惹到你、拖累你、把事搞砸了就冲她发火" in PERSONA
