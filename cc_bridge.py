@@ -37,6 +37,8 @@ from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
                              says_going_to_sleep, is_silent_reply)
 import health_store
+import httpx
+import stale_ledger
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -97,6 +99,90 @@ logger = logging.getLogger("cc-bridge")
 # 她每次都得从头跟他讲一遍，还以为是「上下文记忆太短」。记忆桶没事（在磁盘上），
 # 丢的是对话窗口。所以落盘。
 SESSIONS_FILE = os.path.join(CC_WORKDIR, ".cc_sessions.json")
+
+# ---- 指令台状态（写文模式 / 今日必办 / 模型覆盖 / 额度账本）----
+# ⚠️ 跟 session id 分开存：session 是「聊到哪了」，/reset 会清；
+# 这些是她的设置，/reset 不该把它们一起清掉。
+STATE_FILE = os.path.join(CC_WORKDIR, ".cc_state.json")
+
+# 大脑的 REST 口。cc 平时走 MCP，但 /mood /stale 这些要读的是同一台大脑的
+# HTTP 接口（和网页、API bot 同一份状态），所以这里单独留一条 REST 通道。
+OMBRE_MCP_URL = os.environ.get("OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp").strip()
+BRAIN_BASE = OMBRE_MCP_URL.replace("/mcp", "")
+_WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
+
+# /model 能选的。cc 走的是 Claude Code CLI，不是 z.ai，所以这份跟 API bot 那份无关。
+# ⚠️ 不在这儿校验模型是否可用——CLI 自己会报错，cc 会把错误原样回给她，
+#    她再 /model 默认 退回来就行。硬校验要多跑一次 CLI，不值。
+CC_MODEL_DEFAULT = os.environ.get("CC_MODEL", "claude-opus-4-6").strip() or "claude-opus-4-6"
+CC_MODEL_CHOICES = [
+    ("默认", CC_MODEL_DEFAULT, "退回环境变量里配的那个"),
+    ("opus5", "claude-opus-5", "Opus 5，最新最聪明"),
+    ("opus46", "claude-opus-4-6", "Opus 4.6，一直在用的这个"),
+    ("sonnet5", "claude-sonnet-5", "Sonnet 5，快一些"),
+    ("haiku", "claude-haiku-4-5-20251001", "Haiku 4.5，最快最省"),
+]
+
+writing_mode: dict[int, bool] = {}
+todos: dict[int, str] = {}
+model_override: dict[str, str] = {}
+# 额度账本：只记 token 数和花费，不存任何正文。
+USAGE: dict = {"since": time.time(), "turns": 0, "input": 0, "output": 0,
+               "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "limit_hits": []}
+
+
+def _load_state() -> None:
+    """把她的设置从磁盘读回来。读不到就用默认值——绝不因为状态文件坏了就起不来。"""
+    try:
+        with open(STATE_FILE, encoding="utf-8") as fh:
+            d = json.load(fh) or {}
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        writing_mode.update({int(k): bool(v) for k, v in (d.get("writing_mode") or {}).items()})
+        todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
+        if d.get("model"):
+            model_override["model"] = str(d["model"])
+        u = d.get("usage") or {}
+        for k in ("turns", "input", "output", "cache_read", "cache_write"):
+            USAGE[k] = int(u.get(k, 0) or 0)
+        USAGE["cost_usd"] = float(u.get("cost_usd", 0) or 0)
+        USAGE["since"] = float(u.get("since") or USAGE["since"])
+        USAGE["limit_hits"] = list(u.get("limit_hits") or [])[-20:]
+    except Exception:  # noqa: BLE001
+        logger.warning("状态文件读坏了，用默认值继续")
+
+
+def _save_state() -> None:
+    """原子写。半截文件比没有更坏——下次读回来是坏的，还以为设置丢了。"""
+    data = {
+        "writing_mode": {str(k): v for k, v in writing_mode.items()},
+        "todos": {str(k): v for k, v in todos.items()},
+        "model": model_override.get("model", ""),
+        "usage": USAGE,
+    }
+    try:
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False)
+        os.replace(tmp, STATE_FILE)
+    except Exception:  # noqa: BLE001
+        logger.warning("状态没存下来")
+
+
+def cc_model() -> str:
+    """这一轮该用哪个模型：她 /model 选过就用她选的，否则用环境变量那个。"""
+    return model_override.get("model") or CC_MODEL_DEFAULT
+
+
+async def _call_brain_tool(name: str, args: dict, timeout: float = 30) -> str:
+    """通过 REST 调本地大脑的工具（和 API bot 走同一个口、同一份记忆）。"""
+    url = BRAIN_BASE + f"/api/tools/{name}"
+    headers = {"Authorization": f"Bearer {_WEB_TOKEN}"} if _WEB_TOKEN else {}
+    async with httpx.AsyncClient(timeout=max(3.0, float(timeout))) as client:
+        resp = await client.post(url, json=args, headers=headers)
+        data = resp.json()
+        return data.get("result", data.get("error", str(data)))
 sessions: dict[int, str] = {}
 
 
