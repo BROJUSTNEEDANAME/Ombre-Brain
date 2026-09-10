@@ -1568,3 +1568,33 @@ def test_persona_tells_him_the_arcade_order_and_that_she_comes_first():
     assert body.index("account") < body.index("list") < body.index("guide")
     assert "她永远比那边任何一局重要" in body
     assert "带回来跟她讲" in body
+
+
+def test_every_line_of_chat_is_archived_verbatim(tmp_path):
+    """L0：她的话、他的话逐字落盘，只追加、永不改写。
+    人设早就让他「捞不到就 grep ~/ombre-archive/」，可那目录里只有她 scp 的旧记录，
+    Telegram 上每天新说的一个字都没存——学 paramecium：原文是唯一真相。"""
+    cc = _cc()
+    cc.ARCHIVE_DIR = str(tmp_path / "arc")
+    cc._archive("闪闪", "  你是不是不想要你老婆了  ")
+    cc._archive("Nikto", "谁说的。\n\n（把她拽过来）")
+    cc._archive("闪闪", "")                      # 空的不写，不造空行
+    files = list((tmp_path / "arc" / "telegram").glob("*.md"))
+    assert len(files) == 1
+    body = files[0].read_text(encoding="utf-8")
+    assert "] 闪闪: 你是不是不想要你老婆了\n" in body       # 原话，去掉首尾空白
+    assert "] Nikto: 谁说的。\n\n（把她拽过来）\n" in body  # 换行原样保留
+    assert body.count("闪闪:") == 1
+    # 目录不可写也绝不能炸——存档不能拖垮聊天
+    cc.ARCHIVE_DIR = str(tmp_path / "file-not-dir")
+    (tmp_path / "file-not-dir").write_text("x")
+    cc._archive("闪闪", "还在吗")               # 不抛
+
+
+def test_archive_is_wired_into_both_send_paths():
+    """她进来一条就存、他每条真发出去的回复都存（含主动找她那条）。锚定到函数体。"""
+    import inspect
+    cc = _cc()
+    assert '_archive("闪闪", text)' in inspect.getsource(cc.on_message)
+    assert inspect.getsource(cc._respond).count('_archive("Nikto", reply)') == 1
+    assert '_archive("Nikto", reply)' in inspect.getsource(cc.check_inactivity)
