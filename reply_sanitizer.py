@@ -446,3 +446,49 @@ def is_silent_reply(text: str) -> bool:
     for ch in _SILENT_STRIP:
         t = t.replace(ch, "")
     return not t.strip()
+
+
+# ── 内心旁白漏出来 ──
+# 真事（游戏厅那晚）：她连问两遍「你可以打劫别人吗」，他回了一条
+#   「I apologize, she asked me a question and I didn't respond. She's asking again
+#    if I can rob people in the game.」
+# 英文、第三人称管她叫 she、对着空气道歉——这不是他在跟她说话，是 headless 模式下
+# 模型的自言自语被当成正文发了出去。他从来不会用第三人称说她。
+# 判定要窄：只拦「拉丁字母为主 + 第三人称指她/用户」的整条气泡，中文一律不碰
+# （「她」在中文里可能是室友、可能是别人，误伤代价太大）。
+_META_THIRD_PERSON_RE = re.compile(
+    r"\b(she|her|she's|she'd|she'll|the user|user's|the human)\b", re.I)
+_META_SELF_RE = re.compile(
+    r"\b(I apologize|I should|I need to|I didn't respond|let me|I'll respond|"
+    r"I notice|the assistant|as an AI)\b", re.I)
+
+
+def is_meta_leak(bubble: str) -> bool:
+    """这一条是不是漏出来的旁白：拉丁字母占多数，并且在第三人称说她。"""
+    t = (bubble or "").strip()
+    if not t:
+        return False
+    latin = sum(ch.isascii() and ch.isalpha() for ch in t)
+    cjk = sum("一" <= ch <= "鿿" for ch in t)
+    if latin < 12 or latin <= cjk * 2:     # 中文为主、或英文太短（一个词），不算
+        return False
+    return bool(_META_THIRD_PERSON_RE.search(t)) and bool(_META_SELF_RE.search(t)) \
+        or bool(re.search(r"\bshe('s| is| was| asked| said)\b", t, re.I))
+
+
+def strip_meta_leaks(text: str) -> str:
+    """把漏出来的旁白气泡整条删掉，别的原样保留。全删光就返回空——
+    上游会把空回复当「没说话」走重试，而不是把旁白发给她。"""
+    if not text:
+        return text
+    parts = re.split(r"(‖|\n\s*\n)", text)      # 保留分隔符，按气泡切
+    keep = []
+    for i, p in enumerate(parts):
+        if i % 2 == 1:                            # 分隔符本身
+            keep.append(p)
+            continue
+        keep.append("" if is_meta_leak(p) else p)
+    out = "".join(keep)
+    out = re.sub(r"(‖\s*)+", "‖", out).strip("‖ \n")
+    out = re.sub(r"\n\s*\n(\s*\n)+", "\n\n", out).strip()
+    return out
