@@ -36,7 +36,8 @@ from telegram import BotCommand, Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
-                             says_going_to_sleep, is_silent_reply)
+                             says_going_to_sleep, is_silent_reply,
+                             strip_meta_leaks)
 import health_store
 import httpx
 import stale_ledger
@@ -706,6 +707,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             if sid and sessions.get(cid) != sid:
                 sessions[cid] = sid
                 _save_sessions()
+            reply = strip_meta_leaks(reply)
             if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她
             _archive("Nikto", reply)
@@ -776,6 +778,13 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     finally:
         _typing.cancel()
     STATS["turns"] += 1
+    # 漏出来的英文旁白（"I apologize, she asked me…"）整条拦掉。拦光了就是空回复，
+    # 下面按「没说话」走重试——绝不把旁白发给她。
+    _leaked = reply
+    reply = strip_meta_leaks(reply)
+    if reply != _leaked:
+        STATS["meta_leaks"] = STATS.get("meta_leaks", 0) + 1
+        logger.warning("拦下内心旁白 chat=%s：%r", cid, _leaked[:160])
     _was_silent = is_silent_reply(reply)
     # ── 空回复重试 ──
     # ⚠️ 原来这里是「把她那句原话再发一遍」。那根本不管用：在他的会话里
