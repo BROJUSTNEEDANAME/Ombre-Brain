@@ -1537,13 +1537,65 @@ def test_toy_arcade_is_wired_only_when_configured(tmp_path, monkeypatch):
     assert "toy" not in cfg["mcpServers"]
 
     out2 = tmp_path / "b"
-    env2 = dict(env, TOY_MCP_URL="https://toy.example/mcp")
+    env2 = dict(env, TOY_MCP_URL="https://toy.example/mcp", OMBRE_PERSONA_NO_PROBE="1")
     r = subprocess.run([sys.executable, str(script), str(out2)], env=env2, check=True,
                        capture_output=True, text=True)
     cfg2 = _json.load(open(out2 / ".mcp.json", encoding="utf-8"))
     assert cfg2["mcpServers"]["toy"] == {"type": "http", "url": "https://toy.example/mcp"}
     assert "ombre-brain" in cfg2["mcpServers"], "接游戏厅不能把记忆库挤掉"
-    assert "游戏厅已接上" in r.stdout
+    # 没探测就不许打 ✅——「值设了」不等于「值能用」
+    assert "❓ 游戏厅 toy" in r.stdout
+    assert "✅ 游戏厅" not in r.stdout
+
+
+def test_a_malformed_toy_url_is_refused_not_celebrated(tmp_path):
+    """真事：她把示例里的 <> 一起粘进了 .env，脚本照样打「✅ 游戏厅已接上：toy → <https://…>」。
+    坏地址比没地址更坏：写进去 claude 会拒绝加载，她还拿着那个 ✅ 去问他为什么搜不到。"""
+    import subprocess, json as _json, os as _os
+    script = _ROOT / "scripts" / "make-cc-persona.py"
+    out = tmp_path / "c"
+    env = dict({k: v for k, v in _os.environ.items() if k != "TOY_MCP_URL"},
+               TOY_MCP_URL="<https://toy.example/ctai_v1_x>", OMBRE_PERSONA_NO_PROBE="1")
+    r = subprocess.run([sys.executable, str(script), str(out)], env=env, check=True,
+                       capture_output=True, text=True)
+    cfg = _json.load(open(out / ".mcp.json", encoding="utf-8"))
+    assert "toy" not in cfg["mcpServers"], "坏地址不许写进去"
+    assert "❌ 游戏厅 toy 地址格式不对" in r.stdout
+    assert "没写进 .mcp.json" in r.stdout
+    assert "✅ 游戏厅" not in r.stdout
+
+
+def test_check_url_three_states(monkeypatch):
+    m = _mod()
+    assert m._check_url("x", "<https://a.b/c>")[0] == "bad"
+    assert m._check_url("x", "https://a.b/c d")[0] == "bad"
+    assert m._check_url("x", "ftp://a.b")[0] == "bad"
+    monkeypatch.setenv("OMBRE_PERSONA_NO_PROBE", "1")
+    st, line = m._check_url("x", "https://a.b/c")
+    assert st == "unknown" and line.startswith("❓")
+    monkeypatch.delenv("OMBRE_PERSONA_NO_PROBE")
+    import urllib.error
+    def boom(req, timeout=0):
+        raise urllib.error.URLError("refused")
+    monkeypatch.setattr(m.urllib.request, "urlopen", boom)
+    st, line = m._check_url("x", "https://a.b/c")
+    assert st == "down" and line.startswith("❌")
+    def http405(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 405, "nope", {}, None)
+    monkeypatch.setattr(m.urllib.request, "urlopen", http405)
+    assert m._check_url("x", "https://a.b/c")[0] == "up", "MCP 端点对 GET 常常 405，那是服务在"
+
+
+def test_written_is_not_live_and_the_script_says_so(tmp_path):
+    """「✅ 人设已写入」让她以为完事了；其实还要 restart + /reset。结尾必须是清单，不是报喜。"""
+    import subprocess, os as _os
+    script = _ROOT / "scripts" / "make-cc-persona.py"
+    env = dict({k: v for k, v in _os.environ.items() if k != "TOY_MCP_URL"}, OMBRE_PERSONA_NO_PROBE="1")
+    r = subprocess.run([sys.executable, str(script), str(tmp_path / "d")], env=env, check=True,
+                       capture_output=True, text=True)
+    assert "写入 ≠ 生效" in r.stdout
+    assert "systemctl restart ombre-ccbridge" in r.stdout and "/reset" in r.stdout
+    assert "✅ 完整版人设已写入" not in r.stdout
 
 
 def test_toy_url_is_also_read_from_env_ccbridge(tmp_path, monkeypatch):

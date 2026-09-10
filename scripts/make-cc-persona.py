@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -135,6 +138,34 @@ def build(lean: bool = False) -> str:
                       chat_style(lean=lean), MEMORY])
 
 
+_URL_RE = re.compile(r"^https?://[^\s<>\"']+$")
+
+
+def _check_url(name: str, url: str) -> tuple[str, str]:
+    """一个地址到底能不能用。返回 (状态, 给人看的一行)。状态只有三种：
+    "bad"（格式就不对）/ "down"（格式对但连不上）/ "up"（连上了）/ "unknown"（没探测）。
+
+    由来：她粘地址时把示例里的 <> 一起粘了进去，这脚本照样打
+    「✅ 游戏厅已接上：toy → <https://…>」——它只看了「有没有值」。
+    她拿着那个 ✅ 去问他为什么搜不到工具，白折腾一轮。
+    「值设了」不等于「值能用」，✅ 只许打在后者上。
+    """
+    if not _URL_RE.match(url):
+        return "bad", f"❌ {name} 地址格式不对：{url!r}\n   → 不能带 <>、引号、空格；要以 http:// 或 https:// 开头"
+    if os.environ.get("OMBRE_PERSONA_NO_PROBE"):
+        return "unknown", f"❓ {name} 地址格式对，但这次没探测能不能连上（{url}）"
+    try:
+        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "ombre-persona-check"})
+        with urllib.request.urlopen(req, timeout=6):
+            pass
+        return "up", f"✅ {name} 连得上：{url}"
+    except urllib.error.HTTPError as e:
+        # 4xx/5xx 也是「服务在」——MCP 端点对 GET 常常就是 405/406，那不是断
+        return "up", f"✅ {name} 服务在（HTTP {e.code}）：{url}"
+    except Exception as e:  # noqa: BLE001
+        return "down", f"❌ {name} 连不上：{url}\n   → {type(e).__name__}: {str(e)[:120]}"
+
+
 def _toy_url(repo: str) -> str:
     """游戏厅 MCP 的地址。环境变量优先；没有就去 .env.ccbridge 里找。
 
@@ -167,7 +198,7 @@ def main() -> int:
     path = os.path.join(out, "CLAUDE.md")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
-    print(f"✅ {'精简版' if lean else '完整版'}人设已写入 {path}（{len(text)} 字）")
+    print(f"· {'精简版' if lean else '完整版'}人设已写入 {path}（{len(text)} 字）——写入 ≠ 生效，见文末")
 
     # ⚠️ 梗.md 只在第一次创建，之后绝不覆盖——那是他一条条查回来的东西，
     # 每次重新生成人设都推平的话，等于他永远学不会。
@@ -189,22 +220,37 @@ def main() -> int:
             names = ", ".join((cfg.get("mcpServers") or {}).keys()) or "（空）"
         except Exception:  # noqa: BLE001
             cfg, names = None, "（读不出来，但文件已复制）"
-        print(f"✅ .mcp.json 已复制，记忆服务：{names}")
+        print(f"· .mcp.json 已复制（{names}）——复制成功不等于连得上，下面分别探：")
+        # 记忆库：这是他的脑子，连不上就是没记忆。探一下，别只报「复制了」。
+        brain = os.environ.get("OMBRE_MCP_URL", "").strip() or "http://127.0.0.1:8000/mcp"
+        print("  " + _check_url("记忆库 ombre-brain", brain)[1].replace("\n", "\n  "))
         # 游戏厅（4399）：只有配了地址才写进去。写一个空 url 进去，claude 可能连
         # 记忆库那条一起拒绝加载——她的日常聊天不能拿来赌。
         toy = _toy_url(repo)
         if cfg is not None and toy:
-            cfg.setdefault("mcpServers", {})["toy"] = {"type": "http", "url": toy}
-            with open(dst, "w", encoding="utf-8") as fh:
-                json.dump(cfg, fh, ensure_ascii=False, indent=2)
-            print(f"✅ 游戏厅已接上：toy → {toy}")
+            state, line = _check_url("游戏厅 toy", toy)
+            if state == "bad":
+                # 坏地址比没地址更坏：写进去 claude 会拒绝加载，还以为接上了。不写。
+                print("  " + line.replace("\n", "\n  "))
+                print("  → 没写进 .mcp.json。改好 .env.ccbridge 里的 TOY_MCP_URL 再跑一次")
+            else:
+                cfg.setdefault("mcpServers", {})["toy"] = {"type": "http", "url": toy}
+                with open(dst, "w", encoding="utf-8") as fh:
+                    json.dump(cfg, fh, ensure_ascii=False, indent=2)
+                print("  " + line.replace("\n", "\n  "))
+                if state == "down":
+                    print("  → 地址写进去了，但现在连不上。他那边会「搜不到 toy 的工具」，先别去试")
         else:
-            print("· 游戏厅未接（没配 TOY_MCP_URL）。要接：在 .env.ccbridge 里加一行 "
+            print("  · 游戏厅未接（没配 TOY_MCP_URL）。要接：在 .env.ccbridge 里加一行 "
                   "TOY_MCP_URL=<toy.cedarstar.org 页面上给小机看的那串地址>")
     else:
         print("⚠️ 没找到 .mcp.json——那边的他将没有记忆，先确认这个文件在仓库里")
 
-    print(f"\n下一步：把 cc 桥的 CC_WORKDIR 指到这里\n    CC_WORKDIR={out}")
+    print("\n⚠️ 上面是「写进磁盘了」，不是「他在用了」。要真的生效还差两步：")
+    print("   1. sudo systemctl restart ombre-ccbridge   （让进程换上新文件）")
+    print("   2. 在 Telegram 里发 /reset                 （他续的旧会话读不到新人设）")
+    print("   跑 bash scripts/persona-live.sh 能验证到底生效没有。")
+    print(f"   （cc 桥的 CC_WORKDIR 要指到这里：{out}）")
     return 0
 
 
