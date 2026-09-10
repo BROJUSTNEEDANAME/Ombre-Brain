@@ -88,6 +88,7 @@ from writing_style import WRITING_MODE_SYSTEM as _WRITING_MODE_SYSTEM
 config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 from memory_guard import data_dump_reason, refuse_message
+from verbatim_recall import merge_verbatim, wants_verbatim
 import health_store
 
 logger = logging.getLogger("ombre_brain")
@@ -531,7 +532,9 @@ async def breath(
         for b in pinned_buckets:
             try:
                 clean_meta = {k: v for k, v in b["metadata"].items() if k != "tags"}
-                summary = await dehydrator.dehydrate(strip_wikilinks(b["content"]), clean_meta)
+                # 钉选是核心准则，是「真相」本身——不脱水、不改写，原文给他。
+                # 学 paramecium：摘要是索引，不是替代品；对钉选连索引都不该顶替原文。
+                summary = strip_wikilinks(b["content"]).strip()
                 pinned_results.append(f"📌 [核心准则] [bucket_id:{b['id']}] {summary}")
             except Exception as e:
                 logger.warning(f"Failed to dehydrate pinned bucket / 钉选桶脱水失败: {e}")
@@ -646,6 +649,16 @@ async def breath(
         logger.error(f"Search failed / 检索失败: {e}")
         return "检索过程出错，请稍后重试。"
 
+    # --- Verbatim channel: 逐字命中，确定性，绕过排序和衰减 ---
+    # 上面 bucket_mgr.search 是模糊打分 + 时间衰减的排名，旧事实会掉出前 N 名——
+    # 她那句「检索居然是概率的？」说的就是这个。逻辑在 verbatim_recall.py（零依赖，
+    # 测试能真的跑到）：query 原样出现在正文里的桶必然捞回来、排最前。
+    try:
+        matches = merge_verbatim(query, matches,
+                                 await bucket_mgr.list_all(include_archive=False))
+    except Exception as e:
+        logger.warning(f"Verbatim channel failed / 逐字通道失败: {e}")
+
     # --- Keyword search KEEPS pinned/protected buckets reachable ---
     # By design, pinned buckets are "always reachable by keyword" — only the
     # no-query surfacing list lists them separately as 核心准则. Excluding them
@@ -684,13 +697,20 @@ async def breath(
                 original_v = float(clean_meta.get("valence", 0.5))
                 shift = (q_valence - 0.5) * 0.2  # ±0.1 max shift
                 clean_meta["valence"] = max(0.0, min(1.0, original_v + shift))
-            summary = await dehydrator.dehydrate(strip_wikilinks(bucket["content"]), clean_meta)
+            if wants_verbatim(bucket):
+                # 钉选桶、以及她的原话逐字命中的桶：原文给他，不脱水。
+                # 脱水是模型重写，每次措辞都会漂——「还原」这件事上不能漂。
+                summary = strip_wikilinks(bucket["content"]).strip()
+            else:
+                summary = await dehydrator.dehydrate(strip_wikilinks(bucket["content"]), clean_meta)
             summary_tokens = count_tokens_approx(summary)
             if token_used + summary_tokens > max_tokens:
                 break
             await bucket_mgr.touch(bucket["id"])
             pin_mark = "📌 " if (bucket["metadata"].get("pinned") or bucket["metadata"].get("protected")) else ""
-            if bucket.get("vector_match"):
+            if bucket.get("verbatim_hit"):
+                summary = f"{pin_mark}[逐字命中] [bucket_id:{bucket['id']}] {summary}"
+            elif bucket.get("vector_match"):
                 summary = f"{pin_mark}[语义关联] [bucket_id:{bucket['id']}] {summary}"
             else:
                 summary = f"{pin_mark}[bucket_id:{bucket['id']}] {summary}"

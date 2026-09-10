@@ -106,6 +106,29 @@ SESSIONS_FILE = os.path.join(CC_WORKDIR, ".cc_sessions.json")
 # 这些是她的设置，/reset 不该把它们一起清掉。
 STATE_FILE = os.path.join(CC_WORKDIR, ".cc_state.json")
 
+# ---- L0：聊天原文逐字存档 ----
+# 学的是 paramecium 那条「原文是唯一真相，后面一切只是给它做索引」。
+# 记忆库存的是摘要（而且每次 breath 还会再脱水一遍），摘要是有损的、会漂的。
+# 人设早就让他「捞不到就 grep ~/ombre-archive/」——可这个目录里只有她 scp 上来
+# 的旧记录，Telegram 上每天新说的话一个字都没落盘。这里补上：一天一个文件，
+# 只追加、永不改写。她要「还原」的时候，这就是原话。
+ARCHIVE_DIR = os.path.expanduser(os.environ.get("OMBRE_ARCHIVE_DIR", "~/ombre-archive"))
+
+
+def _archive(who: str, text: str) -> None:
+    """把一条话原样追加进当天的存档。失败只记日志——存档绝不能拖垮聊天。"""
+    text = (text or "").strip()
+    if not text:
+        return
+    try:
+        local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+        d = os.path.join(ARCHIVE_DIR, "telegram")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, local.strftime("%Y-%m-%d") + ".md"), "a", encoding="utf-8") as fh:
+            fh.write(f"[{local.strftime('%H:%M')}] {who}: {text}\n")
+    except Exception:  # noqa: BLE001
+        logger.warning("原文存档没写进去")
+
 # 大脑的 REST 口。cc 平时走 MCP，但 /mood /stale 这些要读的是同一台大脑的
 # HTTP 接口（和网页、API bot 同一份状态），所以这里单独留一条 REST 通道。
 OMBRE_MCP_URL = os.environ.get("OMBRE_MCP_URL", "http://127.0.0.1:8000/mcp").strip()
@@ -685,6 +708,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 _save_sessions()
             if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她
+            _archive("Nikto", reply)
             for chunk in _split_for_telegram(reply, paragraphs=not writing_mode.get(cid, False)):
                 await context.bot.send_message(chat_id=cid,
                                                text=restore_punctuation(chunk))
@@ -786,6 +810,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if sid and sessions.get(cid) != sid:
         sessions[cid] = sid
         _save_sessions()
+    _archive("Nikto", reply)
     for chunk in _split_for_telegram(reply, paragraphs=not writing_mode.get(cid, False)):
         await _reply_with_retry(update.message, restore_punctuation(chunk))
     if _inflight_cc.get(cid) is st:
@@ -930,6 +955,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if cid not in ALLOWED_CHAT_IDS:
         return
     text = update.message.text
+    _archive("闪闪", text)
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
