@@ -1,5 +1,8 @@
 """cc 桥的人设目录。
 
+⚠️ 改 cc.eleven_tts / cc.STATE_FILE 这类共享对象必须用 monkeypatch，不许直接赋值——
+直接赋值会污染同一进程里后面跑的 test_eleven_tts（真踩过：单跑绿、合跑红）。
+
 存在的理由：cc_bridge 默认在**本仓库**跑 claude，于是加载的是仓库的 CLAUDE.md
 ——那是给开发用的（「改代码前必须跑 check.sh」）。直接启用等于让她对着一个
 带记忆工具的编程助理说话。这里保证生成出来的是他，而且跟主人设同源。
@@ -1650,3 +1653,97 @@ def test_archive_is_wired_into_both_send_paths():
     assert '_archive("闪闪", text)' in inspect.getsource(cc.on_message)
     assert inspect.getsource(cc._respond).count('_archive("Nikto", reply)') == 1
     assert '_archive("Nikto", reply)' in inspect.getsource(cc.check_inactivity)
+
+
+class _Msg:
+    def __init__(self):
+        self.texts, self.voices = [], []
+    async def reply_text(self, t, **k):
+        self.texts.append(t)
+    async def reply_voice(self, a, **k):
+        self.voices.append(a)
+
+
+def _upd(cid=7):
+    import types
+    m = _Msg()
+    return types.SimpleNamespace(effective_chat=types.SimpleNamespace(id=cid), message=m), m
+
+
+def test_voice_toggle_persists_and_refuses_without_a_voice(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: False)
+    u, m = _upd()
+    asyncio.run(cc.voice_cmd(u, None))
+    assert "还没嗓子" in m.texts[-1] and cc.voice_mode.get(7) is None
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    asyncio.run(cc.voice_cmd(u, None))
+    assert cc.voice_mode[7] is True and "语音开了" in m.texts[-1]
+    # 重启后读回来
+    cc.voice_mode.clear(); cc._load_state()
+    assert cc.voice_mode[7] is True
+
+
+def test_singing_forces_a_voice_note_even_with_voice_mode_off(monkeypatch):
+    """她让他唱，他回 [sings]…——唱歌打成字没意义，语音模式关着也要发语音条。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    sent = {}
+    async def synth(reply, singing=None, **k):
+        sent["reply"], sent["singing"] = reply, singing
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    cc.voice_mode.clear()
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "[sings] Twinkle, twinkle, little star\n[sings] How I wonder what you are\n\n唱完了。"))
+    assert m.voices and m.voices[0].startswith(b"OggS")
+    assert m.texts == [], "发了语音就不再发一遍文字"
+    assert sent["singing"] is True and "[sings]" in sent["reply"]
+
+
+def test_voice_failure_falls_back_to_text_without_tags(monkeypatch):
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def boom(reply, singing=None, **k):
+        raise RuntimeError("HTTP 401")
+    monkeypatch.setattr(cc.eleven_tts, "synth", boom)
+    got = []
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    cc._reply_with_retry = fake_retry
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "[sings] la la la‖过来。"))
+    assert m.voices == []
+    assert got == ["la la la", "过来。"], got   # 标签去掉、‖ 照样分条
+    assert cc.STATS.get("voice_fail", 0) == 1
+
+
+def test_text_mode_never_leaks_tags_even_without_a_voice(monkeypatch):
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: False)
+    got = []
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    cc._reply_with_retry = fake_retry
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "[whispers] 过来。"))
+    assert got == ["过来。"]
+
+
+def test_respond_hands_off_to_deliver_and_persona_teaches_singing():
+    import inspect
+    cc = _cc()
+    assert "await _deliver(update, cid, reply)" in inspect.getsource(cc._respond)
+    text = _mod().build()
+    i = text.index("# 你的嗓子")
+    body = text[i:text.index("# 你自己的游戏厅")]
+    assert "[sings]" in body and "耳熟能详" in body
+    assert "一个 `[sings]` 都不许出现" in body
+    assert "你不用说「我发语音」" in body

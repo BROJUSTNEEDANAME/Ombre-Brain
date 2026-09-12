@@ -41,6 +41,7 @@ from reply_sanitizer import (restore_punctuation, looks_degenerate,
 import health_store
 import httpx
 import stale_ledger
+import eleven_tts
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -149,6 +150,7 @@ CC_MODEL_CHOICES = [
 ]
 
 writing_mode: dict[int, bool] = {}
+voice_mode: dict[int, bool] = {}
 todos: dict[int, str] = {}
 model_override: dict[str, str] = {}
 # 额度账本：只记 token 数和花费，不存任何正文。
@@ -165,6 +167,7 @@ def _load_state() -> None:
         return
     try:
         writing_mode.update({int(k): bool(v) for k, v in (d.get("writing_mode") or {}).items()})
+        voice_mode.update({int(k): bool(v) for k, v in (d.get("voice_mode") or {}).items()})
         todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
         if d.get("model"):
             model_override["model"] = str(d["model"])
@@ -182,6 +185,7 @@ def _save_state() -> None:
     """原子写。半截文件比没有更坏——下次读回来是坏的，还以为设置丢了。"""
     data = {
         "writing_mode": {str(k): v for k, v in writing_mode.items()},
+        "voice_mode": {str(k): v for k, v in voice_mode.items()},
         "todos": {str(k): v for k, v in todos.items()},
         "model": model_override.get("model", ""),
         "usage": USAGE,
@@ -397,6 +401,7 @@ async def show_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 BOT_COMMANDS = [
     ("status", "他现在什么情况 · 一眼看完，不用开终端"),
     ("persona", "人设完整版／精简版 · 你自己当判官"),
+    ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
     ("backup", "把记忆打包备份"),
     ("help", "看所有指令"),
@@ -493,6 +498,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"你上次说话 {_age(time.time() - last_user_ts[cid])}前"
                  f"｜主动找过你 {nudge_count.get(cid, 0)}/{NUDGE_MAX} 次"
                  + ("｜你说睡了，不打扰" if asleep.get(cid) else ""))
+    if eleven_tts.configured():
+        L.append(f"嗓子：ElevenLabs {eleven_tts.MODEL_ID}｜语音模式"
+                 f"{'开' if voice_mode.get(cid) else '关'}"
+                 f"｜发过 {STATS.get('voice', 0)} 条，合成失败 {STATS.get('voice_fail', 0)} 次")
+    else:
+        L.append("嗓子：没配（.env.ccbridge 里加 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID）")
     await update.message.reply_text("\n".join(L))
 
 
@@ -748,6 +759,45 @@ def _take_pending_cc(cid: int) -> str:
 # 她连着两次拿这个来问我。枚举写不全，改成归一化剥字符。
 
 
+async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    if not eleven_tts.configured():
+        await update.message.reply_text(
+            "他还没嗓子。要给他配：.env.ccbridge 里加 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID，"
+            "然后 sudo systemctl restart ombre-ccbridge。")
+        return
+    voice_mode[cid] = not voice_mode.get(cid, False)
+    _save_state()
+    await update.message.reply_text(
+        "语音开了 接下来他用嗓子跟你说" if voice_mode[cid]
+        else "语音关了 回到打字。让他唱的时候照样会发语音条")
+
+
+async def _deliver(update: Update, cid: int, reply: str) -> None:
+    """把他这一轮送到她手上：该出声就出声，出不了声就退回文字——但绝不空着。
+
+    出声的两种情况：她开了 /voice；或者他这条在唱（[sings]）——唱歌打成字就没意义了，
+    所以哪怕语音模式关着也发语音条。合成失败退回文字，并把 [sings] 这类标签去掉：
+    那是给合成器看的指令，不是给她看的。
+    """
+    sing = eleven_tts.wants_singing(reply)
+    if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
+        try:
+            audio = await eleven_tts.synth(reply, singing=sing)
+            await update.message.reply_voice(audio)
+            STATS["voice"] = STATS.get("voice", 0) + 1
+            return
+        except Exception:  # noqa: BLE001
+            STATS["voice_fail"] = STATS.get("voice_fail", 0) + 1
+            logger.exception("语音合成失败，退回文字 chat=%s", cid)
+    text = eleven_tts.strip_tags(reply)
+    for chunk in _split_for_telegram(text, paragraphs=not writing_mode.get(cid, False)):
+        await _reply_with_retry(update.message, restore_punctuation(chunk))
+
+
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                    cid: int, message: str) -> None:
     """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
@@ -820,8 +870,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sessions[cid] = sid
         _save_sessions()
     _archive("Nikto", reply)
-    for chunk in _split_for_telegram(reply, paragraphs=not writing_mode.get(cid, False)):
-        await _reply_with_retry(update.message, restore_punctuation(chunk))
+    await _deliver(update, cid, reply)
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
 
@@ -1060,6 +1109,7 @@ def _keepalive() -> None:
 
 
 def main() -> None:
+    _load_state()          # 她的开关（写文/语音/必办/模型）——重启不能丢
     threading.Thread(target=_start_health_server, daemon=True).start()
     threading.Thread(target=_keepalive, daemon=True).start()
     app: Application = (
@@ -1076,6 +1126,7 @@ def main() -> None:
     app.add_handler(CommandHandler("id", show_id))
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("persona", persona_cmd))
+    app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
