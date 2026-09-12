@@ -1762,3 +1762,11 @@ def test_he_can_say_do_not_disturb_and_the_bridge_honors_it():
     assert src.index("nudge_count[cid] = NUDGE_MAX", k) < j
     # 提示词里教了他这个口子
     assert "整条回复只写「[不打扰]」" in src
+
+
+def test_scheduler_heartbeat_does_not_drown_the_log():
+    """她拉 30 行日志，30 行都是 apscheduler 的心跳，真正的事一条看不见。"""
+    import logging
+    _cc()
+    assert logging.getLogger("apscheduler").level >= logging.WARNING
+    assert logging.getLogger("httpx").level >= logging.WARNING
