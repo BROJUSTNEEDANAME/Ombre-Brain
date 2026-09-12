@@ -1770,3 +1770,13 @@ def test_scheduler_heartbeat_does_not_drown_the_log():
     _cc()
     assert logging.getLogger("apscheduler").level >= logging.WARNING
     assert logging.getLogger("httpx").level >= logging.WARNING
+
+
+def test_every_message_in_and_out_leaves_one_log_line():
+    """她问「他怎么不回我」，日志一片空白——正常收到、正常答了都不写，分不清没收到和答得慢。"""
+    import inspect
+    cc = _cc()
+    assert 'logger.info("收到 chat=%s' in inspect.getsource(cc.on_message)
+    body = inspect.getsource(cc._respond)
+    assert 'logger.info("答了 chat=%s' in body
+    assert body.index("_t0 = time.time()") < body.index("await run_cc(message")
