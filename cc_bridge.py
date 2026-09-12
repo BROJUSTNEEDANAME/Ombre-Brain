@@ -1144,6 +1144,16 @@ def _keepalive() -> None:
         time.sleep(600)
 
 
+def _telegram_api_base() -> str:
+    """TELEGRAM_API_BASE：中转地址，如 https://xxx.workers.dev。空＝直连官方。
+    去掉尾部斜杠、去掉误粘的引号/尖括号——她粘地址时踩过一次尖括号的坑。"""
+    v = os.environ.get("TELEGRAM_API_BASE", "").strip().strip("'\"<> ").rstrip("/")
+    if v and not v.startswith("https://"):
+        logger.warning("TELEGRAM_API_BASE 不是 https:// 开头，忽略：%r", v)
+        return ""
+    return v
+
+
 def main() -> None:
     _load_state()          # 她的开关（写文/语音/必办/模型）——重启不能丢
     # ⚠️ 先绑端口再碰 Telegram：绑不上说明已有一个实例在跑，这里直接退出（SystemExit 78），
@@ -1151,9 +1161,17 @@ def main() -> None:
     _health = _bind_health_server(int(os.environ.get("PORT", "10000")))
     threading.Thread(target=_start_health_server, args=(_health,), daemon=True).start()
     threading.Thread(target=_keepalive, daemon=True).start()
+    builder = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN)
+    # Telegram API 中转。由来：DO sfo2 到 Telegram 网段的上游路由断了（tracepath 在
+    # Lumen 之后全 no reply），别的网站都通。机器到 Cloudflare 是通的，所以让她在
+    # Cloudflare 上放一个十行的 Worker 原样转发，桥把请求发给 Worker。
+    # 不设就走官方地址，行为不变。
+    _base = _telegram_api_base()
+    if _base:
+        builder = builder.base_url(_base + "/bot").base_file_url(_base + "/file/bot")
+        logger.info("Telegram API 走中转：%s", _base)
     app: Application = (
-        ApplicationBuilder()
-        .token(TELEGRAM_BOT_TOKEN)
+        builder
         .connect_timeout(30)   # 超时链（7-01 当时 VPS 上就有的容错）
         .read_timeout(30)
         .write_timeout(30)
