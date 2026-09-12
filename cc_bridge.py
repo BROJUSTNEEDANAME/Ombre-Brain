@@ -838,6 +838,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception:  # noqa: BLE001
         pass  # typing 指示器失败不影响正事
     _typing = asyncio.create_task(_keep_typing())
+    _t0 = time.time()
     try:
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:
@@ -885,6 +886,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sessions[cid] = sid
         _save_sessions()
     _archive("Nikto", reply)
+    logger.info("答了 chat=%s %d字 用时 %.0fs", cid, len(reply), time.time() - _t0)
     await _deliver(update, cid, reply)
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
@@ -1028,6 +1030,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if cid not in ALLOWED_CHAT_IDS:
         return
     text = update.message.text
+    # 每条都记一行。由来：她问「他怎么不回我」，我让她拉日志，日志里一片空白——
+    # 正常收到、正常答了都不写，于是分不清「没收到」和「收到了但答得慢」。
+    logger.info("收到 chat=%s %d字", cid, len(text or ""))
     _archive("闪闪", text)
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
