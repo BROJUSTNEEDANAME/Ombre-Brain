@@ -95,6 +95,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO
 )
 logger = logging.getLogger("cc-bridge")
+# apscheduler 每分钟两条「Running job / executed successfully」，30 行日志里 30 行都是它。
+# 她那次「他怎么不回我」我让她拉日志，拉回来全是这个，真正的事一条没看见。
+# 它只在出错时才值得开口。httpx 同理——每次 getUpdates 都刷一行。
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # chat_id -> claude 会话 id（保持上下文连续）
 # ⚠️ 这个 id 是 claude --resume 用来接上「刚才聊到哪了」的。只存在内存里的话，
