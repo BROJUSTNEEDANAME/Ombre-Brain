@@ -107,3 +107,13 @@ def test_a_failed_fetch_says_so_and_says_how_to_fix_it():
     assert "$FETCH_ERR" in SH[i:i + 120]
     # 而且要在拿 LOCAL/REMOTE 之前就拦住——否则比的是过期的 origin 记录
     assert SH.index("FETCH_ERR") < SH.index("LOCAL=$(g rev-parse HEAD)")
+
+
+def test_only_enabled_services_are_managed():
+    """她早就不用 API bot 了，它在崩溃循环里；旧文写死 ombre-apibot，部署后一查它
+    不活就整个回滚——她关不掉它。现在按 is-enabled 判，disabled/masked 的不管。"""
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "SERVICES=(ombre-brain)" in code
+    assert "SERVICES=(ombre-brain ombre-apibot)" not in code, "不许再写死 apibot"
+    assert 'systemctl is-enabled ombre-apibot.service' in code
+    assert 'systemctl is-enabled ombre-ccbridge.service' in code
