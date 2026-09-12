@@ -1780,3 +1780,28 @@ def test_every_message_in_and_out_leaves_one_log_line():
     body = inspect.getsource(cc._respond)
     assert 'logger.info("答了 chat=%s' in body
     assert body.index("_t0 = time.time()") < body.index("await run_cc(message")
+
+
+def test_second_instance_exits_instead_of_fighting_over_the_bot():
+    """她 VPS 上同时跑了两个 cc_bridge.py，抢同一个 bot 的消息，/status 都不回。
+    旧代码端口绑不上只记一行错接着干。现在：绑不上 = 已有实例 = 退出码 78。"""
+    import socket, inspect
+    cc = _cc()
+    holder = socket.socket(); holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(("0.0.0.0", 0)); holder.listen(1)
+    port = holder.getsockname()[1]
+    try:
+        try:
+            cc._bind_health_server(port)
+        except SystemExit as e:
+            assert e.code == 78
+        else:
+            raise AssertionError("端口被占还没退出——两个实例又会打架")
+    finally:
+        holder.close()
+    # 空闲端口正常绑上
+    srv = cc._bind_health_server(0)
+    srv.server_close()
+    # main() 必须先绑端口再去碰 Telegram
+    body = inspect.getsource(cc.main)
+    assert body.index("_bind_health_server(") < body.index("ApplicationBuilder()")

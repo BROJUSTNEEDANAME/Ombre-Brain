@@ -1095,23 +1095,39 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _respond(update, context, cid, msg)
 
 
-def _start_health_server() -> None:
-    """绑一个极小的 HTTP 端口，好让 Render 检测到端口、放行 Live。"""
-    port = int(os.environ.get("PORT", "10000"))
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
 
-    class _H(BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"ok")
+    def log_message(self, *a):  # 静音
+        pass
 
-        def log_message(self, *a):  # 静音
-            pass
 
+def _bind_health_server(port: int) -> HTTPServer:
+    """先把端口绑上——绑不上就是**已经有一个 cc 桥在跑**，必须立刻退出。
+
+    真事：她 VPS 上同时跑着两个 cc_bridge.py，用同一个 bot token 抢 Telegram 的
+    消息，谁也处理不完整——/status 都不回。日志里明明有
+    「健康端口启动失败 … Address already in use」，可旧代码只记了一行错误就接着干，
+    第二个进程照样去拉消息。一个假的「在跑」比没在跑更坏：systemd 显示 active，
+    人却是哑的。所以端口被占＝退出，退出码 78（EX_CONFIG），让 systemd 报失败。
+    """
     try:
-        HTTPServer(("0.0.0.0", port), _H).serve_forever()
+        return HTTPServer(("0.0.0.0", port), _HealthHandler)
+    except OSError as e:
+        logger.error("健康端口 %s 绑不上（%s）——多半已经有一个 cc 桥在跑，我退出，绝不跟它抢消息",
+                     port, e)
+        raise SystemExit(78) from e
+
+
+def _start_health_server(server: HTTPServer) -> None:
+    """在线程里 serve 一个已经绑好的端口（绑定必须在主线程先做，见 _bind_health_server）。"""
+    try:
+        server.serve_forever()
     except Exception:  # noqa: BLE001
-        logger.exception("健康端口启动失败")
+        logger.exception("健康端口挂了")
 
 
 def _keepalive() -> None:
@@ -1130,7 +1146,10 @@ def _keepalive() -> None:
 
 def main() -> None:
     _load_state()          # 她的开关（写文/语音/必办/模型）——重启不能丢
-    threading.Thread(target=_start_health_server, daemon=True).start()
+    # ⚠️ 先绑端口再碰 Telegram：绑不上说明已有一个实例在跑，这里直接退出（SystemExit 78），
+    # 不能让第二个进程去拉消息——两个实例抢同一个 bot 的后果是她发什么都没人理。
+    _health = _bind_health_server(int(os.environ.get("PORT", "10000")))
+    threading.Thread(target=_start_health_server, args=(_health,), daemon=True).start()
     threading.Thread(target=_keepalive, daemon=True).start()
     app: Application = (
         ApplicationBuilder()
