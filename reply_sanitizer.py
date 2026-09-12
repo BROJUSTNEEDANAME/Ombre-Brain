@@ -458,6 +458,7 @@ def is_silent_reply(text: str) -> bool:
 # （「她」在中文里可能是室友、可能是别人，误伤代价太大）。
 _META_THIRD_PERSON_RE = re.compile(
     r"\b(she|her|she's|she'd|she'll|the user|user's|the human)\b", re.I)
+ANY_AUDIO_TAG_RE = re.compile(r"\[(sings?|singing[^\]]*|hums?|humming|whispers?|laughs?|sighs?)\]", re.I)
 _META_SELF_RE = re.compile(
     r"\b(I apologize|I should|I need to|I didn't respond|let me|I'll respond|"
     r"I notice|the assistant|as an AI)\b", re.I)
@@ -472,8 +473,14 @@ def is_meta_leak(bubble: str) -> bool:
     cjk = sum("一" <= ch <= "鿿" for ch in t)
     if latin < 12 or latin <= cjk * 2:     # 中文为主、或英文太短（一个词），不算
         return False
-    return bool(_META_THIRD_PERSON_RE.search(t)) and bool(_META_SELF_RE.search(t)) \
-        or bool(re.search(r"\bshe('s| is| was| asked| said)\b", t, re.I))
+    # 第二次漏网（主动找她那条）：「No response requested. She fell asleep around 7am…
+    # Let her sleep.」——里面没有 "I apologize / I should" 这类自述词，旧判定要求
+    # 「第三人称 + 自述」同时成立，就放过去了。收紧成：拉丁字母为主、且在第三人称
+    # 说她，就是旁白。他跟她说话永远是第二人称，英文里出现 she/her 指的只可能是
+    # 别人——而他极少用英文长段说别人。带音频标签（[sings] 歌词）的一律不算。
+    if ANY_AUDIO_TAG_RE.search(t):
+        return False
+    return bool(_META_THIRD_PERSON_RE.search(t))
 
 
 def strip_meta_leaks(text: str) -> str:

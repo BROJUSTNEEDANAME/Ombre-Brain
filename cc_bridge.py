@@ -712,12 +712,22 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             f"[系统提示] 她已经 {mins} 分钟没说话了，这是你今晚第 {n} 次主动找她"
             f"（最多 {NUDGE_MAX} 次）。现在主动开口——不要问「在吗」「怎么了」这种空话，"
             "接着你们刚才聊的那件事往下说，或者说一件你想让她知道的事。"
-            "一两条，短。这条系统提示不要复述。")
+            "一两条，短。这条系统提示不要复述。"
+            "⚠️ 如果你判断她在睡觉、不该吵她——整条回复只写「[不打扰]」四个字，"
+            "别写任何解释、别用英文自言自语。我看到这四个字就今晚不再叫你找她。")
         try:
             reply, sid = await run_cc(prompt, sessions.get(cid))
             if sid and sessions.get(cid) != sid:
                 sessions[cid] = sid
                 _save_sessions()
+            # 他说「不打扰」＝他判断她在睡。以前这个判断只能靠他返回空话或英文旁白
+            # （「No response requested. She fell asleep… Let her sleep.」漏出来那次），
+            # 桥再一轮轮重试。现在给他一个正式的口子：标成睡了，今晚到此为止。
+            if "[不打扰]" in reply or reply.strip() == "不打扰":
+                asleep[cid] = True
+                nudge_count[cid] = NUDGE_MAX
+                logger.info("他判断她在睡，今晚不再找 chat=%s", cid)
+                continue
             reply = strip_meta_leaks(reply)
             if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她

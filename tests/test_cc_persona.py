@@ -1747,3 +1747,18 @@ def test_respond_hands_off_to_deliver_and_persona_teaches_singing():
     assert "[sings]" in body and "耳熟能详" in body
     assert "一个 `[sings]` 都不许出现" in body
     assert "你不用说「我发语音」" in body
+
+
+def test_he_can_say_do_not_disturb_and_the_bridge_honors_it():
+    """主动找她时他判断她在睡：回「[不打扰]」→ 标成睡了、今晚不再找、不发任何东西。
+    以前这个判断只能靠他吐英文旁白（漏出来一次）或空话，桥一轮轮重试。"""
+    import inspect
+    cc = _cc()
+    src = inspect.getsource(cc.check_inactivity)
+    assert "[不打扰]" in src
+    i = src.index('"[不打扰]" in reply'); j = src.index("reply = strip_meta_leaks(reply)")
+    assert i < j, "先认「不打扰」，再过旁白过滤——否则整条被当旁白拦掉，睡眠标记就没了"
+    k = src.index("asleep[cid] = True", i)
+    assert src.index("nudge_count[cid] = NUDGE_MAX", k) < j
+    # 提示词里教了他这个口子
+    assert "整条回复只写「[不打扰]」" in src

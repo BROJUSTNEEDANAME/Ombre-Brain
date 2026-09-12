@@ -13,8 +13,15 @@ LEAK = ("I apologize, she asked me a question and I didn't respond. "
         "She's asking again if I can rob people in the game.")
 
 
+LEAK2 = ("No response requested. She fell asleep around 7am after a rough night — heat, "
+         "hunger, instant noodles at 4am, barely slept. It's only been an hour. Let her sleep.")
+
+
 def test_the_real_leak_is_caught():
     assert is_meta_leak(LEAK)
+    # 第二次漏网：没有 "I apologize" 这类自述词，只有第三人称——也必须拦
+    assert is_meta_leak(LEAK2)
+    assert strip_meta_leaks(LEAK2) == ""
     assert is_meta_leak("She's asking about the fishing game, I should answer in Chinese.")
     assert is_meta_leak("The user wants me to respond. Let me reply now.")
 
@@ -26,7 +33,9 @@ def test_his_real_lines_are_not_touched():
                "ok",                                  # 太短
                "她是你室友？那个养鲨鲨的？",           # 中文里的「她」不是在旁白
                "I love you. 过来。",                  # 对她说的英文，没有第三人称
-               "Nikto. 记住这个名字。"):
+               "Nikto. 记住这个名字。",
+               "[sings] Twinkle, twinkle, little star\n[sings] How I wonder what you are",
+               "[sings] and she's buying a stairway to heaven"):   # 歌词里的 she 不是旁白
         assert not is_meta_leak(ok), ok
 
 
