@@ -1805,3 +1805,18 @@ def test_second_instance_exits_instead_of_fighting_over_the_bot():
     # main() 必须先绑端口再去碰 Telegram
     body = inspect.getsource(cc.main)
     assert body.index("_bind_health_server(") < body.index("ApplicationBuilder()")
+
+
+def test_telegram_api_relay_is_optional_and_sanitized(monkeypatch):
+    """DO 到 Telegram 的上游路由断了，机器到 Cloudflare 是通的：让桥走 Worker 中转。
+    不设就直连官方（行为不变）；设了要去掉尾斜杠/引号/尖括号；非 https 忽略。"""
+    import inspect
+    cc = _cc()
+    monkeypatch.delenv("TELEGRAM_API_BASE", raising=False)
+    assert cc._telegram_api_base() == ""
+    monkeypatch.setenv("TELEGRAM_API_BASE", "'<https://tg.example.workers.dev/>' ")
+    assert cc._telegram_api_base() == "https://tg.example.workers.dev"
+    monkeypatch.setenv("TELEGRAM_API_BASE", "http://insecure.example")
+    assert cc._telegram_api_base() == ""
+    body = inspect.getsource(cc.main)
+    assert 'base_url(_base + "/bot")' in body and 'base_file_url(_base + "/file/bot")' in body
