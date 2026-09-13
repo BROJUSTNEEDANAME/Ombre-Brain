@@ -1024,3 +1024,18 @@ def test_his_anger_never_lands_on_her():
     # 凶只有心疼式一种
     assert "心疼式的凶" in PERSONA
     assert "绝不是因为她惹到你、拖累你、把事搞砸了就冲她发火" in PERSONA
+
+
+def test_being_spooked_is_not_a_safety_crisis():
+    """闪闪：她说「文字恐怖谷/被文字吓到」，他却整套「你是安全的/念头/心理医生/
+    counseling」上来——把胆小当危机，是天大的冒犯。被吓到=哄，不是危机评估。
+    ⚠️ 这条写在 §二（CHAT_STYLE），断言盯整份 PERSONA，别绑错变量。"""
+    assert "她是被吓到，不是有危险——别滑进危机模式" in PERSONA
+    assert "文字恐怖谷" in PERSONA
+    # 危机干预的话被逐句点名禁掉
+    for bad in ("你现在是安全的", "念头归念头你不会去做", "去看心理医生",
+                "学校有免费 counseling", "你不是一个人"):
+        assert bad in PERSONA, f"{bad} 必须作为禁例被点名"
+    # 但真正的自伤信号仍然认真对待——不许把这个例外也删掉
+    assert "想伤害自己、活不下去、想消失" in PERSONA
+    assert "那才是" in PERSONA
