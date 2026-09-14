@@ -263,6 +263,69 @@ def _save_sessions() -> None:
         logger.warning("会话 id 存盘失败，重启后这段对话会从头开始", exc_info=True)
 
 
+# 上一轮 cc 调过的工具轨迹（友好中文标签，按顺序）。/trace 读它，慢回合也附它。
+LAST_TRACE: list[str] = []
+LAST_TRACE_META: dict = {"secs": 0, "at": 0.0}
+
+# 工具名 → 给她看的人话。她不认识 mcp__toy__play，但认识「玩游戏厅」。
+_TOOL_LABELS = [
+    ("breath", "翻记忆"), ("read", "翻记忆"), ("pulse", "翻记忆"),
+    ("hold", "记下来"), ("grow", "记下来"), ("trace", "整理记忆"), ("dream", "回想"),
+    ("toy", "游戏厅"), ("galatea", "花园"),
+    ("WebSearch", "上网搜"), ("WebFetch", "上网看"), ("web_search", "上网搜"),
+    ("Grep", "翻旧对话存档"), ("Bash", "翻旧对话存档"), ("Read", "翻文件"),
+    ("health", "看你身体数据"),
+]
+
+
+def _tool_label(name: str) -> str:
+    low = (name or "").lower()
+    for key, label in _TOOL_LABELS:
+        if key.lower() in low:
+            return label
+    return name  # 没见过的工具，原样显示，别假装懂
+
+
+def _parse_stream(raw: str):
+    """解析 stream-json（每行一个事件）。返回 (正文, session_id, usage, subtype, 工具轨迹)。
+
+    ⚠️ 兼容旧格式：万一某次输出的还是单个 JSON（非流式），也能读出 result。
+    """
+    text, sid, usage, subtype, trace = "", None, {}, "", []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        t = ev.get("type")
+        if t == "assistant":
+            for blk in (ev.get("message") or {}).get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                    trace.append(_tool_label(str(blk.get("name") or "")))
+        elif t == "result":
+            text = str(ev.get("result") or "").strip()
+            sid = ev.get("session_id") or sid
+            usage = ev.get("usage") or usage
+            subtype = ev.get("subtype") or subtype
+        elif t in (None,) and ev.get("result") is not None:
+            # 旧的单对象格式
+            text = str(ev.get("result") or "").strip()
+            sid = ev.get("session_id") or sid
+            usage = ev.get("usage") or usage
+    # 相邻重复的合并成「×N」，别刷屏（翻记忆·翻记忆·翻记忆 → 翻记忆×3）
+    merged = []
+    for label in trace:
+        if merged and merged[-1][0] == label:
+            merged[-1][1] += 1
+        else:
+            merged.append([label, 1])
+    trace_out = [lb if n == 1 else f"{lb}×{n}" for lb, n in merged]
+    return text, sid, usage, subtype, trace_out
+
+
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
     """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。
     被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
@@ -298,7 +361,11 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             f"{_pf}]\n" + message
         )
 
-    cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
+    # stream-json：把中间每一步（他调了哪些工具）也吐出来，不只给最终结果。
+    # 由来：她那轮等了 162 秒，完全不知道他在干嘛——「可以像 glm 一样显示思考链吗」。
+    # --verbose 是 stream-json 必须的，否则 CLI 拒绝启动。
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
+           "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
     _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
     if _model:
@@ -333,25 +400,21 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         rc = proc.returncode
         if rc == 0:
             raw = out.decode().strip()
-            try:
-                data = json.loads(raw)
-            except Exception:  # noqa: BLE001
-                return raw.strip(), session_id
-            text = str(data.get("result") or "").strip()
+            text, sid2, usage, subtype, trace = _parse_stream(raw)
+            LAST_TRACE.clear()
+            LAST_TRACE.extend(trace)
+            session_id = sid2 or session_id
+            data = {"result": text, "subtype": subtype, "usage": usage}
             if not text:
                 # ⚠️ 退出码 0、result 是空字符串。日志里只记「原始输出＝''」
                 # 等于什么都没说——她因此连问四次「为什么还是不说话」，
                 # 而我每次只能猜。claude 自己在 JSON 里说了原因（subtype 会写
                 # error_max_turns / error_during_execution，num_turns 说明
                 # 这一轮是不是全花在工具调用上），记下来就不用猜。
-                logger.warning(
-                    "claude 返回空 result：subtype=%r is_error=%r num_turns=%r "
-                    "duration_ms=%r stop_reason=%r 全量键=%s",
-                    data.get("subtype"), data.get("is_error"),
-                    data.get("num_turns"), data.get("duration_ms"),
-                    data.get("stop_reason"), sorted(data.keys()))
-            _record_cache_tier(data.get("usage") or {})
-            return text, data.get("session_id", session_id)
+                logger.warning("claude 返回空 result：subtype=%r 工具轨迹=%s",
+                               subtype, trace or "（一个工具都没调）")
+            _record_cache_tier(usage or {})
+            return text, session_id
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
         if rc in _SIGNAL_KILL_CODES and attempt == 0:
@@ -407,6 +470,7 @@ BOT_COMMANDS = [
     ("status", "他现在什么情况 · 一眼看完，不用开终端"),
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
+    ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
     ("backup", "把记忆打包备份"),
     ("help", "看所有指令"),
@@ -774,6 +838,22 @@ def _take_pending_cc(cid: int) -> str:
 # 她连着两次拿这个来问我。枚举写不全，改成归一化剥字符。
 
 
+async def trace_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/trace：上一轮他到底一步步干了啥。由来：她等了 162 秒不知道他在忙什么，
+    「可以像 glm 一样显示思考链吗」。这就是那条思考链——按顺序列他调的工具。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    if not LAST_TRACE:
+        await update.message.reply_text(
+            "上一轮他没调任何工具，就是直接想好回你的（那种秒回的）。")
+        return
+    secs = LAST_TRACE_META.get("secs", 0)
+    await update.message.reply_text(
+        f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE)
+        + "\n\n（这是他自己去调的，不用你给指令。慢多半是玩游戏厅或翻记忆翻深了。）")
+
+
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
     cid = update.effective_chat.id
@@ -886,8 +966,21 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         sessions[cid] = sid
         _save_sessions()
     _archive("Nikto", reply)
-    logger.info("答了 chat=%s %d字 用时 %.0fs", cid, len(reply), time.time() - _t0)
+    _secs = time.time() - _t0
+    LAST_TRACE_META["secs"] = round(_secs)
+    LAST_TRACE_META["at"] = time.time()
+    _trace_snapshot = list(LAST_TRACE)
+    logger.info("答了 chat=%s %d字 用时 %.0fs 轨迹=%s",
+                cid, len(reply), _secs, _trace_snapshot or "（没调工具）")
     await _deliver(update, cid, reply)
+    # 慢回合（>45s）自动交代刚才在忙什么——她不用再干等着猜。
+    if _secs > 45 and _trace_snapshot:
+        try:
+            await _reply_with_retry(
+                update.message,
+                f"（刚才想了 {round(_secs)} 秒，我在：{' · '.join(_trace_snapshot)}）")
+        except Exception:  # noqa: BLE001
+            pass
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
 
@@ -1184,6 +1277,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("trace", trace_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))

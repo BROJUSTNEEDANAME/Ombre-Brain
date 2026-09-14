@@ -1072,12 +1072,12 @@ def test_an_empty_result_is_logged_with_the_reason_claude_gave():
     （subtype=error_max_turns 就是「整轮花在工具调用上、轮数用完了」），记下来。"""
     src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
     i = src.index("claude 返回空 result")
-    block = src[i - 600:i + 600]
-    for k in ("subtype", "num_turns", "is_error", "duration_ms"):
-        assert f'data.get("{k}")' in block, f"没记 {k}"
-    assert "sorted(data.keys())" in block, "键名也要记，下次才知道还有什么可看"
+    block = src[i - 200:i + 400]
+    # 改流式后：空 result 时记下 subtype（error_max_turns 等）和工具轨迹——
+    # 这样既知道原因，也知道这一轮他都调了啥（多半全花在工具上了）。
+    assert "subtype" in block and "trace" in block, "空 result 要记 subtype 和工具轨迹"
     # 必须只在空的时候记，否则每一轮都刷一行
-    assert "if not text:" in src[i - 600:i]
+    assert "if not text:" in src[i - 700:i]
 
 
 def test_status_checks_the_autoupdate_timer_itself():
@@ -1820,3 +1820,54 @@ def test_telegram_api_relay_is_optional_and_sanitized(monkeypatch):
     assert cc._telegram_api_base() == ""
     body = inspect.getsource(cc.main)
     assert 'base_url(_base + "/bot")' in body and 'base_file_url(_base + "/file/bot")' in body
+
+
+def test_stream_parse_extracts_tools_result_and_merges_dups():
+    """把 stream-json 解析成（正文, session, usage, subtype, 工具轨迹）。
+    她等 162 秒不知道他在干嘛——这条轨迹就是给她看的思考链。"""
+    cc = _cc()
+    import json as _j
+    lines = [
+        {"type": "system", "subtype": "init"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__ombre_brain__breath", "input": {}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__ombre_brain__read", "input": {}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__toy__list", "input": {}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__toy__play", "input": {}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "mcp__toy__play", "input": {}}]}},
+        {"type": "result", "subtype": "success", "result": "好了，来。",
+         "session_id": "sid-9", "usage": {"x": 1}},
+    ]
+    raw = "\n".join(_j.dumps(x) for x in lines)
+    text, sid, usage, subtype, trace = cc._parse_stream(raw)
+    assert text == "好了，来。" and sid == "sid-9" and usage == {"x": 1}
+    # 工具名翻成人话；游戏厅连着玩两把合并成 ×2
+    # breath+read 都翻成「翻记忆」，相邻同 label 合并成 ×2；list+play+play → 游戏厅×3
+    assert trace == ["翻记忆×2", "游戏厅×3"], trace
+    # 没见过的工具原样显示，不装懂
+    assert cc._tool_label("mcp__weird__thing") == "mcp__weird__thing"
+    assert cc._tool_label("mcp__toy__fish") == "游戏厅"
+
+
+def test_stream_parse_falls_back_to_single_object():
+    """兼容：万一某次还是旧的单 JSON（非流式），也要读得出 result。"""
+    cc = _cc()
+    import json as _j
+    raw = _j.dumps({"result": "直接回你", "session_id": "s1", "usage": {}})
+    text, sid, _u, _st, trace = cc._parse_stream(raw)
+    assert text == "直接回你" and sid == "s1" and trace == []
+
+
+def test_trace_command_and_menu_and_slow_note_are_wired():
+    import inspect
+    cc = _cc()
+    assert any(n == "trace" for n, _ in cc.BOT_COMMANDS)
+    src = inspect.getsource(cc)
+    assert 'CommandHandler("trace", trace_cmd)' in src
+    # 慢回合（>45s）自动附一句「刚才在忙什么」
+    body = inspect.getsource(cc._respond)
+    assert "_secs > 45" in body and "刚才想了" in body
