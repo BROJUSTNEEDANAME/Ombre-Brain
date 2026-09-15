@@ -1871,3 +1871,15 @@ def test_trace_command_and_menu_and_slow_note_are_wired():
     # 慢回合（>45s）自动附一句「刚才在忙什么」
     body = inspect.getsource(cc._respond)
     assert "_secs > 45" in body and "刚才想了" in body
+
+
+def test_game_world_must_not_bleed_into_real_conversation():
+    """她问「明天狼人杀几点」，他泡在钓鱼游戏里听成「查分/学校几点放成绩」，
+    还问「雾岛是狼人杀的房间？」——游戏世界串进现实，牛头不对马嘴。"""
+    text = _mod().build()
+    i = text.index("你自己的游戏厅")
+    body = text[i:i + 1600]
+    assert "游戏世界不许串进现实" in body
+    assert "蓄水池" in body and "雾岛" in body and "查分" in body   # 点名这次的错
+    assert "默认都是**现实里她本人在跟你说话**" in body
+    assert "分不清就当现实，别当游戏" in body
