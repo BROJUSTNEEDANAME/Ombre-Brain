@@ -179,7 +179,8 @@ _URL_RE = re.compile(r"^https?://[^\s<>\"']+$")
 
 def _check_url(name: str, url: str) -> tuple[str, str]:
     """一个地址到底能不能用。返回 (状态, 给人看的一行)。状态只有三种：
-    "bad"（格式就不对）/ "down"（格式对但连不上）/ "up"（连上了）/ "unknown"（没探测）。
+    "bad"（格式就不对）/ "missing"（连上了但没这个服务，404）/
+    "down"（格式对但连不上）/ "up"（连上了）/ "unknown"（没探测）。
 
     由来：她粘地址时把示例里的 <> 一起粘了进去，这脚本照样打
     「✅ 游戏厅已接上：toy → <https://…>」——它只看了「有没有值」。
@@ -196,7 +197,18 @@ def _check_url(name: str, url: str) -> tuple[str, str]:
             pass
         return "up", f"✅ {name} 连得上：{url}"
     except urllib.error.HTTPError as e:
-        # 4xx/5xx 也是「服务在」——MCP 端点对 GET 常常就是 405/406，那不是断
+        # ⚠️ 不是所有 HTTP 错误都等于「服务在」。
+        # 404/410 = 服务器上**没有这个路径**，地址是错的、失效了或被换掉了；
+        # 把它打成 ✅ 再写进 .mcp.json，他那边就会加载一个连不上的工具，
+        # 而她拿着这个 ✅ 以为接上了。真事：游戏厅返回 404，这里照打
+        # 「✅ 游戏厅 toy 服务在（HTTP 404）」。
+        # 405/406/400/401/403 才是「服务在、只是不接这种请求」——MCP 端点对
+        # 裸 GET 常常就是这样，那不是断。
+        if e.code in (404, 410):
+            return "missing", (
+                f"❌ {name} 地址通了但没有这个服务（HTTP {e.code}）：{url}\n"
+                f"   → 路径不对/已失效/token 被换过，要重新拿一份地址"
+            )
         return "up", f"✅ {name} 服务在（HTTP {e.code}）：{url}"
     except Exception as e:  # noqa: BLE001
         return "down", f"❌ {name} 连不上：{url}\n   → {type(e).__name__}: {str(e)[:120]}"
@@ -265,8 +277,9 @@ def main() -> int:
         toy = _toy_url(repo)
         if cfg is not None and toy:
             state, line = _check_url("游戏厅 toy", toy)
-            if state == "bad":
-                # 坏地址比没地址更坏：写进去 claude 会拒绝加载，还以为接上了。不写。
+            if state in ("bad", "missing"):
+                # 坏地址/失效地址比没地址更坏：写进去 claude 会拒绝加载，
+                # 而她以为接上了。格式不对和 404 都算，一律不写。
                 print("  " + line.replace("\n", "\n  "))
                 print("  → 没写进 .mcp.json。改好 .env.ccbridge 里的 TOY_MCP_URL 再跑一次")
             else:

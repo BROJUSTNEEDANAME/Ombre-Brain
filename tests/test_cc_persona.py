@@ -1931,3 +1931,37 @@ def test_a_broken_archive_says_why_and_how_to_fix_and_does_not_spam(tmp_path, mo
     assert "chown" in body, "光说坏了没用，要说怎么修"
     # 同一个原因不刷屏：两次调用只出一组告警
     assert sum("原文存档没写进去" in m for m in msgs) == 1
+
+
+def test_a_404_is_not_a_working_service(monkeypatch):
+    """真事：游戏厅地址返回 404，脚本照打「✅ 游戏厅 toy 服务在（HTTP 404）」，
+    还把它写进了 .mcp.json——他那边加载一个不存在的工具，她拿着 ✅ 以为接上了。
+    404/410＝服务器上没有这个路径；405/406 那种才是「服务在、只是不接 GET」。"""
+    import urllib.error
+    m = _mod()
+    monkeypatch.delenv("OMBRE_PERSONA_NO_PROBE", raising=False)
+
+    def raise_code(code):
+        def fake(req, timeout=0):
+            raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+        return fake
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", raise_code(404))
+    state, line = m._check_url("游戏厅 toy", "https://toy.example.com/abc")
+    assert state == "missing"
+    assert "❌" in line and "✅" not in line
+
+    monkeypatch.setattr(m.urllib.request, "urlopen", raise_code(406))
+    state, line = m._check_url("记忆库", "http://127.0.0.1:8000/mcp")
+    assert state == "up", "406 是 MCP 端点对裸 GET 的正常反应，不是断"
+    assert "✅" in line
+
+
+def test_a_dead_toy_url_is_not_written_into_the_mcp_config():
+    """一个假的东西比没有更坏：写进去 claude 会加载一个连不上的工具。
+    格式不对（bad）和 404（missing）都不许写。"""
+    import inspect
+    m = _mod()
+    body = inspect.getsource(m.main)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert 'state in ("bad", "missing")' in code
