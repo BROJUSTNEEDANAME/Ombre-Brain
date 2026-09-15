@@ -117,3 +117,46 @@ def test_only_enabled_services_are_managed():
     assert "SERVICES=(ombre-brain ombre-apibot)" not in code, "不许再写死 apibot"
     assert 'systemctl is-enabled ombre-apibot.service' in code
     assert 'systemctl is-enabled ombre-ccbridge.service' in code
+
+
+def test_the_deployer_updates_its_own_installed_copy():
+    """害得最惨的一条：systemd 跑的是 /usr/local/bin/ombre-auto-update，
+    那是 install-autoupdate.sh 一次性拷过去的副本。仓库里这个脚本改了五次
+    （包括「别用 systemctl cat」那条关键修复），一行都没生效——跑的始终是
+    安装那天的旧副本。于是 ccbridge 一直不在重启名单里，从 9/12 起跑了三天
+    旧进程，日志却每轮都印「✅ 已部署」。她那边表现成「新命令没有」。"""
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "/usr/local/bin/ombre-auto-update" in code, "得知道自己被装在哪儿"
+    assert "cmp -s" in code, "要比对仓库里的自己和装好的那份"
+    assert "install -m 755" in code
+    assert "exec " in code, "换完要用新版接着跑这一轮，不能等下一轮"
+    # 防无限自我重启
+    assert "OMBRE_SELF_UPDATED" in code
+    # 必须在重启服务之前换好，否则这一轮仍然由旧逻辑决定重启谁
+    assert code.index("/usr/local/bin/ombre-auto-update") < \
+        code.index('for s in "${SERVICES[@]}"; do\n    systemctl restart')
+
+
+def test_restarting_is_not_confused_with_actually_restarted():
+    """真事：日志连着三天「✅ 已部署，两个服务都活着」，可 ccbridge 的
+    ActiveEnterTimestamp 一直停在 9/12——它确实活着（is-active 过了），
+    活的却是三天前那个进程。✅ 不许打在「我发了 restart」上。"""
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "ActiveEnterTimestampMonotonic" in code, "得比进程有没有真的换掉"
+    assert "WAS_AT" in code and "STUCK" in code
+    # 没换进程必须是 ❌，而且不能还打那句 ✅
+    i = code.index('if [ -n "$STUCK" ]')
+    j = code.index("✅ 已部署")
+    assert i < j, "STUCK 的判断必须挡在 ✅ 前面"
+    assert "exit 1" in code[i:j]
+    assert "还在跑旧代码" in SH
+
+
+def test_the_installer_survives_a_service_she_turned_off():
+    """旧版写死 `systemctl restart ombre-apibot`。她把 apibot 关了之后，
+    set -e 会让安装在这一步直接死掉，后面什么都没装完。"""
+    ISH = (_ROOT / "deploy" / "install-autoupdate.sh").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in ISH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "systemctl restart ombre-apibot\n" not in code, "不许再写死重启它"
+    assert "LoadState" in code and "is-enabled" in code
+    assert "ombre-ccbridge" in code, "装的时候也该把 cc 桥带上"

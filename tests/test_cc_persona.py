@@ -1908,3 +1908,26 @@ def test_game_world_must_not_bleed_into_real_conversation():
     assert "蓄水池" in body and "雾岛" in body and "查分" in body   # 点名这次的错
     assert "默认都是**现实里她本人在跟你说话**" in body
     assert "分不清就当现实，别当游戏" in body
+
+
+def test_a_broken_archive_says_why_and_how_to_fix_and_does_not_spam(tmp_path, monkeypatch, caplog):
+    """真事：她的日志里「原文存档没写进去」刷了几百行，一行都没说哪儿坏了。
+    存档是还原她原话的唯一底本，坏了必须说清路径+原因+怎么修；
+    而且同一个原因只喊一次，别把真问题淹在刷屏里。"""
+    import logging
+    cc = _cc()
+    monkeypatch.setattr(cc, "ARCHIVE_DIR", str(tmp_path / "nope"))
+    def boom(*a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(cc.os, "makedirs", boom)
+    cc._ARCHIVE_WARNED.clear()
+    with caplog.at_level(logging.WARNING):
+        cc._archive("闪闪", "一句话")
+        cc._archive("闪闪", "又一句")
+    msgs = [r.getMessage() for r in caplog.records]
+    body = "\n".join(msgs)
+    assert "PermissionError" in body, "得说清是什么错"
+    assert str(tmp_path / "nope") in body, "得说清是哪个目录"
+    assert "chown" in body, "光说坏了没用，要说怎么修"
+    # 同一个原因不刷屏：两次调用只出一组告警
+    assert sum("原文存档没写进去" in m for m in msgs) == 1

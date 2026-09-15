@@ -122,6 +122,9 @@ STATE_FILE = os.path.join(CC_WORKDIR, ".cc_state.json")
 ARCHIVE_DIR = os.path.expanduser(os.environ.get("OMBRE_ARCHIVE_DIR", "~/ombre-archive"))
 
 
+_ARCHIVE_WARNED: dict = {}
+
+
 def _archive(who: str, text: str) -> None:
     """把一条话原样追加进当天的存档。失败只记日志——存档绝不能拖垮聊天。"""
     text = (text or "").strip()
@@ -133,8 +136,16 @@ def _archive(who: str, text: str) -> None:
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, local.strftime("%Y-%m-%d") + ".md"), "a", encoding="utf-8") as fh:
             fh.write(f"[{local.strftime('%H:%M')}] {who}: {text}\n")
-    except Exception:  # noqa: BLE001
-        logger.warning("原文存档没写进去")
+    except Exception as e:  # noqa: BLE001
+        # ⚠️ 只喊「没写进去」等于没说——她的日志里刷了几百行，没人知道哪儿坏了。
+        # 存档是「还原她当时原话」的唯一底本，坏了必须说清路径、原因、怎么修，
+        # 而且同一个原因只喊一次，别把真正的问题淹在刷屏里。
+        why = f"{type(e).__name__}: {e}"
+        if _ARCHIVE_WARNED.get("why") != why:
+            _ARCHIVE_WARNED["why"] = why
+            logger.warning("原文存档没写进去（%s）——%s", ARCHIVE_DIR, why)
+            if isinstance(e, PermissionError):
+                logger.warning("   → 修：sudo chown -R ombre:ombre %s", ARCHIVE_DIR)
 
 # 大脑的 REST 口。cc 平时走 MCP，但 /mood /stale 这些要读的是同一台大脑的
 # HTTP 接口（和网页、API bot 同一份状态），所以这里单独留一条 REST 通道。

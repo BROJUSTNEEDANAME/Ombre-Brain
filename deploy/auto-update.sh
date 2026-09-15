@@ -80,6 +80,30 @@ if ! g merge --ff-only "origin/$BRANCH" --quiet; then
     exit 1
 fi
 NEW=$(g rev-parse --short HEAD)
+
+# ⚠️⚠️ 部署器更新得了所有人，唯独更新不了自己——这一条害得最惨。
+# systemd 跑的是 /usr/local/bin/ombre-auto-update，那是 install-autoupdate.sh
+# **一次性拷过去**的副本。仓库里这个文件我改了五次（包括「别用 systemctl cat」
+# 那条关键修复），一行都没生效：跑的始终是安装那天的旧副本。
+# 后果：ccbridge 一直不在重启名单里，从 9 月 12 号起跑了三天旧进程，
+# 而日志每轮都印「✅ 已部署」。她那边表现成「新命令没有」「改了也没变化」。
+# 所以拉到新代码后第一件事：把自己换成新的，然后用新版接着跑这一轮。
+SELF=/usr/local/bin/ombre-auto-update
+if [ -z "${OMBRE_SELF_UPDATED:-}" ] && [ -e "$SELF" ] \
+   && ! cmp -s "$REPO/deploy/auto-update.sh" "$SELF"; then
+    log "部署器自身有更新，装上并用新版重跑这一轮"
+    install -m 755 "$REPO/deploy/auto-update.sh" "$SELF"
+    OMBRE_SELF_UPDATED=1 exec "$SELF"     # 防无限自我重启：只让新版接手一次
+fi
+# unit 文件同理，它们也是拷过去的
+UNIT_CHANGED=""
+for u in ombre-autoupdate.service ombre-autoupdate.timer; do
+    if [ -f "$REPO/deploy/$u" ] && ! cmp -s "$REPO/deploy/$u" "/etc/systemd/system/$u"; then
+        cp "$REPO/deploy/$u" "/etc/systemd/system/$u" && UNIT_CHANGED=1
+    fi
+done
+[ -n "$UNIT_CHANGED" ] && { systemctl daemon-reload; log "部署器的 unit 文件已更新"; }
+
 log "拉到新提交 $BRANCH @ $NEW，重启服务：${SERVICES[*]}"
 
 # ⚠️ cc 桥的人设是**生成**出来的（nikto-cc/CLAUDE.md 来自 personality.py）。
@@ -97,12 +121,35 @@ if printf '%s\n' "${SERVICES[@]}" | grep -qx ombre-ccbridge; then
     fi
 fi
 
-for s in "${SERVICES[@]}"; do systemctl restart "$s" || true; done
+# ⚠️ 「restart 命令发出去了」不等于「它换成新进程了」。
+# 真事：日志连着三天每轮都印「✅ 已部署，两个服务都活着」，可 ccbridge 的
+# ActiveEnterTimestamp 一直停在 9 月 12 号——它确实活着（所以 is-active 过了），
+# 活的却是三天前那个进程。她那边表现成「新加的命令没有」「改了人设没变化」。
+# 所以重启前后各记一次 ActiveEnterTimestampMonotonic（整数，不用解析日期）：
+# 没往前走 = 根本没换进程，这是 ❌，绝不许混进 ✅ 那一行。
+declare -A WAS_AT=()
+for s in "${SERVICES[@]}"; do
+    WAS_AT[$s]=$(systemctl show "$s" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)
+    [ -n "${WAS_AT[$s]}" ] || WAS_AT[$s]=0
+done
+
+for s in "${SERVICES[@]}"; do
+    systemctl restart "$s" || log "⚠️ systemctl restart $s 返回非零——这一步就没成"
+done
 sleep 8   # 给它们一点启动时间再判活
 
 FAILED=""
+STUCK=""
 for s in "${SERVICES[@]}"; do
-    systemctl is-active --quiet "$s" || FAILED="$FAILED $s"
+    if ! systemctl is-active --quiet "$s"; then
+        FAILED="$FAILED $s"
+        continue
+    fi
+    NOW_AT=$(systemctl show "$s" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)
+    [ -n "$NOW_AT" ] || NOW_AT=0
+    if [ "${WAS_AT[$s]}" != 0 ] && [ "$NOW_AT" = "${WAS_AT[$s]}" ]; then
+        STUCK="$STUCK $s"
+    fi
 done
 
 if [ -n "$FAILED" ]; then
@@ -113,4 +160,12 @@ if [ -n "$FAILED" ]; then
     exit 1
 fi
 rm -f "$BLOCK"
-log "✅ 已部署 $BRANCH @ $NEW，${#SERVICES[@]} 个服务都活着：${SERVICES[*]}"
+
+# 有服务没真的换进程 → 代码是新的，跑的还是旧的。这不该回滚（旧进程还好好地
+# 陪着她），但必须喊出来，而且不许再打那句 ✅。
+if [ -n "$STUCK" ]; then
+    log "❌ 代码已更新到 $NEW，但这些服务没换进程、还在跑旧代码：$STUCK"
+    log "   → 查原因：systemctl status$STUCK；必要时 systemctl stop$STUCK 再 start"
+    exit 1
+fi
+log "✅ 已部署 $BRANCH @ $NEW，${#SERVICES[@]} 个服务都在跑新代码：${SERVICES[*]}"
