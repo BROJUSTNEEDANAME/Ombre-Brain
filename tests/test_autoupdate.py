@@ -160,3 +160,14 @@ def test_the_installer_survives_a_service_she_turned_off():
     assert "systemctl restart ombre-apibot\n" not in code, "不许再写死重启它"
     assert "LoadState" in code and "is-enabled" in code
     assert "ombre-ccbridge" in code, "装的时候也该把 cc 桥带上"
+
+
+def test_the_installer_regenerates_the_persona_before_restarting():
+    """真事：刚破完部署器自更新的僵局，服务是新的、人设还是旧的——
+    install 这条路原来只重启不重生成。「重启了」不等于「换了人设」。"""
+    ISH = (_ROOT / "deploy" / "install-autoupdate.sh").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in ISH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "make-cc-persona.py" in code
+    assert ".env.ccbridge" in code, "目录得从配置读，写死了错了也没人发现"
+    assert code.index("make-cc-persona.py") < code.index("systemctl restart"), \
+        "必须在重启之前生成，否则这一轮起来的还是旧人设"

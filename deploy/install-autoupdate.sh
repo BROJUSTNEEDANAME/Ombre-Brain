@@ -12,6 +12,22 @@ cp "$REPO/deploy/ombre-autoupdate.service" "$REPO/deploy/ombre-autoupdate.timer"
 systemctl daemon-reload
 systemctl enable --now ombre-autoupdate.timer
 
+# ⚠️ cc 的人设是**生成**出来的（nikto-cc/CLAUDE.md ← personality.py）。
+# auto-update.sh 拉到新提交时会重生成，但手动重装这条路原来漏了这一步——
+# 于是「服务重启了、人设还是旧的」，最难查的那种静默失败。真事：刚破完
+# 部署器自更新的僵局，人设仍然是旧的，差点又白高兴一场。
+CC_WORKDIR=$(grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" 2>/dev/null | tail -1 \
+             | cut -d= -f2- | tr -d '[:space:]')
+CC_WORKDIR=${CC_WORKDIR:-/home/ombre/nikto-cc}
+if [ -x "$REPO/.venv/bin/python" ] && [ -f "$REPO/scripts/make-cc-persona.py" ]; then
+    if runuser -u ombre -- "$REPO/.venv/bin/python" \
+            "$REPO/scripts/make-cc-persona.py" "$CC_WORKDIR" >/dev/null 2>&1; then
+        echo "· cc 人设已重新生成（$CC_WORKDIR）"
+    else
+        echo "⚠️ cc 人设重新生成失败，那边可能还在用旧人设"
+    fi
+fi
+
 # ⚠️ 只重启「装了而且启用了的」服务。写死过 ombre-apibot，她把它关掉之后
 # 这里就报错退出（set -e），整个安装半途而废。
 for s in ombre-brain ombre-apibot ombre-ccbridge; do
