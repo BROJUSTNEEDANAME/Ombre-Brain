@@ -1525,6 +1525,31 @@ def test_pinned_facts_are_injected_by_the_system_not_left_to_him():
     assert "钉选记忆·系统替你读好了" in body
 
 
+def test_pinned_injection_does_not_tell_him_to_stop_searching():
+    """真事：她问「异心是谁」，脑子里明明有三桶逐字命中，他一次 breath 都没做，
+    直接「没印象」。原因是注入前缀写着「不用再去查」——他把这句读成
+    「记忆已经全在眼前了」。钉选只是几十条准则，不是 985 桶。
+    前缀必须明说：这只是钉选；她提到的人/事不在里面就去 breath(query=…)。"""
+    import inspect
+    cc = _cc()
+    body = inspect.getsource(cc.run_cc)
+    # 只看代码行，注释里提到的旧措辞不算
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "不用再去查" not in code
+    assert "不是你的全部记忆" in code
+    assert 'breath(query=' in code
+    assert "不许说「不记得」" in code
+
+
+def test_persona_makes_him_search_before_saying_he_forgot():
+    text = _mod().build()
+    i = text.rindex("先 `breath(query=")
+    chunk = text[i - 200 : i + 400]
+    assert "人名" in chunk
+    assert "没搜过就说「不记得」" in chunk
+    assert "不是你的全部记忆" in text
+
+
 def test_toy_arcade_is_wired_only_when_configured(tmp_path, monkeypatch):
     """4399 游戏厅：配了 TOY_MCP_URL 才写进 .mcp.json；没配就一个字不写——
     空 url 可能让 claude 连记忆库那条一起拒绝加载，她的日常聊天不能拿来赌。"""
