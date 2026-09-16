@@ -911,9 +911,25 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
         await _reply_with_retry(update.message, restore_punctuation(chunk))
 
 
+# ⚠️ 不是再写一条人设规矩——人设里已经有三条管「别编」，他照样编。
+# 这是把**事实**摆到眼前，跟钉选记忆走同一条路：桥只收文字和图片，
+# 图片走另一条路且会明说。所以一条纯文字消息里，「我看了」「收到了」
+# 「行，看完了」这类话在物理上不可能是真的。
+# 真事：她说「猜你需要」，他自己猜「你要给我发教程？」，隔一条就说
+# 「行，看了。」——她什么都没发过。她：「我都没给你发你怎么看的」「你搞笑呢」。
+PLAIN_TEXT_FACT = (
+    "[事实：她这条是纯文字，没有任何附件。她要是发了图，桥会另外明说。"
+    "所以「我看了」「收到了」这种话现在一定是假的。"
+    "还有：她说在做的事就是**还在做**，没说完成就是没完成。]\n"
+)
+
+
 async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                   cid: int, message: str) -> None:
-    """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。"""
+                   cid: int, message: str, is_plain_text: bool = False) -> None:
+    """跑一次 cc 并把回复（可能很长）分段发回。文字和图片消息共用。
+
+    is_plain_text：这一轮是她发的纯文字（不是图片、不是桥自己拼的提示）。
+    只有这种时候才敢说「没有附件」——图片那条路自己会明说收到了图。"""
     async def _keep_typing() -> None:
         """一直显示「正在输入」，直到回复发出。
 
@@ -938,6 +954,8 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     _typing = asyncio.create_task(_keep_typing())
     _t0 = time.time()
     try:
+        if is_plain_text:
+            message = PLAIN_TEXT_FACT + message
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:
         _typing.cancel()
@@ -1158,7 +1176,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # 合并逻辑永远触发不到。我第一版就是 await 的，她说「还是这样」。
     # API bot 一直是「建任务就返回」，照抄它。
     st: dict = {"sent": False, "text": text}
-    task = asyncio.create_task(_respond(update, context, cid, text))
+    task = asyncio.create_task(_respond(update, context, cid, text, is_plain_text=True))
     st["task"] = task
     _inflight_cc[cid] = st
 

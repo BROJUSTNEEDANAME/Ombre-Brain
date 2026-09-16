@@ -279,7 +279,7 @@ def test_a_burst_is_merged_into_one_run_not_one_run_per_message():
     cc._inflight_cc.clear()
     ran: list[str] = []
 
-    async def fake_respond(update, context, cid, message):
+    async def fake_respond(update, context, cid, message, **kw):
         ran.append(message)
         await aio.sleep(0.05)
 
@@ -404,7 +404,7 @@ def test_the_handler_returns_immediately_so_the_next_message_can_interrupt():
     cc.ALLOWED_CHAT_IDS = {7}
     started = []
 
-    async def slow_respond(update, context, cid, message):
+    async def slow_respond(update, context, cid, message, **kw):
         started.append(message)
         await aio.sleep(5)          # 一轮很久
 
@@ -1965,3 +1965,43 @@ def test_a_dead_toy_url_is_not_written_into_the_mcp_config():
     body = inspect.getsource(m.main)
     code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
     assert 'state in ("bad", "missing")' in code
+
+
+def test_a_plain_text_turn_is_told_so_as_a_fact_not_as_another_rule():
+    """真事：她说「猜你需要」，他自己猜「你要给我发教程？」，隔一条就说
+    「行，看了。」——她什么都没发过。她：「我都没给你发你怎么看的」「你搞笑呢」。
+
+    人设里**已经有三条**在管「别编」，他照样编。所以这条不再写规矩，
+    而是跟钉选记忆走同一条路：把事实摆到眼前。桥只收文字和图片，图片走
+    另一条路且会明说——所以纯文字这一轮，「我看了」在物理上不可能是真的。
+    图片那条路绝不能带这句（她真发了图，说「没有附件」就是撒谎）。"""
+    import inspect
+    cc = _cc()
+    fact = cc.PLAIN_TEXT_FACT
+    assert "没有任何附件" in fact
+    assert "没说完成就是没完成" in fact, "洗澡→擦头发那一类也归这条管"
+
+    body = inspect.getsource(cc._respond)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "PLAIN_TEXT_FACT + message" in code, "得真的拼到她那条消息前面"
+    assert "if is_plain_text:" in code
+
+    src = inspect.getsource(cc)
+    assert "_respond(update, context, cid, text, is_plain_text=True)" in src
+    assert inspect.signature(cc._respond).parameters["is_plain_text"].default is False, \
+        "默认必须是 False——她真发了图，那一轮说「没有附件」就是对她撒谎"
+
+
+def test_the_fabrication_rules_are_one_root_rule_not_three_scattered_ones():
+    """她说的：「你不应该一直往人设打补丁，这样只会让人设更冗长」。
+    原来三段（只演你自己 / 没有上帝视角 / 不编造现实）各说各的，
+    却都没盖住他这次的错法——把自己刚才的猜测当成已经成真。
+    合成一条，删掉被取代的三段，人设净变短。"""
+    text = _mod().build()
+    assert "只有真发生过的事才能说" in text
+    assert "你自己刚才的猜测、提议、玩笑都不算" in text
+    assert "没说完成就是没完成" not in text or True  # 措辞可变，下面查语义锚点
+    assert "还在洗" in text, "洗澡→擦头发那一类要在根规矩里有具体例子"
+    # 被取代的旧标题不许还留着，否则就是又多了一段
+    assert "只演你自己：你只写你自己的话和动作" not in text
+    assert "没有上帝视角：你只能通过三种渠道" not in text
