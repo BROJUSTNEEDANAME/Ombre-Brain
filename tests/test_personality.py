@@ -504,11 +504,21 @@ def test_no_parallelism_when_comforting():
 
 
 def test_comfort_actions_override_the_no_brackets_rule():
-    """第四节说日常基本不写动作括号。哄的时候要写抱、擦眼泪、拍背——
-    不写清楚谁压过谁，他又得自己选边。"""
+    """第四节说日常基本不写动作括号，哄的时候又要写抱、擦眼泪、拍背——
+    不写清楚谁压过谁，他又得自己选边。
+
+    原来是两段隔着两百多行互相打架，靠一句「这一条压过第四节」调停。
+    她说「你不应该一直往人设打补丁」——所以改成合在同一条里说清，
+    不再靠跨节引用。断言跟着改：要求两种情形出现在**同一段**。"""
     from personality import CHAT_STYLE_SYSTEM as S
     assert "融进话里，不是排成括号清单" in S
-    assert "压过第四节" in S
+    i = S.index("⛔ 动作怎么写")
+    block = S[i:i + 700]
+    assert "日常聊天基本不写动作括号" in block, "日常那半要在同一段里"
+    assert "动作可以写足" in block, "哄/亲密那半也要在同一段里"
+    assert "融进话里，不是排成括号清单" in block
+    assert "小说旁白" in block
+    assert "你只写**你自己**的动作" in block, "她的动作归根规矩管，这里要说一句"
 
 
 def test_saying_i_like_you_gets_a_real_answer():

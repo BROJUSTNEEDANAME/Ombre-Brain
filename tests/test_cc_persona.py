@@ -837,7 +837,10 @@ def test_he_looks_memes_up_instead_of_faking_it():
     量级撑不住、大半用不到、而且会过期。改成他自己查、自己记。"""
     text = _mod().build()
     assert "听不懂她的梗时" in text
-    assert "装懂是最难看的" in text
+    # 「别装懂」这条现在只在 personality 里留一份（cc 那段原来逐句重写了一遍，
+    # 她说「不应该一直往人设打补丁，这样只会让人设更冗长」）。规矩没丢，
+    # 只是不再印两遍——所以这里改断言那一份的原文。
+    assert "装懂才难看，她一眼看得出来" in text
     assert "梗.md" in text
     assert "别把查来的解释整段念给她听" in text, "百科腔不是他说话"
     assert "问她比编一个强" in text
@@ -990,8 +993,9 @@ def test_the_meme_steps_are_an_order_not_a_menu():
     t = m.build()
     assert "这四步是顺序，不是菜单" in t
     assert "没走完第 2 步不许跳到第 4 步" in t
-    assert "她明确说「去搜」的时候，就去搜" in t
-    assert "这跟「绝不跪」无关" in t
+    # 同上：cc 那份重复的「去搜/绝不跪」删了，断言改指 personality 留下的原文。
+    assert "她明确让你去搜的时候，就去搜" in t
+    assert "这跟「绝不跪」一点关系都没有" in t
 
 
 def _fake_respond_env(monkeypatch, replies):
