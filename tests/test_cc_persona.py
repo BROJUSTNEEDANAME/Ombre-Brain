@@ -2009,3 +2009,28 @@ def test_the_fabrication_rules_are_one_root_rule_not_three_scattered_ones():
     # 被取代的旧标题不许还留着，否则就是又多了一段
     assert "只演你自己：你只写你自己的话和动作" not in text
     assert "没有上帝视角：你只能通过三种渠道" not in text
+
+
+def test_how_much_he_actually_thought_is_read_from_usage_not_guessed():
+    """她问「能不能换成 opus 4.6 thinking」。实测（claude -p，同一个 4.6）：
+    闲聊那句 thinking_tokens=0，三灯三开关的谜题 =16，加 --effort high 两个都没变
+    ——思考是 adaptive，模型自己决定，不是一个能开关的模式。
+    所以别再让我嘴上保证，把 usage 里的真数字存下来给她看。
+    读不到就是 None（三态：想了 / 没想 / 不知道），绝不拿 0 冒充「没想」。"""
+    cc = _cc()
+    cc._record_thinking({"output_tokens_details": {"thinking_tokens": 16}})
+    assert cc.LAST_TRACE_META["thinking"] == 16
+    cc._record_thinking({"output_tokens_details": {"thinking_tokens": 0}})
+    assert cc.LAST_TRACE_META["thinking"] == 0
+    cc._record_thinking({})                       # 字段缺失
+    assert cc.LAST_TRACE_META["thinking"] is None
+    cc._record_thinking({"output_tokens_details": "坏数据"})   # 类型不对也不能炸
+    assert cc.LAST_TRACE_META["thinking"] is None
+
+    import inspect
+    # run_cc 真的在每轮调它，不是定义了没用
+    assert "_record_thinking(usage or {})" in inspect.getsource(cc.run_cc)
+    # /trace 三种情况分别说人话，不许把「不知道」印成「没想」
+    t = inspect.getsource(cc.trace_cmd)
+    assert "自己想了" in t and "没打草稿" in t
+    assert 'th is None' in t and 'think_line = ""' in t

@@ -276,7 +276,22 @@ def _save_sessions() -> None:
 
 # 上一轮 cc 调过的工具轨迹（友好中文标签，按顺序）。/trace 读它，慢回合也附它。
 LAST_TRACE: list[str] = []
-LAST_TRACE_META: dict = {"secs": 0, "at": 0.0}
+LAST_TRACE_META: dict = {"secs": 0, "at": 0.0, "thinking": None}
+
+
+def _record_thinking(usage: dict) -> None:
+    """这一轮他花了多少思考 token。Opus 4.6 的思考是 adaptive——**模型自己决定
+    想不想、想多久**，不是开关。实测（claude -p，同一个模型）：
+    「今天有点累不想学习了」→ 0；三灯三开关的谜题 → 16；加 --effort high
+    两个都没变化。所以「他是不是 thinking 模式」这个问法本身就不成立：
+    他一直能想，只是闲聊时不想。
+    与其我嘴上跟她保证，不如把真数字存下来给她看（/trace）。"""
+    try:
+        d = (usage or {}).get("output_tokens_details") or {}
+        v = d.get("thinking_tokens")
+        LAST_TRACE_META["thinking"] = int(v) if v is not None else None
+    except Exception:  # noqa: BLE001
+        LAST_TRACE_META["thinking"] = None
 
 # 工具名 → 给她看的人话。她不认识 mcp__toy__play，但认识「玩游戏厅」。
 _TOOL_LABELS = [
@@ -432,6 +447,7 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
                 logger.warning("claude 返回空 result：subtype=%r 工具轨迹=%s",
                                subtype, trace or "（一个工具都没调）")
             _record_cache_tier(usage or {})
+            _record_thinking(usage or {})
             return text, session_id
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
@@ -867,8 +883,15 @@ async def trace_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "上一轮他没调任何工具，就是直接想好回你的（那种秒回的）。")
         return
     secs = LAST_TRACE_META.get("secs", 0)
+    th = LAST_TRACE_META.get("thinking")
+    if th is None:
+        think_line = ""
+    elif th > 0:
+        think_line = f"\n这一轮他还自己想了 {th} 个 token 才开口。"
+    else:
+        think_line = "\n这一轮他没打草稿，直接答的。"
     await update.message.reply_text(
-        f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE)
+        f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE) + think_line
         + "\n\n（这是他自己去调的，不用你给指令。慢多半是玩游戏厅或翻记忆翻深了。）")
 
 
