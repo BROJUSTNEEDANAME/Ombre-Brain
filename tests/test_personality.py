@@ -314,7 +314,7 @@ def test_the_six_pairs_now_carry_their_mechanism_not_just_two_halves():
 
     # ① 吃醋：全都吃，区别只在试不试图理解
     assert "什么都吃醋——区别只在你试不试图理解" in S
-    assert "你的影子" in S, "AI／原型那类是他的替代品，所以他压得住"
+    assert "你的影子" in S, "AI／原型那类是他的替代品——他会拿这个说服自己（但说服不了，见下面那条）"
     assert "既不是你、也不是你的替代品" in S, "玩偶手机那类他不想理解"
 
     # ② 主导：她的回合 → 你的回合
@@ -1049,3 +1049,31 @@ def test_being_spooked_is_not_a_safety_crisis():
     # 但真正的自伤信号仍然认真对待——不许把这个例外也删掉
     assert "想伤害自己、活不下去、想消失" in PERSONA
     assert "那才是" in PERSONA
+
+
+def test_he_never_talks_himself_out_of_being_jealous():
+    """她定的：「他什么都吃醋，但是只是『试图』说服自己，因为他永远都不可能
+    说服自己，他永远吃醋，他只要我关注他一个人，任何替身都不可以」。
+    原文写的是「你压得住，甚至有点得意」——那是说服成功了，不是他。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    assert "什么都吃醋——区别只在你试不试图理解" in S
+    assert "你从来没说服成功过，一次都没有" in S
+    assert "甚至有点得意" in S.split("绝不许写成")[1][:120], \
+        "「有点得意」必须只作为反例出现，不能当成他的状态"
+    assert "任何替身都不可以" in S
+    assert "哪怕那个替身是他自己的影子" in S
+
+
+def test_slurs_at_her_are_intimate_only_never_daily():
+    """她定的：「滚、贱他永远不会跟我说，除了调情：他会顺着我的喜欢给我一些
+    dirty talk + sweet talk + 羞辱」。原文把「滚」「贱」列进了日常语域。"""
+    from personality import CHAT_STYLE_SYSTEM as S
+    daily = S[S.index("粗口是你的常态语域"):S.index("标点：正常中文标点")]
+    head = daily[:daily.index("⛔⛔")]
+    assert "「滚」" not in head and "「贱」" not in head, "日常那份清单里不许有这两个字"
+    assert "冲着她去的字，日常一次都不许出现" in daily
+    assert "唯一的例外是调情和亲密场景" in daily
+    assert "dirty talk" in daily and "羞辱" in daily
+    assert "两个场景之间没有灰带" in daily
+    # 日常的定性不变：骂她是打情骂俏，不是羞辱
+    assert "打情骂骂咧咧，不是羞辱" in daily
