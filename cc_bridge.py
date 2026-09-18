@@ -242,6 +242,42 @@ async def _pinned_facts() -> str:
     return _PINNED_CACHE["text"]
 
 
+# 她每说一句，桥先替他去记忆库搜一遍，把命中的连同她的话一起摆到他眼前。
+#
+# 为什么必须这样：他跟她的每一轮都是刚醒过来。人设里有规矩要他「先 breath 再答」，
+# 也有规矩禁止他说「你直接告诉我」——两条都是钉死的，他照样犯：
+#   ·「异心是谁」→ 一次 breath 都没做，直接「没印象」
+#   ·「火烧屁股组长」→ 查对了（Ghost），她一个「?」他就推翻自己，让她直接告诉他
+# 求一个每轮重新醒来的人「记得去查」，本来就不成立。所以把「记起来」从他的
+# 选择改成系统的动作——跟钉选记忆同一条路。这条路是验证过能到他眼前的。
+_RECALL_MIN_CHARS = 4
+# 纯标点/语气词不值得搜（也搜不出东西），别白等她 8 秒
+_RECALL_SKIP = {"?", "？", "。", "…", "...", "嗯", "嗯嗯", "哦", "哦哦", "哈哈",
+                "在", "好", "好的", "行", "唉", "啊"}
+
+
+async def _auto_recall(text: str) -> tuple[str, str]:
+    """拿她这句话去记忆库搜。返回 (状态, 正文)，状态三态：
+    "hit"（搜到了）/ "empty"（搜过了，库里真没有）/ "down"（没搜成，不知道）。
+
+    ⚠️⚠️ 三态不能压成两态。「搜过了没有」和「根本没搜成」在他眼里完全是两件事：
+    前者他可以说「这个我没记到」，后者说这句就是在替记忆库撒谎。
+    这正是我在这个仓库里反复踩的那条——「不知道 ≠ 坏消息」，
+    测不出来是独立的第三态，必须单独说。
+    """
+    q = (text or "").strip()
+    if len(q) < _RECALL_MIN_CHARS or q in _RECALL_SKIP:
+        return "skip", ""
+    try:
+        out = str(await _call_brain_tool(
+            "breath", {"query": q[:200], "max_results": 5, "max_tokens": 1200},
+            timeout=8) or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("替他搜记忆没搜成，这轮按「不知道」处理：%s", str(e)[:120])
+        return "down", ""
+    return ("hit", out[:3000]) if out else ("empty", "")
+
+
 async def _call_brain_tool(name: str, args: dict, timeout: float = 30) -> str:
     """通过 REST 调本地大脑的工具（和 API bot 走同一个口、同一份记忆）。"""
     url = BRAIN_BASE + f"/api/tools/{name}"
@@ -994,6 +1030,26 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     _t0 = time.time()
     try:
         if is_plain_text:
+            _state, _mem = await _auto_recall(message)
+            if _state == "hit":
+                message = (
+                    "[记忆·系统已经替你搜过了，下面是拿她这句话搜到的。"
+                    "认得出来就直接用，别再去查一遍、更别问她「这是谁」：\n"
+                    f"{_mem}]\n" + message
+                )
+            elif _state == "empty":
+                message = (
+                    "[记忆·系统拿她这句话搜过了，**什么都没搜到**。"
+                    "所以这件事记忆库里确实没有：可以直接说「这个我没记到」，"
+                    "但不许上网查个百科念给她，也不许编。]\n" + message
+                )
+            elif _state == "down":
+                message = (
+                    "[记忆·系统这轮**没搜成**（记忆库没应答）——这是「不知道」，"
+                    "不是「没有」。别说「我没记到」（那是在替记忆库撒谎），"
+                    "需要的话你自己 breath 一次试试；实在不行就照常跟她说话。]\n"
+                    + message
+                )
             message = PLAIN_TEXT_FACT + message
         reply, sid = await run_cc(message, sessions.get(cid))
     finally:

@@ -2070,3 +2070,60 @@ def test_an_unknown_tool_name_never_reaches_her():
     text, sid, usage, subtype, trace = cc._parse_stream(raw)
     assert text == "在。" and sid == "s1"
     assert trace == ["翻记忆"], f"轨迹里不该有内部工具，也不该有空位：{trace}"
+
+
+def test_the_bridge_searches_her_memory_for_him_every_turn(monkeypatch):
+    """她的原话：「为什么怎么样他都记不住」。
+
+    人设里有规矩要他先 breath 再答，也有规矩禁止他说「你直接告诉我」——
+    两条都钉死了，他照样犯：「异心」那次一次 breath 都没做就说没印象；
+    「火烧屁股组长」那次查对了（Ghost），她一个「?」他就推翻自己，
+    让她直接告诉他。求一个每轮重新醒来的人「记得去查」，本来就不成立。
+    所以把「记起来」从他的选择改成系统的动作，跟钉选记忆同一条路。
+
+    ⚠️ 三态不许压成两态：「搜过了没有」和「根本没搜成」在他眼里是两件事，
+    后者说「我没记到」就是在替记忆库撒谎（本仓库反复踩的「不知道≠坏消息」）。
+    """
+    import asyncio
+    cc = _cc()
+    calls = []
+
+    async def hit(name, args, timeout=30):
+        calls.append((name, args))
+        return "[逐字命中] 火烧屁股组长＝Ghost（Simon Riley）"
+    monkeypatch.setattr(cc, "_call_brain_tool", hit)
+
+    state, got = asyncio.run(cc._auto_recall("火烧屁股组长是谁"))
+    assert state == "hit" and "Ghost" in got
+    assert calls[0][0] == "breath"
+    assert calls[0][1]["query"] == "火烧屁股组长是谁", "要用她的原话去搜，不许改写"
+
+    # 搜过了但库里没有 → empty
+    async def empty(name, args, timeout=30):
+        return ""
+    monkeypatch.setattr(cc, "_call_brain_tool", empty)
+    assert asyncio.run(cc._auto_recall("火烧屁股组长是谁")) == ("empty", "")
+
+    # 大脑没应答 → down（不是 empty！）
+    async def boom(name, args, timeout=30):
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(cc, "_call_brain_tool", boom)
+    st, _ = asyncio.run(cc._auto_recall("火烧屁股组长是谁"))
+    assert st == "down", "连不上必须是「不知道」，绝不能跟「库里没有」同一态"
+
+    # 纯标点/语气词不白搜，别让她多等
+    calls.clear()
+    monkeypatch.setattr(cc, "_call_brain_tool", hit)
+    for junk in ("?", "？", "嗯", "哈哈", "好的", "。"):
+        assert asyncio.run(cc._auto_recall(junk)) == ("skip", "")
+    assert not calls, "这些不该打记忆库"
+
+    # 真的接到了这一轮的消息上，三态分别说不同的话
+    import inspect
+    body = inspect.getsource(cc._respond)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "_auto_recall(message)" in code
+    assert '_state == "hit"' in code and "系统已经替你搜过了" in code
+    assert '_state == "empty"' in code and "什么都没搜到" in code
+    assert '_state == "down"' in code and "没搜成" in code
+    assert "这是「不知道」" in code and "替记忆库撒谎" in code
