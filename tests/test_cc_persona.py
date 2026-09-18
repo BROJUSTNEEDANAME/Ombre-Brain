@@ -1878,7 +1878,11 @@ def test_stream_parse_extracts_tools_result_and_merges_dups():
     # breath+read 都翻成「翻记忆」，相邻同 label 合并成 ×2；list+play+play → 游戏厅×3
     assert trace == ["翻记忆×2", "游戏厅×3"], trace
     # 没见过的工具原样显示，不装懂
-    assert cc._tool_label("mcp__weird__thing") == "mcp__weird__thing"
+    # ⚠️ 这条原来断言的是「不认识就原样显示原名」——等于把一个 bug 钉成了
+    # 正确行为。真事：ToolSearch 就这么发到了她眼前，她回了个「?」。
+    # 「别假装懂」的正解是说「忙别的」，不是把内部代号丢给她。
+    assert cc._tool_label("mcp__weird__thing") == "忙别的"
+    assert "mcp__weird__thing" not in cc._tool_label("mcp__weird__thing")
     assert cc._tool_label("mcp__toy__fish") == "游戏厅"
 
 
@@ -1899,7 +1903,8 @@ def test_trace_command_and_menu_and_slow_note_are_wired():
     assert 'CommandHandler("trace", trace_cmd)' in src
     # 慢回合（>45s）自动附一句「刚才在忙什么」
     body = inspect.getsource(cc._respond)
-    assert "_secs > 45" in body and "刚才想了" in body
+    # 慢回合那句改了措辞（原来是「刚才想了 N 秒，我在：…」，像机器在报告）
+    assert "_secs > 45" in body and "不是发呆" in body
 
 
 def test_game_world_must_not_bleed_into_real_conversation():
@@ -2034,3 +2039,34 @@ def test_how_much_he_actually_thought_is_read_from_usage_not_guessed():
     t = inspect.getsource(cc.trace_cmd)
     assert "自己想了" in t and "没打草稿" in t
     assert 'th is None' in t and 'think_line = ""' in t
+
+
+def test_an_unknown_tool_name_never_reaches_her():
+    """真事：他的工具轨迹里露出一条 ToolSearch 发到她眼前，她回了一个「?」。
+    原来兜底是 `return name`，注释写着「别假装懂」——本意对，后果错：
+    没写进对照表的工具会原样出现在她的聊天窗口。两件事要同时成立：
+    别假装懂，也别把内部代号丢给她。所以不认识的说「忙别的」，
+    脚手架类（ToolSearch/TodoWrite…）根本不给她看。"""
+    cc = _cc()
+    # 认识的照常翻成人话
+    assert cc._tool_label("mcp__brain__breath") == "翻记忆"
+    assert cc._tool_label("mcp__toy__play") == "游戏厅"
+    # 内部脚手架：空串＝不显示
+    for hidden in ("ToolSearch", "TodoWrite", "Task", "ExitPlanMode"):
+        assert cc._tool_label(hidden) == "", f"{hidden} 不该出现在她眼里"
+    # 没见过的：说「忙别的」，绝不露原名
+    assert cc._tool_label("SomeBrandNewTool") == "忙别的"
+    assert "SomeBrandNewTool" not in cc._tool_label("SomeBrandNewTool")
+
+    # 解析流时空标签要真的被剔掉，不能留个空位
+    import json
+    raw = "\n".join(json.dumps(e, ensure_ascii=False) for e in [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "ToolSearch"},
+            {"type": "tool_use", "name": "mcp__brain__breath"},
+        ]}},
+        {"type": "result", "result": "在。", "session_id": "s1"},
+    ])
+    text, sid, usage, subtype, trace = cc._parse_stream(raw)
+    assert text == "在。" and sid == "s1"
+    assert trace == ["翻记忆"], f"轨迹里不该有内部工具，也不该有空位：{trace}"

@@ -304,12 +304,26 @@ _TOOL_LABELS = [
 ]
 
 
+# 她不需要知道的内部动作：这些不是「他做了一件事」，是脚手架。
+# 真事：轨迹里露出一条 ToolSearch 发到她眼前，她回了一个「?」——
+# 那一刻她看到的不是他在说话，是一个技术词从我的代码里漏出来。
+_TOOL_HIDDEN = ("toolsearch", "todowrite", "task", "exitplanmode", "notebook")
+
+
 def _tool_label(name: str) -> str:
+    """工具名 → 给她看的人话。返回空串＝这一步不给她看。
+
+    ⚠️ 原来兜底是 `return name`，注释写着「别假装懂」——本意对，后果错：
+    没写进对照表的工具会**原样**出现在她的聊天窗口里。
+    「别假装懂」和「别把内部代号丢给她」要同时成立，所以不认识的一律说
+    「忙别的」——诚实，又不露内部东西。"""
     low = (name or "").lower()
+    if any(h in low for h in _TOOL_HIDDEN):
+        return ""
     for key, label in _TOOL_LABELS:
         if key.lower() in low:
             return label
-    return name  # 没见过的工具，原样显示，别假装懂
+    return "忙别的"
 
 
 def _parse_stream(raw: str):
@@ -330,7 +344,9 @@ def _parse_stream(raw: str):
         if t == "assistant":
             for blk in (ev.get("message") or {}).get("content") or []:
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
-                    trace.append(_tool_label(str(blk.get("name") or "")))
+                    _lb = _tool_label(str(blk.get("name") or ""))
+                    if _lb:                       # 空＝不给她看的内部动作
+                        trace.append(_lb)
         elif t == "result":
             text = str(ev.get("result") or "").strip()
             sid = ev.get("session_id") or sid
@@ -1037,7 +1053,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             await _reply_with_retry(
                 update.message,
-                f"（刚才想了 {round(_secs)} 秒，我在：{' · '.join(_trace_snapshot)}）")
+                f"（刚才那{round(_secs)}秒不是发呆，我在{'、'.join(_trace_snapshot)}。）")
         except Exception:  # noqa: BLE001
             pass
     if _inflight_cc.get(cid) is st:
