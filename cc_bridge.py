@@ -169,6 +169,7 @@ writing_mode: dict[int, bool] = {}
 voice_mode: dict[int, bool] = {}
 todos: dict[int, str] = {}
 model_override: dict[str, str] = {}
+effort_override: dict[str, str] = {}
 # 额度账本：只记 token 数和花费，不存任何正文。
 USAGE: dict = {"since": time.time(), "turns": 0, "input": 0, "output": 0,
                "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "limit_hits": []}
@@ -187,6 +188,8 @@ def _load_state() -> None:
         todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
         if d.get("model"):
             model_override["model"] = str(d["model"])
+        if d.get("effort"):
+            effort_override["effort"] = str(d["effort"])
         u = d.get("usage") or {}
         for k in ("turns", "input", "output", "cache_read", "cache_write"):
             USAGE[k] = int(u.get(k, 0) or 0)
@@ -204,6 +207,7 @@ def _save_state() -> None:
         "voice_mode": {str(k): v for k, v in voice_mode.items()},
         "todos": {str(k): v for k, v in todos.items()},
         "model": model_override.get("model", ""),
+        "effort": effort_override.get("effort", ""),
         "usage": USAGE,
     }
     try:
@@ -218,6 +222,21 @@ def _save_state() -> None:
 def cc_model() -> str:
     """这一轮该用哪个模型：她 /model 选过就用她选的，否则用环境变量那个。"""
     return model_override.get("model") or CC_MODEL_DEFAULT
+
+
+# Opus 4.6 的思考是 adaptive——模型自己决定想不想、想多久，没有「thinking 版」
+# 可切。唯一真正管用的旋钮是 effort。本机实测（claude -p，同一道推理题）：
+#   默认 思考 144 token / 14.7s
+#   low  思考   0 token /  9.6s   ← 直接关掉思考
+#   max  思考 176 token / 12.8s   ← 更用力，而且这次并没有更慢
+#   MAX_THINKING_TOKENS=8000 反而只有 31，不是有效的加码方式（别用它）
+CC_EFFORT_CHOICES = ("默认", "low", "medium", "high", "xhigh", "max")
+
+
+def cc_effort() -> str:
+    """这一轮的 effort 档位。空＝不传 --effort，用 CLI 自己的默认。"""
+    v = (effort_override.get("effort") or os.environ.get("CC_EFFORT", "")).strip()
+    return v if v in CC_EFFORT_CHOICES[1:] else ""
 
 
 # 钉选记忆是确定性的（不衰减、不合并、关键词必达）——但前提是他得去调 breath。
@@ -317,10 +336,13 @@ LAST_TRACE_META: dict = {"secs": 0, "at": 0.0, "thinking": None}
 
 def _record_thinking(usage: dict) -> None:
     """这一轮他花了多少思考 token。Opus 4.6 的思考是 adaptive——**模型自己决定
-    想不想、想多久**，不是开关。实测（claude -p，同一个模型）：
-    「今天有点累不想学习了」→ 0；三灯三开关的谜题 → 16；加 --effort high
-    两个都没变化。所以「他是不是 thinking 模式」这个问法本身就不成立：
-    他一直能想，只是闲聊时不想。
+    想不想、想多久**，没有「thinking 版」可切；他一直能想，只是闲聊时不想。
+
+    ⚠️ 我第一版在这儿写过「--effort high 没有任何差别」——那是拿两个太简单的
+    prompt 测的，结论是错的。换一道真需要推理的题重测（claude -p，同一模型）：
+        默认 思考 144 / 14.7s ｜ low 思考 0 / 9.6s ｜ max 思考 176 / 12.8s
+        MAX_THINKING_TOKENS=8000 反而只有 31 —— 不是有效的加码方式
+    effort 是唯一真正管用的旋钮，见 cc_effort()。
     与其我嘴上跟她保证，不如把真数字存下来给她看（/trace）。"""
     try:
         d = (usage or {}).get("output_tokens_details") or {}
@@ -455,6 +477,9 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
     if _model:
         cmd += ["--model", _model]
+    _effort = cc_effort()
+    if _effort:
+        cmd += ["--effort", _effort]
     if session_id:
         cmd += ["--resume", session_id]
     cmd.append(message)
@@ -556,6 +581,7 @@ BOT_COMMANDS = [
     ("status", "他现在什么情况 · 一眼看完，不用开终端"),
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
+    ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
     ("backup", "把记忆打包备份"),
@@ -945,6 +971,40 @@ async def trace_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE) + think_line
         + "\n\n（这是他自己去调的，不用你给指令。慢多半是玩游戏厅或翻记忆翻深了。）")
+
+
+async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/effort：他想多深。由来：她问「能不能换成 opus 4.6 thinking」。
+
+    没有 thinking 版可切——4.6 的思考是 adaptive。真正管用的是 effort 档位，
+    实测差别是真的（默认 144 / low 0 / max 176 思考 token），所以做成她能随手切的。
+    """
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    arg = " ".join(context.args or []).strip().lower()
+    cur = cc_effort() or "默认"
+    if not arg:
+        await update.message.reply_text(
+            f"他现在的用力档位：{cur}\n"
+            "可选：默认 / low / medium / high / xhigh / max\n"
+            "（low＝基本不思考、最快；max＝想得最深。实测同一道推理题：\n"
+            "　默认想了 144 个 token，low 是 0，max 是 176，用时没差多少。）\n"
+            "换：/effort high")
+        return
+    if arg in ("默认", "default", "reset", "auto"):
+        effort_override.pop("effort", None)
+        _save_state()
+        await update.message.reply_text("好，回到默认档，他自己看着办。")
+        return
+    if arg not in CC_EFFORT_CHOICES[1:]:
+        await update.message.reply_text(
+            f"没这个档。可选：{' / '.join(CC_EFFORT_CHOICES)}")
+        return
+    effort_override["effort"] = arg
+    _save_state()
+    await update.message.reply_text(
+        f"好，换成 {arg} 了。下一条消息就生效，不用 /reset。")
 
 
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1408,6 +1468,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("status", status_cmd))

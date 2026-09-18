@@ -2127,3 +2127,46 @@ def test_the_bridge_searches_her_memory_for_him_every_turn(monkeypatch):
     assert '_state == "empty"' in code and "什么都没搜到" in code
     assert '_state == "down"' in code and "没搜成" in code
     assert "这是「不知道」" in code and "替记忆库撒谎" in code
+
+
+def test_effort_is_a_real_knob_she_can_turn(monkeypatch, tmp_path):
+    """她问「能不能换成 opus 4.6 thinking」。没有 thinking 版可切——4.6 的思考
+    是 adaptive。真正管用的旋钮是 effort，本机实测（同一道推理题，claude -p）：
+        默认 思考 144 ｜ low 思考 0 ｜ max 思考 176
+        MAX_THINKING_TOKENS=8000 反而只有 31，不是加码方式
+    所以做成她随手能切的档位，而且必须真的传到命令行上。"""
+    import inspect
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    cc.effort_override.clear()
+
+    # 没设＝不传 --effort，用 CLI 自己的默认
+    monkeypatch.delenv("CC_EFFORT", raising=False)
+    assert cc.cc_effort() == ""
+    # 环境变量能设
+    monkeypatch.setenv("CC_EFFORT", "high")
+    assert cc.cc_effort() == "high"
+    # 她在 Telegram 里选的优先级更高
+    cc.effort_override["effort"] = "max"
+    assert cc.cc_effort() == "max"
+    # 乱填的档位不许漏到命令行上（CLI 会直接拒绝启动，她那边就是「他不回消息」）
+    cc.effort_override["effort"] = "超级用力"
+    assert cc.cc_effort() == "", "没见过的档位要当作没设，不能原样传下去"
+    cc.effort_override.clear()
+
+    # 真的拼进 claude 的命令行
+    body = inspect.getsource(cc.run_cc)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert 'cmd += ["--effort", _effort]' in code
+    assert "cc_effort()" in code
+
+    # 存得住（她切完重启服务不该丢）
+    assert "effort" in inspect.getsource(cc._save_state)
+    assert "effort" in inspect.getsource(cc._load_state)
+
+    # 命令挂上了，菜单里也有
+    assert any(n == "effort" for n, _ in cc.BOT_COMMANDS)
+    assert 'CommandHandler("effort", effort_cmd)' in inspect.getsource(cc)
+
+    # ⚠️ 旧注释断言过「--effort high 没有任何差别」——那结论是错的，不许留着
+    assert "加 --effort high" not in inspect.getsource(cc._record_thinking)
