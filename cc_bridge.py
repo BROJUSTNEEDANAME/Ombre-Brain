@@ -513,6 +513,10 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             text, sid2, usage, subtype, trace = _parse_stream(raw)
             LAST_TRACE.clear()
             LAST_TRACE.extend(trace)
+            # 她说「感觉他根本就没有自己主动写记忆的能力」。别猜——数。
+            # hold/grow 在轨迹里都标成「记下来」，数它就知道他这轮存没存。
+            if any(lb.startswith("记下来") for lb in trace):
+                STATS["holds"] = STATS.get("holds", 0) + 1
             session_id = sid2 or session_id
             data = {"result": text, "subtype": subtype, "usage": usage}
             if not text:
@@ -675,6 +679,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     else:
         L.append("这次启动后还没说过话")
 
+    # 她说「感觉他根本就没有自己主动写记忆的能力」——给数字，不给感觉
+    if STATS["turns"]:
+        _h, _sv = STATS.get("holds", 0), STATS.get("saves", 0)
+        L.append(f"他自己往记忆里存过 {_h} 次"
+                 f"｜聊完一段系统叫他收 {_sv} 次（每 {SAVE_AFTER_MIN} 分钟安静后，你看不到那一轮）")
+
     if last_user_ts.get(cid):
         L.append(f"你上次说话 {_age(time.time() - last_user_ts[cid])}前"
                  f"｜主动找过你 {nudge_count.get(cid, 0)}/{NUDGE_MAX} 次"
@@ -818,6 +828,11 @@ async def _reply_with_retry(message, text: str, retries: int = 3) -> None:
 # 一段沉默里最多找她 CC_NUDGE_MAX 次，之后闭嘴，等她开口才重置。
 # 不然她睡着的时候它会通宵每 15 分钟烧一轮。
 NUDGE_MINUTES = int(os.environ.get("CC_NUDGE_MINUTES", "15"))
+# 她安静这么久，就把刚才那段收进记忆（不发给她，她看不见这一轮）
+SAVE_AFTER_MIN = int(os.environ.get("CC_SAVE_AFTER_MIN", "12"))
+SAVE_MIN_TURNS = 2          # 只来回一句不值得存
+last_save_at: dict[int, float] = {}
+turns_since_save: dict[int, int] = {}
 NUDGE_MAX = int(os.environ.get("CC_NUDGE_MAX", "4"))
 # 静默时段（本地时间，"23-8" 表示 23:00–08:00 不找她）。默认空＝不设限，
 # 因为她明确说了「最好频繁点」——但留着这个开关，她哪天嫌吵能自己关。
@@ -837,7 +852,8 @@ asleep: dict[int, bool] = {}
 # 之前想知道他今天有没有哑过，只能 ssh 上去翻 journalctl。这些数在进程里本来
 # 就有，摆出来就是了。⚠️ 只记次数，不存任何正文。
 STARTED_AT = time.time()
-STATS = {"turns": 0, "silent": 0, "retry_ok": 0, "gave_up": 0, "nudges": 0}
+STATS = {"turns": 0, "silent": 0, "retry_ok": 0, "gave_up": 0, "nudges": 0,
+         "holds": 0, "saves": 0}
 # 最近一次响应实际命中的缓存档位（"1h" / "5m" / "" 未知）。
 # 直接读 claude 返回的 usage.cache_creation：ephemeral_1h_input_tokens 有值＝1 小时档，
 # ephemeral_5m_input_tokens 有值＝已被降到 5 分钟档。让 /status 能一眼看穿，不用手动查。
@@ -869,6 +885,40 @@ def _in_quiet_hours(now: datetime) -> bool:
     return a <= h or h < b if a > b else a <= h < b
 
 
+async def _auto_save(cid: int) -> bool:
+    """聊完一段，系统叫他把值得留下的收进记忆。返回是否真的跑了一轮。
+
+    由来：她说「感觉他根本就没有自己主动写记忆的能力」。查了记忆库——不是完全
+    没有（9/17 那段就有一条带着我没写过的细节的记忆），但今天聊的 P3R 一条都没留。
+    跟「记起来」一模一样的毛病：规矩写着「一段对话告一段落时收一收」，
+    可他每轮都是刚醒过来，没有「刚才聊了一段」这个体感，自然想不起来收。
+    所以不靠他想起来：系统替他掐时间，安静够久就叫他去收。
+    ⚠️ 这一轮的回复**绝不发给她**——存记忆是家务，不是话。
+    """
+    prompt = (
+        "[系统提示·这条不要回复给她，她看不到这一轮]\n"
+        "你们刚聊完一段，现在把这段里值得留下的收进记忆。\n"
+        "· 用一次 grow 把多条合成一段存，别连发 hold（省额度）。\n"
+        "· 存**她的原话**（用「」引起来）和当时的画面、她的情绪；"
+        "别写成技术报告、别只存你自己的总结。\n"
+        "· 闲聊水话、已经存过的，不存；真没什么值得存的就什么都别存。\n"
+        "· ⛔ 不确定的事不许写进记忆——尤其是「某个人是谁」，"
+        "她没亲口说过的，一个字都不许编。\n"
+        "做完只回「[已收]」三个字，别的什么都不要说。"
+    )
+    try:
+        reply, sid = await run_cc(prompt, sessions.get(cid))
+    except Exception:  # noqa: BLE001
+        logger.exception("叫他收记忆失败 chat=%s", cid)
+        return False
+    if sid and sessions.get(cid) != sid:
+        sessions[cid] = sid
+        _save_sessions()
+    STATS["saves"] = STATS.get("saves", 0) + 1
+    logger.info("叫他收了一次记忆 chat=%s 轨迹=%s", cid, list(LAST_TRACE) or "（没调工具）")
+    return True
+
+
 async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
     """她安静太久就让他主动开口。带着上下文——用的是同一个 session。"""
     now = time.time()
@@ -879,10 +929,19 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
         since = max(ts, last_nudge_at.get(cid, 0))
         if now - since < gap:
             continue                       # 她还在，或者刚找过
-        if nudge_count.get(cid, 0) >= NUDGE_MAX:
-            continue                       # 找过几次了，闭嘴
         if _inflight_cc.get(cid):
             continue                       # 他正在说话，别插队
+        # 先收记忆：安静够久 + 这段真聊过东西 + 这一段还没收过。
+        # 不受免打扰/睡觉限制——它不发任何东西给她。
+        if (now - ts >= SAVE_AFTER_MIN * 60
+                and turns_since_save.get(cid, 0) >= SAVE_MIN_TURNS
+                and last_save_at.get(cid, 0) < ts):
+            if await _auto_save(cid):
+                last_save_at[cid] = now
+                turns_since_save[cid] = 0
+            continue                       # 这一分钟就干这件事，别再叫他找她
+        if nudge_count.get(cid, 0) >= NUDGE_MAX:
+            continue                       # 找过几次了，闭嘴
         if asleep.get(cid):
             continue                       # 她说她睡了，别吵她
         if _in_quiet_hours(datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)):
@@ -1115,6 +1174,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     finally:
         _typing.cancel()
     STATS["turns"] += 1
+    turns_since_save[cid] = turns_since_save.get(cid, 0) + 1
     # 漏出来的英文旁白（"I apologize, she asked me…"）整条拦掉。拦光了就是空回复，
     # 下面按「没说话」走重试——绝不把旁白发给她。
     _leaked = reply

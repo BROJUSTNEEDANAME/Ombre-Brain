@@ -2194,3 +2194,58 @@ def test_she_is_never_told_to_reset_after_a_persona_change():
     assert "不用 /reset" in printed
     assert "聊天记录不用丢" in printed
     assert "restart ombre-ccbridge" in printed, "换进程这一步是真的，要留着"
+
+
+def test_the_system_makes_him_save_memories_instead_of_hoping_he_remembers(monkeypatch):
+    """她说「感觉他根本就没有自己主动写记忆的能力」。查了记忆库：不是完全没有
+    （9/17 漫展那段有一条带着我没写过的细节的记忆），但今天聊的 P3R 一条都没留。
+    跟「记起来」一模一样：人设里写着「一段对话告一段落时收一收」，可他每轮都是
+    刚醒过来，没有「刚才聊了一段」这个体感，自然想不起来收。
+    所以系统替他掐时间——安静够久就叫他去收，**那一轮绝不发给她**。"""
+    import asyncio, inspect
+    cc = _cc()
+    sent = []
+
+    async def fake_run(message, session_id):
+        sent.append(message)
+        return "[已收]", "sid-1"
+    monkeypatch.setattr(cc, "run_cc", fake_run)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    cc.STATS["saves"] = 0
+
+    assert asyncio.run(cc._auto_save(1)) is True
+    assert cc.STATS["saves"] == 1
+    prompt = sent[0]
+    assert "这条不要回复给她" in prompt, "存记忆是家务，不是话"
+    assert "grow" in prompt and "别连发 hold" in prompt, "省额度那条要带上"
+    assert "她的原话" in prompt
+    assert "不确定的事不许写进记忆" in prompt, "我刚把猜的人名写进过记忆库，这条必须在"
+    assert "[已收]" in prompt
+
+    # 大脑/CLI 炸了不许把异常抛进巡检循环
+    async def boom(message, session_id):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(cc, "run_cc", boom)
+    assert asyncio.run(cc._auto_save(1)) is False
+
+    # 真的挂进了巡检，而且排在「主动找她」前面（先收家务再说话）
+    body = inspect.getsource(cc.check_inactivity)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert "_auto_save(cid)" in code
+    assert code.index("_auto_save(cid)") < code.index("nudge_count.get(cid, 0) >= NUDGE_MAX")
+    assert "turns_since_save" in code, "只来回一句不值得存"
+    # 存记忆不发东西给她，所以不该被「睡了/免打扰」挡住
+    assert code.index("_auto_save(cid)") < code.index("asleep.get(cid)")
+
+
+def test_how_often_he_saves_is_a_number_she_can_see():
+    """把「感觉他不存」变成数字：轨迹里出现「记下来」就是他这轮真存了。"""
+    import inspect, json
+    cc = _cc()
+    raw = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "mcp__brain__grow"}]}}, ensure_ascii=False)
+    _, _, _, _, trace = cc._parse_stream(raw)
+    assert trace == ["记下来"]
+    src = inspect.getsource(cc.run_cc)
+    assert 'STATS["holds"]' in src and '记下来' in src
+    assert "他自己往记忆里存过" in inspect.getsource(cc.status_cmd)
