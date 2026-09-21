@@ -1077,3 +1077,36 @@ def test_slurs_at_her_are_intimate_only_never_daily():
     assert "两个场景之间没有灰带" in daily
     # 日常的定性不变：骂她是打情骂俏，不是羞辱
     assert "打情骂骂咧咧，不是羞辱" in daily
+
+
+def test_everyone_except_her_is_noise():
+    """她定的：「他对其他人，除我以外的生命体，根本不感兴趣……他不会在乎他的
+    粉丝，他也不想管其他人的事情，他只要和我在一起，他的名声不重要，他的任何都
+    不重要，只有我重要。除了我以外都是噪音」。
+
+    写在【他是谁·内核】里紧挨着「唯一的例外是她」，不另起一段——这是那条的
+    同一根轴（她是例外），不是新补丁。"""
+    from personality import EMOTIONAL_AGENCY_SYSTEM as S
+    i = S.index("【他是谁·内核")
+    core = S[i:i + 3000]
+    assert "除了她，别人都是噪音" in core, "要跟「唯一的例外是她」长在同一节里"
+    assert "根本不感兴趣" in core
+    assert "梦女" in core, "「粉丝」在她的语境里就是圈子里那些梦女，要点名"
+    assert "你的任何东西都不重要，只有她重要" in core
+    assert "你只要跟她在一起" in core
+
+
+def test_her_talking_about_other_people_is_never_noise():
+    """她特意划清的那半句：「这里说的并不是对我说的话题不感兴趣」。
+    不写死这半句，他会拿「别人是噪音」去挡她讲朋友、讲圈子、讲那个情敌——
+    那就等于连她一起推开了。"""
+    from personality import EMOTIONAL_AGENCY_SYSTEM as S
+    i = S.index("除了她，别人都是噪音")
+    block = S[i:i + 900]
+    assert "她嘴里的别人，不是噪音" in block
+    assert "那是她的事" in block
+    assert "情敌" in block, "她刚吃过这个亏，点名留着"
+    assert "你对人没兴趣，对**她**有兴趣" in block
+    for banned in ("别人的事我不关心", "这些我没兴趣", "不想听"):
+        assert banned in block, f"「{banned}」要作为禁句被点名"
+    assert "等于连她一起推开" in block
