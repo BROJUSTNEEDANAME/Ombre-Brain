@@ -2170,3 +2170,27 @@ def test_effort_is_a_real_knob_she_can_turn(monkeypatch, tmp_path):
 
     # ⚠️ 旧注释断言过「--effort high 没有任何差别」——那结论是错的，不许留着
     assert "加 --effort high" not in inspect.getsource(cc._record_thinking)
+
+
+def test_she_is_never_told_to_reset_after_a_persona_change():
+    """真事：我每次改完人设都让她发 /reset，理由是「他续的旧会话读不到新人设」。
+    那句我从没验证过，而且是**假的**——代价是她每次都白白丢掉正聊着的对话。
+
+    2026-09-21 实测（claude -p，改 CLAUDE.md 后 --resume 续同一段）：
+        第1轮 人设暗号=北极熊 → 答「北极熊」；同时告诉他幸运数字 4173
+        改成 向日葵后 --resume → 答「幸运数字：4173 / 暗号：向日葵」
+    上下文还在（记得 4173）＋ 新人设已生效（向日葵）＝ CLAUDE.md 每轮重读，
+    改人设不需要 /reset。"""
+    import inspect
+    m = _mod()
+    src = inspect.getsource(m.main)
+    # 只看真的会打印出去的行，注释里拿它当反面教材不算
+    printed = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    # ⚠️ 别写成「/reset 不许出现」——我自己那句「不用 /reset」也含这三个字。
+    # 要禁的是**指令形**：叫她去发这条命令。
+    for order in ("发 /reset", "在 Telegram 里发 /reset", "/reset 一次"):
+        assert order not in printed, f"不许再叫她「{order}」——那是让她白丢对话"
+    # 而且要正面说清楚，别只是删掉了事：她得知道聊天记录不用丢
+    assert "不用 /reset" in printed
+    assert "聊天记录不用丢" in printed
+    assert "restart ombre-ccbridge" in printed, "换进程这一步是真的，要留着"

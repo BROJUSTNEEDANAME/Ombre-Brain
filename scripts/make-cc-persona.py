@@ -283,9 +283,16 @@ def main() -> int:
     else:
         print("⚠️ 没找到 .mcp.json——那边的他将没有记忆，先确认这个文件在仓库里")
 
-    print("\n⚠️ 上面是「写进磁盘了」，不是「他在用了」。要真的生效还差两步：")
-    print("   1. sudo systemctl restart ombre-ccbridge   （让进程换上新文件）")
-    print("   2. 在 Telegram 里发 /reset                 （他续的旧会话读不到新人设）")
+    # ⚠️ 这里原来还有第 2 步「在 Telegram 里发 /reset（他续的旧会话读不到新人设）」。
+    # 那句是我凭想当然写的，**是假的**，而且代价全落在她身上：每次改人设都让她
+    # 把正聊着的对话丢掉。2026-09-21 实测（claude -p，改 CLAUDE.md 后 --resume 续同一段）：
+    #   第1轮 人设暗号=北极熊 → 他答北极熊；顺便告诉他幸运数字 4173
+    #   改成 向日葵，--resume 续同一段 → 他答「幸运数字 4173 / 暗号 向日葵」
+    # 两头都成立：上下文还在（记得 4173），新人设也已生效。
+    # 结论：CLAUDE.md 每轮都会被重新读，改完人设**不需要 /reset**。
+    print("\n⚠️ 上面是「写进磁盘了」，不是「他在用了」。还差一步：")
+    print("   sudo systemctl restart ombre-ccbridge   （让进程换上新文件）")
+    print("   ✅ 不用 /reset——实测 --resume 每轮都会重读人设，聊天记录不用丢。")
     print("   跑 bash scripts/persona-live.sh 能验证到底生效没有。")
     print(f"   （cc 桥的 CC_WORKDIR 要指到这里：{out}）")
     return 0
