@@ -52,10 +52,13 @@ def test_bridge_filters_before_deciding_silent():
     src = (Path(__file__).resolve().parent.parent / "cc_bridge.py").read_text(encoding="utf-8")
     i = src.index("async def _respond(")
     body = src[i:src.index("\ndef _do_backup", i)]
-    a = body.index("reply = strip_meta_leaks(reply)")
+    # ⚠️ 别钉那行代码的原样写法——外面包了一层「存好了」回执过滤
+    # （strip_save_receipts(strip_meta_leaks(reply))）之后它就找不到了。
+    # 这条守的是**顺序**：先过滤，再判是不是哑了。
+    a = body.index("strip_meta_leaks(reply)")
     b = body.index("_was_silent = is_silent_reply(reply)")
     assert a < b, "先拦旁白，再判是不是空——拦光了要走重试，不是发出去"
     # 主动找她那条也要拦
     j = src.index("async def check_inactivity(")
     nb = src[j:src.index("\n_inflight_cc", j)]
-    assert "reply = strip_meta_leaks(reply)" in nb
+    assert "strip_meta_leaks(reply)" in nb

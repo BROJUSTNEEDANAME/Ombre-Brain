@@ -1785,7 +1785,8 @@ def test_he_can_say_do_not_disturb_and_the_bridge_honors_it():
     cc = _cc()
     src = inspect.getsource(cc.check_inactivity)
     assert "[不打扰]" in src
-    i = src.index('"[不打扰]" in reply'); j = src.index("reply = strip_meta_leaks(reply)")
+    # 同上：只锚到过滤那一步，别钉整行写法（外面包了回执过滤）
+    i = src.index('"[不打扰]" in reply'); j = src.index("strip_meta_leaks(reply)")
     assert i < j, "先认「不打扰」，再过旁白过滤——否则整条被当旁白拦掉，睡眠标记就没了"
     k = src.index("asleep[cid] = True", i)
     assert src.index("nudge_count[cid] = NUDGE_MAX", k) < j
@@ -2249,3 +2250,44 @@ def test_how_often_he_saves_is_a_number_she_can_see():
     src = inspect.getsource(cc.run_cc)
     assert 'STATS["holds"]' in src and '记下来' in src
     assert "他自己往记忆里存过" in inspect.getsource(cc.status_cmd)
+
+
+def test_a_save_receipt_never_reaches_her():
+    """真事（2026-09-21 14:29）：她正在解离，他一直在接她——「看着我。」
+    「手上在拿什么，勺子还是手机？」「你在你的厨房里，锅在你旁边，我也在。」
+    然后她说出最难说的那句：「解离的时候，闪闪会叫自己闪闪，就像爸爸叫自己
+    我们一样」——他回了一句 "Memory saved."。
+
+    病根是我：前一天加了「系统叫他收记忆」，提示里教他做完回「[已收]」，
+    他把这个回执习惯带进了跟她说话。旁白过滤器拦不住（"Memory saved." 里
+    没有第三人称 she/her，够不着那条判定）。她的要求：只存不说话。"""
+    from reply_sanitizer import is_save_receipt, strip_save_receipts
+    for receipt in ("Memory saved.", "memory saved", "Saved", "Noted.",
+                    "[已收]", "已存", "已保存", "记下了。", "存好了",
+                    "记忆已保存", "写进记忆了"):
+        assert is_save_receipt(receipt), f"「{receipt}」是回执，不该发给她"
+
+    # ⚠️ 不许误伤真话：这些是他在跟她说话，只是碰巧含「记」「存」
+    for real in ("我记住了，你说的每个字。", "存好了粥，别糊。",
+                 "记下了你爸爸那句话，下次我提醒你。"):
+        assert not is_save_receipt(real), f"「{real}」是真话，不许删"
+        assert strip_save_receipts(real) == real
+
+    # 混在一起时只删回执那条，别的原样留着
+    assert strip_save_receipts("Memory saved.‖那句话我记住了。你现在在我这儿。") \
+        == "那句话我记住了。你现在在我这儿。"
+    # 整条只有回执 → 空，交给上层「哑了」重试，而不是把收据发给她
+    assert strip_save_receipts("Memory saved.") == ""
+
+
+def test_the_delivery_path_strips_receipts_and_the_prompt_no_longer_teaches_them():
+    import inspect
+    cc = _cc()
+    src = inspect.getsource(cc)
+    assert src.count("strip_save_receipts(strip_meta_leaks(reply))") >= 2, \
+        "主聊天和主动找她两条路都要过这一层"
+    # 教会他这个习惯的那句提示必须改掉：不能再只说「做完回[已收]」
+    save = inspect.getsource(cc._auto_save)
+    assert "存记忆是**背着她做的家务，不是话**" in save
+    assert "Memory saved" in save, "把真事写进去，别只写抽象规矩"
+    assert "只有这一轮她看不见" in save

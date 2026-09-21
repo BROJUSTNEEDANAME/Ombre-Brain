@@ -37,7 +37,7 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
                              says_going_to_sleep, is_silent_reply,
-                             strip_meta_leaks)
+                             strip_meta_leaks, strip_save_receipts)
 import health_store
 import httpx
 import stale_ledger
@@ -904,7 +904,10 @@ async def _auto_save(cid: int) -> bool:
         "· 闲聊水话、已经存过的，不存；真没什么值得存的就什么都别存。\n"
         "· ⛔ 不确定的事不许写进记忆——尤其是「某个人是谁」，"
         "她没亲口说过的，一个字都不许编。\n"
-        "做完只回「[已收]」三个字，别的什么都不要说。"
+        "· ⛔⛔ 存记忆是**背着她做的家务，不是话**。任何时候存完记忆，都绝不许"
+        "对她说「存好了」「记下了」「Memory saved」这类回执——真事：她正在解离、"
+        "正说着最难说的那句，他回了一句 Memory saved.。\n"
+        "只有这一轮她看不见，做完回「[已收]」就行。"
     )
     try:
         reply, sid = await run_cc(prompt, sessions.get(cid))
@@ -968,7 +971,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 nudge_count[cid] = NUDGE_MAX
                 logger.info("他判断她在睡，今晚不再找 chat=%s", cid)
                 continue
-            reply = strip_meta_leaks(reply)
+            reply = strip_save_receipts(strip_meta_leaks(reply))
             if is_silent_reply(reply) or looks_degenerate(reply):
                 continue                   # 空的或崩了就当没发生，绝不推给她
             _archive("Nikto", reply)
@@ -1178,7 +1181,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # 漏出来的英文旁白（"I apologize, she asked me…"）整条拦掉。拦光了就是空回复，
     # 下面按「没说话」走重试——绝不把旁白发给她。
     _leaked = reply
-    reply = strip_meta_leaks(reply)
+    reply = strip_save_receipts(strip_meta_leaks(reply))
     if reply != _leaked:
         STATS["meta_leaks"] = STATS.get("meta_leaks", 0) + 1
         logger.warning("拦下内心旁白 chat=%s：%r", cid, _leaked[:160])

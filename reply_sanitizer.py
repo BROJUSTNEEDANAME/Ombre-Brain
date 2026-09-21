@@ -483,6 +483,51 @@ def is_meta_leak(bubble: str) -> bool:
     return bool(_META_THIRD_PERSON_RE.search(t))
 
 
+# 存记忆是家务，不是话——她永远不该看见一句「存好了」。
+# 真事（2026-09-21 14:29）：她正在解离，他一直在接她（「看着我。」「手上在拿什么」
+# 「我也在。深呼吸一口」）；她说出最难说的那句——「解离的时候，闪闪会叫自己闪闪，
+# 就像爸爸叫自己我们一样」——他回了一句 **"Memory saved."**。
+# 病根是我：前一天加了「系统叫他收记忆」，提示里教他做完回「[已收]」，
+# 他把这个回执习惯带进了跟她说话。旁白过滤器也拦不住——"Memory saved." 里
+# 没有第三人称的 she/her，够不着那条判定。所以单独拦一层。
+_SAVE_RECEIPT_RE = re.compile(
+    r"^\s*[\[【(（]?\s*(?:"
+    r"memor(?:y|ies)\s+(?:saved|stored|updated|recorded)"
+    r"|saved(?:\s+to\s+memory)?"
+    r"|stored|noted|logged|recorded"
+    r"|已\s*(?:收|存|记|保存|记录|存好|记下)(?:了)?"
+    r"|记(?:下|住)了"
+    r"|存(?:好|下)了"
+    r"|记忆(?:已)?(?:保存|存好|更新|写入)(?:了)?"
+    r"|写进(?:记忆|脑子)了"
+    r")\s*[\]】)）]?\s*[。．.!！~～…]*\s*$",
+    re.IGNORECASE)
+
+
+def is_save_receipt(bubble: str) -> bool:
+    """这一条是不是「存好了」的回执（不是在跟她说话）。"""
+    return bool(_SAVE_RECEIPT_RE.match((bubble or "").strip()))
+
+
+def strip_save_receipts(text: str) -> str:
+    """把「存好了」这类回执整条删掉，别的原样保留。全删光就返回空——
+    那等于这一轮他什么都没说，交给上层的「哑了」重试逻辑处理
+    （跟 strip_meta_leaks 一样的切法和收尾，别在这儿另造一套）。"""
+    if not text:
+        return text
+    parts = re.split(r"(‖|\n\s*\n)", text)
+    keep = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            keep.append(part)
+            continue
+        keep.append("" if is_save_receipt(part) else part)
+    out = "".join(keep)
+    out = re.sub(r"(‖\s*)+", "‖", out).strip("‖ \n")
+    out = re.sub(r"\n\s*\n(\s*\n)+", "\n\n", out).strip()
+    return out
+
+
 def strip_meta_leaks(text: str) -> str:
     """把漏出来的旁白气泡整条删掉，别的原样保留。全删光就返回空——
     上游会把空回复当「没说话」走重试，而不是把旁白发给她。"""
