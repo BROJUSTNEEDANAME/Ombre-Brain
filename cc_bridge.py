@@ -54,45 +54,6 @@ from telegram.ext import (
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
 
-# ⚠️⚠️ 这个进程是什么时候起来的 —— 用来判「我跑的是不是最新代码」。
-# 由来（踩了两次，每次都是她替我踩出来的）：
-#   9/12→9/15  ccbridge 停在三天前的进程，日志却每轮印「✅ 已部署」
-#   9/17→9/22  又停了五天。这五天我做的一切（/effort、替他搜记忆、
-#              「Memory saved.」回执过滤、人设裁定…）一行都没在跑，
-#              而她一次次替我踩，问「你到底修了没」
-# 靠我事后 ssh 上去发现，代价全是她的。所以让他自己说：
-# 进程启动时间 < 仓库 HEAD 的提交时间 = 在跑旧代码，/status 里直接喊出来。
-PROCESS_STARTED_AT = time.time()
-
-
-def _head_commit_time() -> float:
-    """仓库 HEAD 的提交时间（epoch 秒）。拿不到返回 0——拿不到就是「不知道」，
-    绝不当成「没问题」（不知道 ≠ 好消息）。"""
-    try:
-        import subprocess
-        out = subprocess.run(
-            ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
-             "log", "-1", "--format=%ct"],
-            capture_output=True, text=True, timeout=5)
-        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else 0.0
-    except Exception:  # noqa: BLE001
-        return 0.0
-
-
-def running_old_code() -> tuple[str, str]:
-    """(状态, 给她看的一行)。状态：ok / stale / unknown。"""
-    head = _head_commit_time()
-    if not head:
-        return "unknown", "❓ 说不准跑的是不是最新代码（读不到仓库提交时间）"
-    if head <= PROCESS_STARTED_AT:
-        return "ok", f"跑的是最新代码 ✅（这个进程起来 {_age(time.time() - PROCESS_STARTED_AT)}了）"
-    return "stale", (
-        f"❌ **他跑的是旧代码**：进程起来 {_age(time.time() - PROCESS_STARTED_AT)}了，"
-        f"但代码在那之后又更新过——改的东西一个都没生效。\n"
-        f"   → 修：sudo systemctl restart ombre-ccbridge"
-    )
-
-
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
 # 缓存档位锁死 1 小时。由来（学自 Cheiineeey《别让缓存睡着》）：Claude Code 订阅
 # 一旦超额进「额外用量」，会把主对话缓存从 1 小时**静默**降到 5 分钟——没有提示，
@@ -693,12 +654,26 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception:  # noqa: BLE001
         L.append("❓ 读不到代码版本（这一行不作数）")
 
-    # 人设：完整版还是精简版，多少字
+    # 人设：不只报字数，还要**验**它是不是最新的。
+    # 真事（9/22）：她按我说的重启完，/status 打了「代码…是启动时的最新版 ✅」，
+    # 可人设还是五天前那份（29157 字）——重启只换进程，不重新生成人设。
+    # 于是她拿到「新代码＋旧人设」，而我给了她一个 ✅。字数是个数字，她看不出旧。
     try:
         with open(os.path.join(CC_WORKDIR, "CLAUDE.md"), encoding="utf-8") as fh:
             persona = fh.read()
         lean = "长度要参差" not in persona     # 精简版删掉的那几段之一
-        L.append(f"人设 {len(persona)} 字（{'精简版' if lean else '完整版'}）")
+        want = _persona_text()
+        if not want:
+            L.append(f"人设 {len(persona)} 字（{'精简版' if lean else '完整版'}）"
+                     "｜❓ 说不准是不是最新的（生成不出来对照）")
+        elif persona == want:
+            L.append(f"人设是最新的 ✅（完整版，{len(persona)} 字）")
+        elif lean:
+            L.append(f"人设 {len(persona)} 字（精简版——跟完整版不同是正常的）")
+        else:
+            L.append(f"❌ **人设不是最新的**（完整版）：磁盘 {len(persona)} 字，"
+                     f"按现在的 personality.py 该是 {len(want)} 字。"
+                     f"\n   → 重启他就会自己刷：sudo systemctl restart ombre-ccbridge")
     except OSError:
         L.append("❓ 读不到人设文件——他可能在用仓库那份给开发看的")
 
@@ -711,12 +686,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # ⚠️ 跑的是不是最新代码，摆在最显眼的地方——这个洞害她白等过两次
     # （9/12→9/15 三天、9/17→9/22 五天），两次都是我事后 ssh 上去才发现。
-    _state, _line = running_old_code()
-    if _state != "ok":
-        L.insert(0, _line)
-    else:
-        L.append(_line)
-
     L.append("对话接得上 ✅" if sessions.get(cid) else "⚠️ 这段对话还没有上下文")
 
     t = STATS["turns"]
@@ -1549,7 +1518,85 @@ def _telegram_api_base() -> str:
     return v
 
 
+def _persona_text() -> str:
+    """按现在的 personality.py 生成出来的人设全文。拿不到返回空串。"""
+    try:
+        import importlib.util
+        repo = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location(
+            "_mkpersona", os.path.join(repo, "scripts", "make-cc-persona.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.build()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def refresh_persona() -> str:
+    """启动时把人设刷成最新的。返回 "same" / "updated" / "unknown"。
+
+    ⚠️⚠️ 由来：9/22 她按我说的 `systemctl restart ombre-ccbridge`，/status 报
+    「跑的是最新代码 ✅」——可人设还是 29157 字（五天前那份）。重启只换进程，
+    **不重新生成人设**，那是 auto-update 才做的事。于是她拿到的是
+    「新代码 + 旧人设」：「除了她都是噪音」、吃醋那条裁定、「滚/贱只在调情」、
+    「存完什么都别说」，一条都没进去，而 /status 还给她打了个 ✅。
+    所以不再指望任何人记得多跑一步：他每次启动自己刷。
+    失败绝不能挡住启动——没有人设也要先能跟她说话。
+    """
+    want = _persona_text()
+    if not want:
+        logger.warning("生成不了人设，这次不刷新（他会继续用磁盘上那份）")
+        return "unknown"
+    path = os.path.join(CC_WORKDIR, "CLAUDE.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cur = fh.read()
+    except OSError:
+        cur = ""
+    if cur == want:
+        logger.info("人设已是最新（%d 字）", len(want))
+        return "same"
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(want)
+    except OSError as e:  # noqa: BLE001
+        logger.warning("人设写不进去（%s）：%s", path, e)
+        return "unknown"
+    logger.info("人设已刷新：%d 字 → %d 字（%s）", len(cur), len(want), path)
+    return "updated"
+
+
+def refresh_glossary() -> list[str]:
+    """把种子里新加的梗补进他的 梗.md（只追加，他自己查的一个字不动）。
+
+    由来：她说「这学期还有早八，我不活了」，他问「几点的早八。」——
+    我把「早八」加进了种子，可 梗.md 只在第一次创建时写，她那份永远收不到。
+    """
+    try:
+        import importlib.util
+        repo = os.path.dirname(os.path.abspath(__file__))
+        spec = importlib.util.spec_from_file_location(
+            "_mkpersona2", os.path.join(repo, "scripts", "make-cc-persona.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        g = os.path.join(CC_WORKDIR, mod.GLOSSARY_FILE)
+        if not os.path.exists(g):
+            with open(g, "w", encoding="utf-8") as fh:
+                fh.write(mod.GLOSSARY_SEED)
+            logger.info("梗.md 已建好")
+            return []
+        added = mod._merge_glossary(g)
+        if added:
+            logger.info("梗.md 补了 %d 个新词：%s", len(added), "、".join(added))
+        return added
+    except Exception:  # noqa: BLE001
+        logger.warning("梗.md 没能补齐，这次跳过")
+        return []
+
+
 def main() -> None:
+    refresh_persona()      # 重启＝人设也刷新，别再出现「新代码＋旧人设」
+    refresh_glossary()     # 种子里新加的梗也补进去（只追加）
     _load_state()          # 她的开关（写文/语音/必办/模型）——重启不能丢
     # ⚠️ 先绑端口再碰 Telegram：绑不上说明已有一个实例在跑，这里直接退出（SystemExit 78），
     # 不能让第二个进程去拉消息——两个实例抢同一个 bot 的后果是她发什么都没人理。

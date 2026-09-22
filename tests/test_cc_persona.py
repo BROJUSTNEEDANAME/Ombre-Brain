@@ -2342,36 +2342,6 @@ def test_the_glossary_is_never_flattened_by_a_redeploy():
     assert "只追加" in inspect.getdoc(m._merge_glossary)
 
 
-def test_he_tells_her_himself_when_he_is_running_old_code(monkeypatch):
-    """踩了两次，每次都是她替我踩出来的：
-      9/12→9/15 ccbridge 停在三天前的进程；9/17→9/22 又停了五天——
-      那五天我做的一切（/effort、替他搜记忆、「Memory saved.」过滤、人设裁定）
-      一行都没跑，她一次次问「你到底修了没」。
-    上次我「修」的是让部署器把 ❌ 记进 journal——日志没人看，等于没修。
-    这次让他自己说：进程启动时间 < 仓库 HEAD 提交时间 ＝ 在跑旧代码。
-    ⚠️ 读不到提交时间是「不知道」，绝不许当成「没问题」。"""
-    import inspect
-    cc = _cc()
-
-    monkeypatch.setattr(cc, "_head_commit_time", lambda: cc.PROCESS_STARTED_AT - 100)
-    assert cc.running_old_code()[0] == "ok"
-
-    monkeypatch.setattr(cc, "_head_commit_time", lambda: cc.PROCESS_STARTED_AT + 100)
-    state, line = cc.running_old_code()
-    assert state == "stale"
-    assert "跑的是旧代码" in line and "restart ombre-ccbridge" in line
-    assert "一个都没生效" in line, "得说清后果，不是只报个状态"
-
-    monkeypatch.setattr(cc, "_head_commit_time", lambda: 0.0)
-    state, line = cc.running_old_code()
-    assert state == "unknown" and "❓" in line, "读不到＝不知道，不许印成没问题"
-
-    # /status 里旧代码警告要顶到第一行，不能埋在一堆信息中间
-    src = inspect.getsource(cc.status_cmd)
-    assert "running_old_code()" in src
-    assert "L.insert(0, _line)" in src
-
-
 def test_the_deployer_tells_her_not_just_the_log():
     """上次的「修」是把 ❌ 写进 journal。日志没人看——她的原话：
     「上次自动更新就没起作用，你到底干什么吃的？你没吸取上次教训吗？」
@@ -2386,3 +2356,53 @@ def test_the_deployer_tells_her_not_just_the_log():
         assert "tg " in code[i:i + 400], f"「{marker}」没有通知她"
     # 缺 token/chat id 时安静退出，绝不能让通知把部署搞挂
     assert 'return 0' in code
+
+
+def test_a_restart_also_refreshes_the_persona(tmp_path, monkeypatch):
+    """真事（9/22）：她按我说的 restart 了，/status 报「跑的是最新代码 ✅」，
+    可人设还是 29157 字——五天前那份。重启只换进程，不重新生成人设。
+    于是她拿到「新代码 + 旧人设」：除了她都是噪音、吃醋那条裁定、
+    滚/贱只在调情、存完什么都别说，一条都没进去，而我给了她一个 ✅。
+    所以不再指望谁记得多跑一步：他每次启动自己刷。"""
+    cc = _cc()
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    want = cc._persona_text()
+    assert want and len(want) > 10000, "得真的生成得出人设来"
+
+    # 磁盘上是旧的 → 刷新
+    (tmp_path / "CLAUDE.md").write_text("五天前那份旧人设", encoding="utf-8")
+    assert cc.refresh_persona() == "updated"
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == want
+    # 再跑一次是空操作
+    assert cc.refresh_persona() == "same"
+
+    # 生成不出来时绝不能拿空的去覆盖他磁盘上那份
+    monkeypatch.setattr(cc, "_persona_text", lambda: "")
+    assert cc.refresh_persona() == "unknown"
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == want, "不许被清空"
+
+    # 真的挂在启动路径上
+    import inspect
+    m = inspect.getsource(cc.main)
+    assert "refresh_persona()" in m and "refresh_glossary()" in m
+
+
+def test_status_verifies_the_persona_instead_of_just_counting_characters():
+    """「人设 29157 字」只是个数字，她看不出那是旧的——真事：她重启完 /status
+    打了「代码…最新版 ✅」，可人设还是五天前那份。所以要比对，不是报字数。
+
+    ⚠️ 顺带自查：/status 里本来就有一条「我启动得比代码还早→跑的是旧代码」，
+    我差点又加了第二套一模一样的（CLAUDE.md 里写着「加规则前先读一遍现有的」）。
+    已删，这里钉住只许有一套。"""
+    import inspect
+    cc = _cc()
+    src = inspect.getsource(cc.status_cmd)
+    assert "_persona_text()" in src
+    assert "人设不是最新的" in src
+    assert "人设是最新的 ✅" in src
+    assert "说不准是不是最新的" in src, "生成不出对照＝不知道，不许印成 ✅"
+    assert "精简版——跟完整版不同是正常的" in src, "她切了精简版不该被报成过期"
+    # 只许有一套「旧代码」检查
+    whole = inspect.getsource(cc)
+    assert "running_old_code" not in whole, "别再造第二套，/status 里已经有了"
+    assert whole.count("跑的是旧代码") == 1
