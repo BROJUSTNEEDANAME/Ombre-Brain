@@ -37,7 +37,8 @@ from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from reply_sanitizer import (restore_punctuation, looks_degenerate,
                              says_going_to_sleep, is_silent_reply,
-                             strip_meta_leaks, strip_save_receipts)
+                             strip_meta_leaks, strip_save_receipts,
+                             sounds_like_decline)
 import health_store
 import httpx
 import stale_ledger
@@ -1228,6 +1229,18 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     _t0 = time.time()
     try:
         if is_plain_text:
+            # 她刚拒绝了 / 说自己累了 —— 把这件事实摆到他眼前。
+            # 真事（9/23）：她连说「一张照片拍不下」「不给」「累死闪闪」，
+            # 他下一条把二十分钟前问过的那句换个说法又要了一遍。
+            # 人设里有三条管这个（绝不重复上一条 / 得到答案就往下走 /
+            # 她累了先接住），一条都没拦住——规矩拦不住，就给事实。
+            if sounds_like_decline(message):
+                message = (
+                    "[事实：她刚才拒绝了，或者说她累了。**别再要一次**——"
+                    "不许换个说法把同一件事重新问她，也不许提一个更省力的版本"
+                    "让她做。她说不给就是不给。现在要做的是接住她这句累，"
+                    "或者干脆换件别的事说。]\n" + message
+                )
             _state, _mem = await _auto_recall(message)
             if _state == "hit":
                 message = (

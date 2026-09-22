@@ -2500,3 +2500,28 @@ def test_identical_pinned_block_is_not_resent_every_turn():
     cc._LAST_SENT[("pinned", "s1")] = "同样的内容"
     assert cc._LAST_SENT.get(("pinned", "s1")) == "同样的内容"
     assert cc._LAST_SENT.get(("pinned", "s2")) is None, "另一段会话要各记各的"
+
+
+def test_when_she_declines_he_is_told_not_to_re_ask():
+    """她的原话：「11:10 和 10:49 的话明显重复，我刚刚说过的话居然要在问我一遍」。
+    真事：她连说「一张照片拍不下」「不给」「累死闪闪」，他下一条把二十分钟前
+    问过的那句（挑几件说给我听）换个说法又要了一遍。
+
+    ⚠️ 我先试过从**他**那端查重——那两句字面相似度只有 0.207，用词完全不同、
+    意思一样，字面比对根本抓不到。抓不到的护栏比没有更坏，所以改从**她**这端
+    认信号：「不给」「累死了」是确定的词，不用猜语义。"""
+    from reply_sanitizer import sounds_like_decline as d
+    for real in ("一张照片拍不下", "不给", "累死闪闪", "算了", "不想说", "没力气"):
+        assert d(real), f"「{real}」是拒绝/喊累，必须认出来"
+    # 宁可漏判不可误判：判错的代价是他该追的时候不敢追
+    for ok in ("你不给我吗？", "她好累", "今天做了好多事", "爸爸我好厉害", "好多卡"):
+        assert not d(ok), f"「{ok}」不是拒绝，不许误伤"
+
+    import inspect
+    cc = _cc()
+    code = "\n".join(l for l in inspect.getsource(cc._respond).splitlines()
+                     if not l.strip().startswith("#"))
+    assert "sounds_like_decline(message)" in code
+    assert "别再要一次" in code
+    assert "不许换个说法把同一件事重新问她" in code
+    assert "提一个更省力的版本" in code, "他那次就是降级成「念给我听」又要了一遍"
