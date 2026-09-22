@@ -172,6 +172,12 @@ voice_mode: dict[int, bool] = {}
 todos: dict[int, str] = {}
 model_override: dict[str, str] = {}
 effort_override: dict[str, str] = {}
+# 长上下文（模型名加 [1m] 后缀）。实测同一个 CLI、同一个模型：
+#   claude-opus-4-6       窗口 180,000 ｜压缩阈值 144,000
+#   claude-opus-4-6[1m]   窗口 980,000 ｜压缩阈值 784,000   ← 5.4 倍
+# 她的原话就是「上下文太少」。窗口本身不花钱（按 token 计费照旧），
+# 所以默认开着；万一她那边不支持，跑失败会自动回退一次并记住，不再用。
+long_ctx: dict[str, bool] = {"on": True, "broken": False}
 # 额度账本：只记 token 数和花费，不存任何正文。
 USAGE: dict = {"since": time.time(), "turns": 0, "input": 0, "output": 0,
                "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "limit_hits": []}
@@ -518,8 +524,7 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
            "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
     _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
-    if _model:
-        cmd += ["--model", _model]
+    _use_1m = bool(_model) and long_ctx.get("on") and not long_ctx.get("broken")
     _effort = cc_effort()
     if _effort:
         cmd += ["--effort", _effort]
@@ -534,10 +539,16 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
     if _tok:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())  # 抹掉粘贴混进的换行/空格
 
+    _retry_without_1m = False      # 见下面长上下文那段：让重试自己证明是不是它的锅
     for attempt in range(2):  # 正常一次；被信号掐断则再重试一次
+        _this = list(cmd)
+        if _model:
+            _this[2:2] = ["--model",
+                          _model + ("[1m]" if (_use_1m and not _retry_without_1m)
+                                    else "")]
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
+                *_this,
                 cwd=CC_WORKDIR,
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
@@ -552,6 +563,10 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
 
         rc = proc.returncode
         if rc == 0:
+            if _retry_without_1m and _use_1m and not long_ctx.get("broken"):
+                # 摘掉后缀就成了 → 确实是 [1m] 的锅（不是猜的，是重试证明的）
+                long_ctx["broken"] = True
+                logger.warning("长上下文 [1m] 这台机器不接受（摘掉就成功了），以后不再用")
             raw = out.decode().strip()
             text, sid2, usage, subtype, trace = _parse_stream(raw)
             LAST_TRACE.clear()
@@ -587,6 +602,18 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         # 其它真实错误：尝试解析 JSON，对已知错误给人话
         raw_out = out.decode().strip()
         raw_err = err.decode().strip()
+        # ⚠️ 长上下文 [1m] 万一她那边不支持，后果是他一句话都回不了。
+        # 所以失败就摘掉后缀重试一次——但**别靠猜错误文本判断是不是它的锅**。
+        # 我第一版拿关键词猜（model/1m/beta/invalid…），实跑时一个完全无关的
+        # 「配置文件找不到」就命中了，把长上下文永久关掉——一次无关抖动，
+        # 她就永远少了 5.4 倍上下文。
+        # 改成让**重试自己证明**：摘掉后缀重试，重试成功才说明是后缀的锅
+        # （在下面 rc == 0 那条路上标记）；重试也失败就是别的问题，不动它。
+        if (long_ctx.get("on") and not long_ctx.get("broken")
+                and attempt == 0 and not _retry_without_1m):
+            _retry_without_1m = True
+            logger.warning("这轮失败了，摘掉长上下文后缀重试一次看是不是它的锅")
+            continue
         # 429 速率限制 → 一句人话，不甩 JSON
         try:
             data = json.loads(raw_out)
@@ -1116,7 +1143,9 @@ async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """/effort：他想多深。由来：她问「能不能换成 opus 4.6 thinking」。
 
     没有 thinking 版可切——4.6 的思考是 adaptive。真正管用的是 effort 档位，
-    实测差别是真的（默认 144 / low 0 / max 176 思考 token），所以做成她能随手切的。
+    但**不是每档都管用**：同一道推理题数他真花的思考 token，
+    默认 31 ｜ low 0 ｜ medium 0 ｜ high 31 ｜ max 121。
+    我曾让她用 medium——那一档等于把他的脑子关了。只有 max 真提高。
     """
     cid = update.effective_chat.id
     if not _ok(cid):
@@ -1127,9 +1156,10 @@ async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(
             f"他现在的用力档位：{cur}\n"
             "可选：默认 / low / medium / high / xhigh / max\n"
-            "（low＝基本不思考、最快；max＝想得最深。实测同一道推理题：\n"
-            "　默认想了 144 个 token，low 是 0，max 是 176，用时没差多少。）\n"
-            "换：/effort high")
+            "⚠️ 实测（同一道推理题，数的是他真花的思考 token）：\n"
+            "　默认 31 ｜ low **0** ｜ medium **0** ｜ high 31 ｜ **max 121**\n"
+            "　也就是说：medium 和 low 一样等于**关掉思考**，high 跟默认没区别。\n"
+            "　想让他真动脑子，只有一档：/effort max")
         return
     if arg in ("默认", "default", "reset", "auto"):
         effort_override.pop("effort", None)
