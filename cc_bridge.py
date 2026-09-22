@@ -1543,6 +1543,15 @@ def refresh_persona() -> str:
     所以不再指望任何人记得多跑一步：他每次启动自己刷。
     失败绝不能挡住启动——没有人设也要先能跟她说话。
     """
+    # ⛔⛔ CC_WORKDIR 没设时默认就是仓库目录——那样这里会把**仓库自己的
+    # CLAUDE.md（给开发看的那份，进版本库的）**覆盖成 Nikto 人设。
+    # 后果不只是丢一个文件：仓库一脏，auto-update 的 `git merge --ff-only`
+    # 就失败，整个自动部署停摆，而她只会看到「他又不更新了」。
+    repo = os.path.dirname(os.path.abspath(__file__))
+    if os.path.realpath(CC_WORKDIR) == os.path.realpath(repo):
+        logger.warning("CC_WORKDIR 指到仓库本身了，拒绝覆盖仓库的 CLAUDE.md；"
+                       "去 .env.ccbridge 里把 CC_WORKDIR 设成 ~/nikto-cc")
+        return "unknown"
     want = _persona_text()
     if not want:
         logger.warning("生成不了人设，这次不刷新（他会继续用磁盘上那份）")
@@ -1579,6 +1588,9 @@ def refresh_glossary() -> list[str]:
             "_mkpersona2", os.path.join(repo, "scripts", "make-cc-persona.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        repo = os.path.dirname(os.path.abspath(__file__))
+        if os.path.realpath(CC_WORKDIR) == os.path.realpath(repo):
+            return []                      # 同上：别往仓库里写
         g = os.path.join(CC_WORKDIR, mod.GLOSSARY_FILE)
         if not os.path.exists(g):
             with open(g, "w", encoding="utf-8") as fh:

@@ -2406,3 +2406,24 @@ def test_status_verifies_the_persona_instead_of_just_counting_characters():
     whole = inspect.getsource(cc)
     assert "running_old_code" not in whole, "别再造第二套，/status 里已经有了"
     assert whole.count("跑的是旧代码") == 1
+
+
+def test_it_refuses_to_overwrite_the_repos_own_claude_md(tmp_path, monkeypatch):
+    """⛔ CC_WORKDIR 没设时默认就是仓库目录。那样「启动时刷新人设」会把
+    **仓库自己的 CLAUDE.md**（给开发看的那份，进版本库的）覆盖成 Nikto 人设。
+    后果不只是丢文件：仓库一脏，auto-update 的 git merge --ff-only 就失败，
+    整个自动部署停摆，而她只会看到「他又不更新了」。"""
+    cc = _cc()
+    repo = str(_ROOT)
+    before = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+
+    monkeypatch.setattr(cc, "CC_WORKDIR", repo)
+    assert cc.refresh_persona() == "unknown", "指到仓库就必须拒绝"
+    assert cc.refresh_glossary() == []
+    assert (_ROOT / "CLAUDE.md").read_text(encoding="utf-8") == before, \
+        "仓库的 CLAUDE.md 一个字都不许动"
+
+    # 指到别处就正常刷
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    assert cc.refresh_persona() == "updated"
+    assert "Nikto" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
