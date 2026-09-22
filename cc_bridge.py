@@ -332,7 +332,28 @@ def _save_sessions() -> None:
 
 # 上一轮 cc 调过的工具轨迹（友好中文标签，按顺序）。/trace 读它，慢回合也附它。
 LAST_TRACE: list[str] = []
-LAST_TRACE_META: dict = {"secs": 0, "at": 0.0, "thinking": None}
+LAST_TRACE_META: dict = {"secs": 0, "at": 0.0, "thinking": None,
+                         "ctx": None, "ctx_limit": None}
+
+
+def _record_context(usage: dict) -> None:
+    """这一轮他脑子里装了多少 token。
+
+    ⚠️⚠️ 这是「他忘了我刚说的话」的真正量尺。CLI 的 autocompact_state 事件写着
+    threshold=144000：会话涨到那条线，**中间的对话会被自动摘要掉**，他是真的
+    看不到了，不是不守规矩。真事（9/23）：10:49 她说「我这三天做了 33 个事情」，
+    他答「挑几个跟我炫一下」；11:10 他又说「那你就挑你最得意的那几件念给我听」，
+    中间她已经说了「累死闪闪」。人设里有「绝不重复你自己上一条」，拦不住这种。
+    我们以前从没量过这个数——先让它可见，再谈怎么治。
+    """
+    try:
+        u = usage or {}
+        total = (int(u.get("input_tokens") or 0)
+                 + int(u.get("cache_creation_input_tokens") or 0)
+                 + int(u.get("cache_read_input_tokens") or 0))
+        LAST_TRACE_META["ctx"] = total or None
+    except Exception:  # noqa: BLE001
+        LAST_TRACE_META["ctx"] = None
 
 
 def _record_thinking(usage: dict) -> None:
@@ -400,7 +421,14 @@ def _parse_stream(raw: str):
         except Exception:  # noqa: BLE001
             continue
         t = ev.get("type")
-        if t == "assistant":
+        if t == "autocompact_state":
+            try:
+                v = ev.get("value") or {}
+                if v.get("enabled") and v.get("threshold"):
+                    LAST_TRACE_META["ctx_limit"] = int(v["threshold"])
+            except Exception:  # noqa: BLE001
+                pass
+        elif t == "assistant":
             for blk in (ev.get("message") or {}).get("content") or []:
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
                     _lb = _tool_label(str(blk.get("name") or ""))
@@ -530,6 +558,7 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
                                subtype, trace or "（一个工具都没调）")
             _record_cache_tier(usage or {})
             _record_thinking(usage or {})
+            _record_context(usage or {})
             return text, session_id
 
         # 被信号掐断（重启/系统抖动）→ 悄悄重试一次
@@ -1035,21 +1064,38 @@ async def trace_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not _ok(cid):
         return
-    if not LAST_TRACE:
-        await update.message.reply_text(
-            "上一轮他没调任何工具，就是直接想好回你的（那种秒回的）。")
-        return
+    # ⚠️ 原来这里「没调工具就直接 return」——把思考 token 那行一起吞了，
+    # 而那正是她判断 /effort 有没有用的唯一数字。她切了 medium 看不出差别，
+    # 就是因为这个 return。没调工具**不等于**没什么可报。
     secs = LAST_TRACE_META.get("secs", 0)
+    L = []
+    if LAST_TRACE:
+        L.append(f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE))
+    else:
+        L.append(f"上一轮用了 {secs} 秒，他没调任何工具，直接回的你。")
+
     th = LAST_TRACE_META.get("thinking")
     if th is None:
-        think_line = ""
+        L.append("❓ 这轮想了多少，这次没读到。")
     elif th > 0:
-        think_line = f"\n这一轮他还自己想了 {th} 个 token 才开口。"
+        L.append(f"他自己想了 {th} 个 token 才开口（/effort 调的就是这个数）。")
     else:
-        think_line = "\n这一轮他没打草稿，直接答的。"
-    await update.message.reply_text(
-        f"上一轮用了 {secs} 秒，他一步步做了：\n" + " · ".join(LAST_TRACE) + think_line
-        + "\n\n（这是他自己去调的，不用你给指令。慢多半是玩游戏厅或翻记忆翻深了。）")
+        L.append("他没打草稿，直接答的（闲聊时 0 是正常的）。")
+
+    # 上下文：这是「他忘了我刚说的话」的真正量尺
+    ctx, lim = LAST_TRACE_META.get("ctx"), LAST_TRACE_META.get("ctx_limit")
+    if ctx and lim:
+        pct = int(ctx * 100 / lim)
+        L.append(f"这段对话装了 {ctx:,} / {lim:,} token（{pct}%）。")
+        if pct >= 80:
+            L.append("⚠️ **快到线了**：满了他会把中间的对话自动压缩掉——"
+                     "那时候他是真看不到你前面说的话了，不是不上心。"
+                     "\n   → 想让他重新清清爽爽：/reset（会丢这段聊天记录，你自己权衡）")
+    elif ctx:
+        L.append(f"这段对话装了 {ctx:,} token。")
+
+    L.append("（工具是他自己去调的，不用你给指令。慢多半是玩游戏厅或翻记忆翻深了。）")
+    await update.message.reply_text("\n".join(L))
 
 
 async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

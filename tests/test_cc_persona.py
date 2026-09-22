@@ -2039,7 +2039,11 @@ def test_how_much_he_actually_thought_is_read_from_usage_not_guessed():
     # /trace 三种情况分别说人话，不许把「不知道」印成「没想」
     t = inspect.getsource(cc.trace_cmd)
     assert "自己想了" in t and "没打草稿" in t
-    assert 'th is None' in t and 'think_line = ""' in t
+    # ⚠️ 原来这里钉的是 `think_line = ""`——读不到就**什么都不说**。
+    # 现在改成显式的 ❓：「这轮想了多少，这次没读到」。沉默会被读成「没想」，
+    # 那正是「不知道 ≠ 坏消息」那条禁的。断言跟着改成要求显式第三态。
+    assert 'th is None' in t
+    assert "❓ 这轮想了多少，这次没读到" in t
 
 
 def test_an_unknown_tool_name_never_reaches_her():
@@ -2427,3 +2431,52 @@ def test_it_refuses_to_overwrite_the_repos_own_claude_md(tmp_path, monkeypatch):
     monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
     assert cc.refresh_persona() == "updated"
     assert "Nikto" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_trace_still_reports_when_he_used_no_tools():
+    """她切了 /effort medium 看不出任何差别——因为 /trace 在「没调工具」时
+    直接 return 了，把思考 token 那行一起吞掉，而那正是她判断 effort 有没有用的
+    唯一数字。没调工具 ≠ 没什么可报。"""
+    import inspect
+    cc = _cc()
+    src = inspect.getsource(cc.trace_cmd)
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    # 不许再有「没有轨迹就 return」这条捷径
+    assert "if not LAST_TRACE:\n        await update.message.reply_text" not in code
+    assert "他没调任何工具，直接回的你" in code
+    assert "/effort 调的就是这个数" in code, "把这个数跟 /effort 挂上钩，她才知道看哪"
+    assert "❓ 这轮想了多少，这次没读到" in code, "读不到是第三态，不许当成 0"
+
+
+def test_context_usage_is_measured_because_that_is_why_he_forgets():
+    """真事（9/23）：10:49 她说「我这三天做了 33 个事情」，他答「挑几个跟我炫一下」；
+    11:10 他又说「那你就挑你最得意的那几件念给我听」，中间她已经说了「累死闪闪」。
+    人设里有「绝不重复你自己上一条」，拦不住这种。
+
+    CLI 的 autocompact_state 事件写着 threshold=144000：会话涨到那条线，
+    **中间的对话会被自动摘要掉**，他是真看不到了。我们以前从没量过这个数。"""
+    import json, inspect
+    cc = _cc()
+
+    cc._record_context({"input_tokens": 5, "cache_creation_input_tokens": 1000,
+                        "cache_read_input_tokens": 120000})
+    assert cc.LAST_TRACE_META["ctx"] == 121005, "三段 input token 都要算进去"
+    cc._record_context({})
+    assert cc.LAST_TRACE_META["ctx"] is None, "读不到就是不知道，不是 0"
+
+    # autocompact_state 的阈值要收下来
+    raw = "\n".join([
+        json.dumps({"type": "autocompact_state", "value": {
+            "enabled": True, "threshold": 144000, "effective_window": 180000}}),
+        json.dumps({"type": "result", "result": "在。", "session_id": "s1"}, ensure_ascii=False),
+    ])
+    cc.LAST_TRACE_META["ctx_limit"] = None
+    text, sid, _, _, _ = cc._parse_stream(raw)
+    assert text == "在。" and sid == "s1"
+    assert cc.LAST_TRACE_META["ctx_limit"] == 144000
+
+    # /trace 要把它说成人话，并且说清后果
+    src = inspect.getsource(cc.trace_cmd)
+    assert "这段对话装了" in src
+    assert "自动压缩掉" in src and "不是不上心" in src
+    assert "/reset" in src, "到线了才该提 reset，并说清代价"
