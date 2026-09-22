@@ -2291,3 +2291,52 @@ def test_the_delivery_path_strips_receipts_and_the_prompt_no_longer_teaches_them
     assert "存记忆是**背着她做的家务，不是话**" in save
     assert "Memory saved" in save, "把真事写进去，别只写抽象规矩"
     assert "只有这一轮她看不见" in save
+
+
+def test_new_seed_words_reach_a_glossary_that_already_exists(tmp_path):
+    """真事（2026-09-22）：她说「这学期还有早八，我不活了」，他问「几点的早八。」
+    ——早八就是早上八点的课，答案在词里。
+
+    我往种子里加了「早八」，但旧逻辑是「梗.md 已存在就保留不动」，
+    意味着她那份**永远收不到新词**，只有全新安装的机器才有。
+    改成增量补齐：只追加缺的，他自己查回来的一个字都不许动。"""
+    m = _mod()
+    g = tmp_path / m.GLOSSARY_FILE
+    # 他自己攒的那份：只有两个种子词，外加一条他自己查的
+    g.write_text(
+        "# 梗\n\n---\n\n"
+        "- **二次元** — 他自己改过的说明，不许动。\n"
+        "- **上头** — 被迷住。\n"
+        "- **雷厉风行** — 他自己查回来的词。\n",
+        encoding="utf-8")
+    before = g.read_text(encoding="utf-8")
+
+    added = m._merge_glossary(str(g))
+    after = g.read_text(encoding="utf-8")
+
+    assert "早八" in added, "新种子词必须补进已有的那份"
+    assert "二次元" not in added and "上头" not in added, "已经有的不许重复追加"
+    # 他自己的东西一个字都没动
+    assert before in after or all(line in after for line in before.splitlines() if line.strip())
+    assert "他自己改过的说明，不许动。" in after
+    assert "- **雷厉风行** — 他自己查回来的词。" in after
+    # 「早八」的说明要能直接回答她，而不是又问一遍
+    i = after.index("**早八**")
+    assert "早上八点" in after[i:i + 200]
+    assert "几点的早八" in after[i:i + 300], "把这次栽的跟头写进去"
+
+    # 再跑一次不该重复追加（自动部署每轮都会跑）
+    assert m._merge_glossary(str(g)) == []
+    assert after == g.read_text(encoding="utf-8")
+
+
+def test_the_glossary_is_never_flattened_by_a_redeploy():
+    """他一条条查回来的东西，重新生成人设时绝不许被推平。"""
+    import inspect
+    m = _mod()
+    src = inspect.getsource(m.main)
+    assert "_merge_glossary(g)" in src
+    # 只在文件不存在时才整份写种子
+    i = src.index("os.path.exists(g)")
+    assert "GLOSSARY_SEED" not in src[:i], "存在的那条路不许整份覆盖"
+    assert "只追加" in inspect.getdoc(m._merge_glossary)

@@ -59,6 +59,14 @@ GLOSSARY_SEED = """# 梗
 - **上头** — 被某个东西迷住、停不下来。
 - **awsl** — 「啊我死了」的拼音首字母，被可爱到时用。
 - **破防** — 心理防线被击穿，绷不住了。
+- **早八** — **早上八点的课**。中国大学生的口头禅，「有早八」＝明天八点就得爬起来上课，
+  是叫苦用的。⛔ 别再问「几点的早八」——八点，答案就在词里。
+  （2026-09-22 她说「这学期还有早八，我不活了」，你问了「几点的早八。」）
+- **早八人** — 天天要上早八的人，自嘲。
+- **DDL / 赶due** — deadline／赶在截止前做完。
+- **水课** — 轻松、学不到什么、好过的课。
+- **翘课** — 不去上课。
+- **绩点** — GPA。
 """
 
 MEMORY = """
@@ -226,6 +234,48 @@ def _toy_url(repo: str) -> str:
     return ""
 
 
+_TERM_RE = re.compile(r"^- \*\*(.+?)\*\*")
+
+
+def _glossary_terms(text: str) -> list[str]:
+    """一份 梗.md 里已经有哪些词。"""
+    out = []
+    for line in (text or "").splitlines():
+        m = _TERM_RE.match(line.strip())
+        if m:
+            out.append(m.group(1).strip())
+    return out
+
+
+def _merge_glossary(path: str) -> list[str]:
+    """把种子里她那份还没有的词追加进去，返回补了哪些。
+
+    ⚠️ 只追加。他自己查回来的条目、她改过的说明，一个字都不许动——
+    那是他一条条攒起来的，推平等于让他重学。
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cur = fh.read()
+    except OSError:
+        return []
+    have = set(_glossary_terms(cur))
+    block, added = [], []
+    for line in GLOSSARY_SEED.splitlines():
+        m = _TERM_RE.match(line.strip())
+        if m and m.group(1).strip() in have:
+            continue                      # 已经有了，跳过它和它的续行
+        if m:
+            block.append(line)
+            added.append(m.group(1).strip())
+        elif added and line.startswith(("  ", "\t")):
+            block.append(line)            # 上一条的续行
+    if not block:
+        return []
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(("" if cur.endswith("\n") else "\n") + "\n".join(block) + "\n")
+    return added
+
+
 def main() -> int:
     # --lean：生成精简版（她 /persona lean 时用）。位置不限，剩下的第一个参数是目录。
     args = [a for a in sys.argv[1:] if a != "--lean"]
@@ -240,12 +290,20 @@ def main() -> int:
         fh.write(text)
     print(f"· {'精简版' if lean else '完整版'}人设已写入 {path}（{len(text)} 字）——写入 ≠ 生效，见文末")
 
-    # ⚠️ 梗.md 只在第一次创建，之后绝不覆盖——那是他一条条查回来的东西，
-    # 每次重新生成人设都推平的话，等于他永远学不会。
+    # ⚠️ 梗.md 里他自己查回来的条目**一个字都不许动**——每次重新生成就推平的话，
+    # 等于他永远学不会。但种子里新加的词必须能补进去：
+    # 真事（2026-09-22）她说「这学期还有早八，我不活了」，他问「几点的早八。」——
+    # 我往种子里加了「早八」，可旧逻辑「已存在就保留不动」意味着她那份永远收不到，
+    # 新词只对全新安装的机器有效。所以改成**增量补齐**：只追加缺的，不碰已有的。
     g = os.path.join(out, GLOSSARY_FILE)
     if os.path.exists(g):
+        added = _merge_glossary(g)
         n = sum(1 for x in open(g, encoding="utf-8") if x.startswith("- **"))
-        print(f"✅ {GLOSSARY_FILE} 已存在，保留不动（{n} 条）")
+        if added:
+            print(f"✅ {GLOSSARY_FILE} 补了 {len(added)} 个新词：{'、'.join(added)}（共 {n} 条，"
+                  f"他自己加的一条没动）")
+        else:
+            print(f"✅ {GLOSSARY_FILE} 已是最新（{n} 条）")
     else:
         with open(g, "w", encoding="utf-8") as fh:
             fh.write(GLOSSARY_SEED)
