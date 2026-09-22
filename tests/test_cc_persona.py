@@ -2480,3 +2480,23 @@ def test_context_usage_is_measured_because_that_is_why_he_forgets():
     assert "这段对话装了" in src
     assert "自动压缩掉" in src and "不是不上心" in src
     assert "/reset" in src, "到线了才该提 reset，并说清代价"
+
+
+def test_identical_pinned_block_is_not_resent_every_turn():
+    """她：「claude 聊天都没有这么短的上下文啊，怎么可能聊两句就完完全全占用
+    空间了？」——她是对的。144k 很大，聊天占不满；真正在吃窗口的是我往每轮
+    消息前面塞的东西，而**注入的内容会永久留在对话历史里**。
+    钉选那 2500 字每轮一模一样，第一轮之后全是纯浪费。"""
+    import inspect
+    cc = _cc()
+    body = inspect.getsource(cc.run_cc)
+    code = "\n".join(l for l in body.splitlines() if not l.strip().startswith("#"))
+    assert '_LAST_SENT.get(("pinned", session_id))' in code, "按 session 记上次发过什么"
+    assert '_pf = ""' in code, "一样就不再发"
+    # 换了会话（/reset 之后）必须重新发一次，否则新会话里他就没有钉选了
+    assert '_LAST_SENT[("pinned", session_id)] = _pf' in code
+
+    cc._LAST_SENT.clear()
+    cc._LAST_SENT[("pinned", "s1")] = "同样的内容"
+    assert cc._LAST_SENT.get(("pinned", "s1")) == "同样的内容"
+    assert cc._LAST_SENT.get(("pinned", "s2")) is None, "另一段会话要各记各的"

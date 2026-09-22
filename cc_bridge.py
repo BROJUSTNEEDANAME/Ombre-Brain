@@ -246,6 +246,9 @@ def cc_effort() -> str:
 # 缓存十分钟：钉选很少变，没必要每条消息都打一次大脑。
 _PINNED_TTL = 600
 _PINNED_CACHE: dict = {"at": 0.0, "text": ""}
+# 这一段内容上一次是什么时候塞给他的（按 session 分开记）。
+# 目的只有一个：同样的东西别在对话历史里堆第二份。
+_LAST_SENT: dict = {}
 
 
 async def _pinned_facts() -> str:
@@ -483,7 +486,17 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             + message
         )
 
+    # ⚠️⚠️ 注入的东西**每一轮都会永久留在对话历史里**，不会消失。
+    # 她的原话：「claude 聊天都没有这么短的上下文啊，怎么可能聊两句就完完全全
+    # 占用空间了？」——她是对的，144k 很大，聊天占不满。真正在吃窗口的是我：
+    # 钉选 2500 字 + 替他搜的记忆 3000 字，每轮一份，30 轮就是十几万字。
+    # 其中钉选**每轮一模一样**——第一轮之后全是纯浪费，他在历史里早看过了。
+    # 所以只在「内容变了」的时候再发一次。
     _pf = await _pinned_facts()
+    if _pf and _pf == _LAST_SENT.get(("pinned", session_id)):
+        _pf = ""                       # 这段已经在他的对话历史里了，别再塞一遍
+    elif _pf:
+        _LAST_SENT[("pinned", session_id)] = _pf
     if _pf:
         # 只替他省掉「读钉选」这一步。措辞不能写成「不用再去查」——那句会被他当成
         # 「记忆已经全在这了」，于是她问起某个人、某件事，他一次 breath 都不做，
