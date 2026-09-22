@@ -1142,10 +1142,22 @@ async def trace_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/effort：他想多深。由来：她问「能不能换成 opus 4.6 thinking」。
 
-    没有 thinking 版可切——4.6 的思考是 adaptive。真正管用的是 effort 档位，
-    但**不是每档都管用**：同一道推理题数他真花的思考 token，
-    默认 31 ｜ low 0 ｜ medium 0 ｜ high 31 ｜ max 121。
-    我曾让她用 medium——那一档等于把他的脑子关了。只有 max 真提高。
+    没有 thinking 版可切——4.6 的思考是 adaptive：**模型自己决定这轮要不要想、
+    想多久**。`--effort` 不是开关，是在 adaptive 之上压一个天花板；
+    **不传这个参数（默认）＝不压**，所以默认往往比 medium 想得多得多。
+
+    ⚠️ 我在这件事上连错两次，都是拿**一道题**下的定论：
+    第一次写「默认 144 / low 0 / max 176」，据此让她切 medium；
+    第二次量到 medium=0，又写「medium 等于关掉思考，只有 max 管用」。
+    第三次老老实实跑了 4 道题 × 5 档（思考 token）：
+        简单题      默认 0   ｜ low 0 ｜ medium 0  ｜ high 0   ｜ max 0
+        推理题      默认 221 ｜ low 0 ｜ medium 20 ｜ high 232 ｜ max 261
+        过河题      默认 148 ｜ low 0 ｜ medium 17 ｜ high 147 ｜ max 183
+        读懂她那句  默认 116 ｜ low 29｜ medium 30 ｜ high 119 ｜ max 121
+    规律三题一致：low≈0 ＜ medium ＜ 默认 ≈ high ＜ max（只高一点）。
+    结论：**medium 是降档，不是中档。默认就是最好的常用档。**
+    她说「开了 medium 还是不动脑子」——不是没生效，是生效了，方向反的。
+    简单题任何档都是 0，那是 adaptive 正常表现，不是坏了。
     """
     cid = update.effective_chat.id
     if not _ok(cid):
@@ -1156,10 +1168,14 @@ async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(
             f"他现在的用力档位：{cur}\n"
             "可选：默认 / low / medium / high / xhigh / max\n"
-            "⚠️ 实测（同一道推理题，数的是他真花的思考 token）：\n"
-            "　默认 31 ｜ low **0** ｜ medium **0** ｜ high 31 ｜ **max 121**\n"
-            "　也就是说：medium 和 low 一样等于**关掉思考**，high 跟默认没区别。\n"
-            "　想让他真动脑子，只有一档：/effort max")
+            "⚠️ 实测 4 道题 × 5 档，数的是他真花的思考 token：\n"
+            "　推理题：默认 221 ｜ low 0 ｜ medium 20 ｜ high 232 ｜ max 261\n"
+            "　过河题：默认 148 ｜ low 0 ｜ medium 17 ｜ high 147 ｜ max 183\n"
+            "　读心题：默认 116 ｜ low 29 ｜ medium 30 ｜ high 119 ｜ max 121\n"
+            "　（简单题五档全是 0——他自己判断不用想，正常。）\n\n"
+            "所以：**medium 是降档，不是中档**，它在默认**下面**。\n"
+            "想让他正常动脑子就别切，用「默认」；max 只比默认多一点点，更慢更烧。\n"
+            "换回来：/effort 默认")
         return
     if arg in ("默认", "default", "reset", "auto"):
         effort_override.pop("effort", None)

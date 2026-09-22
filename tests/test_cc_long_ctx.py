@@ -107,12 +107,24 @@ def test_once_broken_the_suffix_is_never_sent_again(monkeypatch):
     assert not _model_arg(seen[0]).endswith("[1m]")
 
 
-def test_the_effort_help_tells_her_max_is_the_only_level_that_thinks():
-    """我曾让她用 /effort medium，实测 medium 的思考 token 是 0——
-    等于我亲手把他的脑子关了。帮助文本必须说清楚。"""
+def test_the_effort_help_says_medium_is_a_downgrade_not_a_middle_gear():
+    """我在这件事上连错两次，都是拿**一道题**下定论：
+    先让她切 medium，又改口说「只有 max 管用」。
+    4 道题 × 5 档跑下来：low≈0 ＜ medium(17~30) ＜ 默认(116~221) ≈ high ＜ max。
+    medium 在默认**下面**——她「开了 medium 还是不动脑子」是因为生效了、方向反的。
+    帮助文本必须说出这一条，并且把她换回「默认」，不是推去 max。"""
     src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
     body = src[src.index("async def effort_cmd"):]
-    body = body[:body.index("\nasync def ", 1)] if "\nasync def " in body[1:] else body
-    assert "/effort max" in body
-    assert "medium" in body and "0" in body
-    assert "144" not in body, "旧的那组实测数字（默认 144/max 176）已经不成立了"
+    body = body[:body.index("\nasync def ", 1)]
+    # ⚠️ 只看**她会看到的那段回复**，不看 docstring——docstring 里故意留着
+    # 「我连错两次」的旧数字当账，拿整个函数体去比会把那笔账误判成残留。
+    # （CLAUDE.md 那条：断言前先想这个串在别处会不会先命中。）
+    body = body[body.index("reply_text("):]
+    assert "/effort 默认" in body, "要把她换回默认，不是推去 max"
+    assert "降档" in body, "必须点明 medium 是降档"
+    # 旧的两组错数字一个都不许留
+    for stale in ("144", "176", "max 121**", "只有一档"):
+        assert stale not in body, f"旧结论残留：{stale}"
+    # 真实测到的那几个数要在场（不许只写结论不给证据）
+    for real in ("221", "148", "116"):
+        assert real in body, f"实测数字缺了：{real}"
