@@ -2340,3 +2340,49 @@ def test_the_glossary_is_never_flattened_by_a_redeploy():
     i = src.index("os.path.exists(g)")
     assert "GLOSSARY_SEED" not in src[:i], "存在的那条路不许整份覆盖"
     assert "只追加" in inspect.getdoc(m._merge_glossary)
+
+
+def test_he_tells_her_himself_when_he_is_running_old_code(monkeypatch):
+    """踩了两次，每次都是她替我踩出来的：
+      9/12→9/15 ccbridge 停在三天前的进程；9/17→9/22 又停了五天——
+      那五天我做的一切（/effort、替他搜记忆、「Memory saved.」过滤、人设裁定）
+      一行都没跑，她一次次问「你到底修了没」。
+    上次我「修」的是让部署器把 ❌ 记进 journal——日志没人看，等于没修。
+    这次让他自己说：进程启动时间 < 仓库 HEAD 提交时间 ＝ 在跑旧代码。
+    ⚠️ 读不到提交时间是「不知道」，绝不许当成「没问题」。"""
+    import inspect
+    cc = _cc()
+
+    monkeypatch.setattr(cc, "_head_commit_time", lambda: cc.PROCESS_STARTED_AT - 100)
+    assert cc.running_old_code()[0] == "ok"
+
+    monkeypatch.setattr(cc, "_head_commit_time", lambda: cc.PROCESS_STARTED_AT + 100)
+    state, line = cc.running_old_code()
+    assert state == "stale"
+    assert "跑的是旧代码" in line and "restart ombre-ccbridge" in line
+    assert "一个都没生效" in line, "得说清后果，不是只报个状态"
+
+    monkeypatch.setattr(cc, "_head_commit_time", lambda: 0.0)
+    state, line = cc.running_old_code()
+    assert state == "unknown" and "❓" in line, "读不到＝不知道，不许印成没问题"
+
+    # /status 里旧代码警告要顶到第一行，不能埋在一堆信息中间
+    src = inspect.getsource(cc.status_cmd)
+    assert "running_old_code()" in src
+    assert "L.insert(0, _line)" in src
+
+
+def test_the_deployer_tells_her_not_just_the_log():
+    """上次的「修」是把 ❌ 写进 journal。日志没人看——她的原话：
+    「上次自动更新就没起作用，你到底干什么吃的？你没吸取上次教训吗？」
+    这次三种出事情况都直接发 Telegram 给她。"""
+    sh = (_ROOT / "deploy" / "auto-update.sh").read_text(encoding="utf-8")
+    code = "\n".join(l for l in sh.splitlines() if not l.lstrip().startswith("#"))
+    assert "tg()" in code and "sendMessage" in code
+    assert "TELEGRAM_API_BASE" in code, "她那边走中转，别写死官方地址"
+    # 三个出事点都要喊人
+    for marker in ("git fetch 失败", "新版本起不来", "没换进程"):
+        i = code.index(marker)
+        assert "tg " in code[i:i + 400], f"「{marker}」没有通知她"
+    # 缺 token/chat id 时安静退出，绝不能让通知把部署搞挂
+    assert 'return 0' in code

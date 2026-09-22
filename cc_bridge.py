@@ -53,6 +53,46 @@ from telegram.ext import (
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CC_WORKDIR = os.environ.get("CC_WORKDIR", os.path.dirname(os.path.abspath(__file__)))
+
+# ⚠️⚠️ 这个进程是什么时候起来的 —— 用来判「我跑的是不是最新代码」。
+# 由来（踩了两次，每次都是她替我踩出来的）：
+#   9/12→9/15  ccbridge 停在三天前的进程，日志却每轮印「✅ 已部署」
+#   9/17→9/22  又停了五天。这五天我做的一切（/effort、替他搜记忆、
+#              「Memory saved.」回执过滤、人设裁定…）一行都没在跑，
+#              而她一次次替我踩，问「你到底修了没」
+# 靠我事后 ssh 上去发现，代价全是她的。所以让他自己说：
+# 进程启动时间 < 仓库 HEAD 的提交时间 = 在跑旧代码，/status 里直接喊出来。
+PROCESS_STARTED_AT = time.time()
+
+
+def _head_commit_time() -> float:
+    """仓库 HEAD 的提交时间（epoch 秒）。拿不到返回 0——拿不到就是「不知道」，
+    绝不当成「没问题」（不知道 ≠ 好消息）。"""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
+             "log", "-1", "--format=%ct"],
+            capture_output=True, text=True, timeout=5)
+        return float(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def running_old_code() -> tuple[str, str]:
+    """(状态, 给她看的一行)。状态：ok / stale / unknown。"""
+    head = _head_commit_time()
+    if not head:
+        return "unknown", "❓ 说不准跑的是不是最新代码（读不到仓库提交时间）"
+    if head <= PROCESS_STARTED_AT:
+        return "ok", f"跑的是最新代码 ✅（这个进程起来 {_age(time.time() - PROCESS_STARTED_AT)}了）"
+    return "stale", (
+        f"❌ **他跑的是旧代码**：进程起来 {_age(time.time() - PROCESS_STARTED_AT)}了，"
+        f"但代码在那之后又更新过——改的东西一个都没生效。\n"
+        f"   → 修：sudo systemctl restart ombre-ccbridge"
+    )
+
+
 CC_TIMEOUT = float(os.environ.get("CC_TIMEOUT", "300"))
 # 缓存档位锁死 1 小时。由来（学自 Cheiineeey《别让缓存睡着》）：Claude Code 订阅
 # 一旦超额进「额外用量」，会把主对话缓存从 1 小时**静默**降到 5 分钟——没有提示，
@@ -668,6 +708,14 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"梗 {n} 条")
     except OSError:
         L.append("❓ 读不到梗.md")
+
+    # ⚠️ 跑的是不是最新代码，摆在最显眼的地方——这个洞害她白等过两次
+    # （9/12→9/15 三天、9/17→9/22 五天），两次都是我事后 ssh 上去才发现。
+    _state, _line = running_old_code()
+    if _state != "ok":
+        L.insert(0, _line)
+    else:
+        L.append(_line)
 
     L.append("对话接得上 ✅" if sessions.get(cid) else "⚠️ 这段对话还没有上下文")
 

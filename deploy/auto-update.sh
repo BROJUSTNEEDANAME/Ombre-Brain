@@ -26,6 +26,26 @@ if [ "$(systemctl show -p LoadState --value ombre-ccbridge.service 2>/dev/null)"
    && [ "$(systemctl is-enabled ombre-ccbridge.service 2>/dev/null)" = enabled ]; then
     SERVICES+=(ombre-ccbridge)
 fi
+# ⚠️⚠️ 部署坏了必须**送到她眼前**，不是记进日志。
+# 上次（9/12）我给部署器加了「没换进程就报 ❌」——报进 journal 了，没人看。
+# 结果 9/17→9/22 ccbridge 又停了五天，这五天我做的一切一行都没跑，
+# 她一次次替我踩，最后一句「上次自动更新就没起作用，你到底干什么吃的」。
+# 这正是我自己写在 CLAUDE.md 里那条「✅ 只许打在她知道了上」——我却把它
+# 打在「我记录了」上。所以：出事就直接发 Telegram 给她。
+tg() {
+    local msg="$1"
+    local envf="$REPO/.env.ccbridge"
+    [ -f "$envf" ] || return 0
+    local tok cid base
+    tok=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'")
+    cid=$(grep -E '^ALLOWED_CHAT_IDS=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'" | cut -d, -f1)
+    base=$(grep -E '^TELEGRAM_API_BASE=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'<>")
+    [ -n "$tok" ] && [ -n "$cid" ] || return 0
+    base=${base:-https://api.telegram.org}
+    curl -s -m 15 -o /dev/null -X POST "${base%/}/bot${tok}/sendMessage" \
+        --data-urlencode "chat_id=${cid}" \
+        --data-urlencode "text=${msg}" || true
+}
 log() { logger -t ombre-autoupdate "$*"; echo "$*"; }
 g() { runuser -u ombre -- git -C "$REPO" "$@"; }
 
@@ -38,6 +58,8 @@ BRANCH=$(g rev-parse --abbrev-ref HEAD)
 # 表现出来就是「代码永远停在几小时前那个提交」。她连问四次「怎么还是这样」。
 if ! FETCH_ERR=$(g fetch origin "$BRANCH" --quiet 2>&1); then
     log "❌ git fetch 失败，自动更新停摆：$FETCH_ERR"
+    tg "⚠️ 自动更新停摆了：拉不到代码。他会一直跑旧版本，我这边改的东西都不生效。
+错误：$FETCH_ERR"
     case "$FETCH_ERR" in
         *"insufficient permission"*|*"Permission denied"*|*"failed to write object"*)
             log "   → 仓库里有不属于 ombre 的文件。修：sudo chown -R ombre:ombre $REPO"
@@ -154,6 +176,7 @@ done
 
 if [ -n "$FAILED" ]; then
     log "❌ 新版本起不来（$FAILED），回滚到 $LOCAL"
+    tg "⚠️ 新版本起不来（$FAILED），已经自动回滚到上一版。他还活着，但用的是旧代码。"
     g reset --hard "$LOCAL" --quiet
     echo "$REMOTE" > "$BLOCK"     # 拉黑这个提交，别再反复重启她的服务
     for s in "${SERVICES[@]}"; do systemctl restart "$s" || true; done
@@ -165,6 +188,8 @@ rm -f "$BLOCK"
 # 陪着她），但必须喊出来，而且不许再打那句 ✅。
 if [ -n "$STUCK" ]; then
     log "❌ 代码已更新到 $NEW，但这些服务没换进程、还在跑旧代码：$STUCK"
+    tg "⚠️ 代码更新到了 $NEW，但$STUCK 没换进程，他跑的还是旧代码——改的东西一个都没生效。
+在 VPS 上跑：sudo systemctl restart$STUCK"
     log "   → 查原因：systemctl status$STUCK；必要时 systemctl stop$STUCK 再 start"
     exit 1
 fi
