@@ -1615,15 +1615,26 @@ def test_check_url_three_states(monkeypatch):
 
 
 def test_written_is_not_live_and_the_script_says_so(tmp_path):
-    """「✅ 人设已写入」让她以为完事了；其实还要 restart + /reset。结尾必须是清单，不是报喜。"""
+    """「✅ 人设已写入」让她以为完事了——结尾必须说清生效条件，不是报喜。
+
+    ⚠️ 这条以前钉的是「还差 restart + /reset」，那是错的：cc_bridge 每条消息都
+    新起 claude 进程并重读 CLAUDE.md，写完文件下一条消息就生效。旧尾注让她
+    白发 /reset 丢掉对话上下文。现在钉死：必须说「下一条消息生效」，
+    必须说不用 restart / 不用 /reset，且不许再把它们列成待办步骤。"""
     import subprocess, os as _os
     script = _ROOT / "scripts" / "make-cc-persona.py"
     env = dict({k: v for k, v in _os.environ.items() if k != "TOY_MCP_URL"}, OMBRE_PERSONA_NO_PROBE="1")
     r = subprocess.run([sys.executable, str(script), str(tmp_path / "d")], env=env, check=True,
                        capture_output=True, text=True)
-    assert "写入 ≠ 生效" in r.stdout
-    assert "systemctl restart ombre-ccbridge" in r.stdout and "/reset" in r.stdout
-    assert "✅ 完整版人设已写入" not in r.stdout
+    out = r.stdout
+    assert "写入 ≠ 生效" in out
+    assert "下一条消息生效" in out, "得告诉她什么时候生效"
+    assert "不用 restart" in out and "不用 /reset" in out, "得明说不需要 restart / reset"
+    # 不许再把 restart / reset 当成「还差的步骤」列出来（那正是误导过人的旧尾注）
+    assert "sudo systemctl restart ombre-ccbridge" not in out
+    assert "在 Telegram 里发 /reset" not in out
+    assert "CC_WORKDIR" in out, "唯一真正的生效条件得写出来"
+    assert "✅ 完整版人设已写入" not in out
 
 
 def test_toy_url_is_also_read_from_env_ccbridge(tmp_path, monkeypatch):
