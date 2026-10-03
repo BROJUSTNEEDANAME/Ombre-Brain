@@ -282,11 +282,14 @@ def main() -> int:
     else:
         print("⚠️ 没找到 .mcp.json——那边的他将没有记忆，先确认这个文件在仓库里")
 
-    print("\n⚠️ 上面是「写进磁盘了」，不是「他在用了」。要真的生效还差两步：")
-    print("   1. sudo systemctl restart ombre-ccbridge   （让进程换上新文件）")
-    print("   2. 在 Telegram 里发 /reset                 （他续的旧会话读不到新人设）")
-    print("   跑 bash scripts/persona-live.sh 能验证到底生效没有。")
-    print(f"   （cc 桥的 CC_WORKDIR 要指到这里：{out}）")
+    # ⚠️ 以前这里写「还差两步：restart + /reset」——是错的，而且误导过人：
+    # cc_bridge 每条消息都新起一个 claude 进程，claude 每次启动都重读 CLAUDE.md
+    # （见 cc_bridge.persona_cmd）。所以不用 restart、不用 /reset，下一条消息就生效。
+    # /reset 只会清掉「聊到哪了」，跟换人设没关系，别让她白丢上下文。
+    print("\n⚠️ 上面是「写进磁盘了」。生效只有一个条件：")
+    print(f"   cc 桥的 CC_WORKDIR 必须指到这里：{out}")
+    print("   满足了就**下一条消息生效**——不用 restart，不用 /reset（那只会让他忘掉刚聊的）。")
+    print("   跑 bash scripts/persona-live.sh 能验证他现在用的到底是哪份。")
     return 0
 
 
