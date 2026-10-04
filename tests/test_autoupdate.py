@@ -171,3 +171,46 @@ def test_the_installer_regenerates_the_persona_before_restarting():
     assert ".env.ccbridge" in code, "目录得从配置读，写死了错了也没人发现"
     assert code.index("make-cc-persona.py") < code.index("systemctl restart"), \
         "必须在重启之前生成，否则这一轮起来的还是旧人设"
+
+
+def _cc_workdir_block(src: str) -> str:
+    i = src.index("# --- cc_workdir:begin ---")
+    j = src.index("# --- cc_workdir:end ---")
+    return src[i:j]
+
+
+def _run_block_under_pipefail(block: str, repo: pathlib.Path) -> "subprocess.CompletedProcess[str]":
+    import subprocess
+    script = "set -euo pipefail\nREPO=%r\n%s\necho REACHED:$CC_WORKDIR\n" % (str(repo), block)
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                          env={"PATH": "/usr/bin:/bin"})
+
+
+def test_missing_cc_workdir_in_env_file_must_not_kill_the_deployer(tmp_path):
+    """2026-10-04 的病根。setup-ccbridge.sh 把 CC_WORKDIR 写进 unit 的 Environment=，
+    不写 .env.ccbridge；原来那条裸的 `CC_WORKDIR=$(grep ... | tail | cut | tr)` 在
+    set -euo pipefail 下 grep 没命中就把整个脚本杀了——印完「拉到新提交」就断气，
+    没重启、没重新生成人设、没 ❌ 也没 ✅。她的服务从 9/25 到 10/4 一次都没被换过进程，
+    日志却每 5 分钟喊一次「重启」。这里**真的跑**那几行，三种情况都必须活着走到底。"""
+    block = _cc_workdir_block(SH)
+    # 1) .env 文件根本不存在
+    r = _run_block_under_pipefail(block, tmp_path / "no-such-repo")
+    assert r.returncode == 0 and "REACHED:/home/ombre/nikto-cc" in r.stdout, r.stderr
+    # 2) .env 存在但没有那一行（她机器上就是这样）
+    repo = tmp_path / "repo"; repo.mkdir()
+    (repo / ".env.ccbridge").write_text("TOY_MCP_URL=https://x/mcp\n", encoding="utf-8")
+    r = _run_block_under_pipefail(block, repo)
+    assert r.returncode == 0 and "REACHED:/home/ombre/nikto-cc" in r.stdout, r.stderr
+    # 3) .env 里配了，就用它的
+    (repo / ".env.ccbridge").write_text("CC_WORKDIR=/srv/nikto\n", encoding="utf-8")
+    r = _run_block_under_pipefail(block, repo)
+    assert r.returncode == 0 and "REACHED:/srv/nikto" in r.stdout, r.stderr
+
+
+def test_the_restart_log_line_does_not_claim_a_new_commit_when_there_is_none():
+    """代码没变、只是服务跑旧代码时，原来也印「拉到新提交 @ 同一个号」——
+    她看着日志以为每 5 分钟都拉到了新东西。日志不许说假话。"""
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    assert "代码没变（@ $NEW）" in code
+    i = code.index('if [ "$LOCAL" = "$REMOTE" ]; then\n    log "代码没变')
+    assert "拉到新提交 $BRANCH @ $NEW" in code[i:i+400]

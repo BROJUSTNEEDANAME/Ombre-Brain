@@ -148,8 +148,11 @@ fi
 # personality.py 两次生成逐字相同），所以不一致就是没重新生成、或生成失败。
 CC_OK=1
 if [ -z "${CC_WORKDIR:-}" ]; then
-    CC_WORKDIR=$(grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" 2>/dev/null | tail -1 \
-                 | cut -d= -f2- | tr -d '[:space:]')
+    # 先看跑着的 unit 的 Environment=（setup-ccbridge.sh 写在这儿），再看 .env，再默认
+    CC_WORKDIR=$(systemctl show ombre-ccbridge.service -p Environment --value 2>/dev/null \
+                 | tr ' ' '\n' | grep -E '^CC_WORKDIR=' | tail -1 | cut -d= -f2-)
+    [ -n "$CC_WORKDIR" ] || CC_WORKDIR=$(grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" 2>/dev/null \
+                 | tail -1 | cut -d= -f2- | tr -d '[:space:]')
     CC_WORKDIR=${CC_WORKDIR:-/home/ombre/nikto-cc}
     CHECK_CC=$CC_LOADED
 else

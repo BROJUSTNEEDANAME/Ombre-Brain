@@ -126,14 +126,39 @@ for u in ombre-autoupdate.service ombre-autoupdate.timer; do
 done
 [ -n "$UNIT_CHANGED" ] && { systemctl daemon-reload; log "部署器的 unit 文件已更新"; }
 
-log "拉到新提交 $BRANCH @ $NEW，重启服务：${SERVICES[*]}"
+if [ "$LOCAL" = "$REMOTE" ]; then
+    log "代码没变（@ $NEW），只重启在跑旧代码的服务：$STALE"
+else
+    log "拉到新提交 $BRANCH @ $NEW，重启服务：${SERVICES[*]}"
+fi
 
 # ⚠️ cc 桥的人设是**生成**出来的（nikto-cc/CLAUDE.md 来自 personality.py）。
 # 光重启不重新生成，改完人设那边会一直用旧的，而且一点提示都没有——
 # 这种「看起来更新了、其实没更新」的静默失败最难查。
-CC_WORKDIR=$(grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" 2>/dev/null | tail -1 \
-             | cut -d= -f2- | tr -d '[:space:]')
-CC_WORKDIR=${CC_WORKDIR:-/home/ombre/nikto-cc}
+#
+# ⛔⛔ 2026-10-04 查出的病根（9/25 和 10/4 两段「每 5 分钟喊一次重启、服务纹丝不动」
+# 的循环都是它）：这里原来是一条裸的
+#     CC_WORKDIR=$(grep '^CC_WORKDIR=' .env.ccbridge | tail | cut | tr)
+# 而 setup-ccbridge.sh 把 CC_WORKDIR 写进的是 unit 的 Environment=，**不写 .env.ccbridge**。
+# grep 没命中 → pipefail 让整条管道非零 → set -e 在这一行把脚本杀了。
+# 于是每一轮都是：印完「拉到新提交」就断气——没重启、没重新生成、没 ❌ 也没 ✅。
+# 日志看起来像在干活，其实什么都没干。下面这段任何一步失败都不许杀脚本。
+# --- cc_workdir:begin ---
+resolve_cc_workdir() {
+    local v=""
+    # 1) 跑着的 unit 里的 Environment=（setup-ccbridge.sh 就写在这儿）
+    v=$( { systemctl show ombre-ccbridge.service -p Environment --value 2>/dev/null || true; } \
+         | tr ' ' '\n' | { grep -E '^CC_WORKDIR=' || true; } | tail -1 | cut -d= -f2- )
+    # 2) .env.ccbridge（有人手动配在这儿也认）
+    if [ -z "$v" ] && [ -f "$REPO/.env.ccbridge" ]; then
+        v=$( { grep -E '^CC_WORKDIR=' "$REPO/.env.ccbridge" || true; } \
+             | tail -1 | cut -d= -f2- | tr -d '[:space:]' )
+    fi
+    # 3) 默认值
+    CC_WORKDIR=${v:-/home/ombre/nikto-cc}
+}
+resolve_cc_workdir
+# --- cc_workdir:end ---
 if printf '%s\n' "${SERVICES[@]}" | grep -qx ombre-ccbridge; then
     if runuser -u ombre -- "$REPO/.venv/bin/python" \
             "$REPO/scripts/make-cc-persona.py" "$CC_WORKDIR" >/dev/null 2>&1; then
