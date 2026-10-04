@@ -102,6 +102,17 @@ def test_not_a_git_repo_is_a_question_mark_not_a_check(tmp_path):
     assert "✅ 成了" not in out
 
 
+def test_fetch_is_not_run_through_a_subshell_that_loses_owner():
+    """第一版把 g() 用 declare -f 塞进 bash -c 里跑 fetch，子 shell 没有 $OWNER，
+    VPS 上 root 一跑就是「runuser: user  does not exist」，① 永远 ❓。
+    这里钉死：真正执行的行里不许再出现 declare -f / bash -c 这种搬函数的写法。"""
+    src = SCRIPT.read_text(encoding="utf-8")
+    code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
+    bad = [ln.strip() for ln in code if "declare -f" in ln or 'bash -c "' in ln]
+    assert not bad, bad
+    assert "fetch_branch()" in src
+
+
 def test_missing_repo_fails_loudly(tmp_path):
     out = _run(tmp_path / "nope")
     assert "❌ 找不到" in out

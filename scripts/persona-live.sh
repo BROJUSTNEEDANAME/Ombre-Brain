@@ -35,10 +35,22 @@ fi
 # git 要以仓库属主的身份跑：root 直接 git 会撞 "dubious ownership"，auto-update 也是这么做的
 OWNER=$(stat -c %U "$REPO" 2>/dev/null || echo "")
 if [ -n "$OWNER" ] && [ "$(id -un)" != "$OWNER" ] && command -v runuser >/dev/null 2>&1; then
+    AS_OWNER=1
     g() { runuser -u "$OWNER" -- git -C "$REPO" "$@"; }
 else
+    AS_OWNER=0
     g() { git -C "$REPO" "$@"; }
 fi
+# fetch 单独写：timeout 包不了 bash 函数。第一版用 bash -c "$(declare -f g)" 绕，
+# 子 shell 里没有 $OWNER，于是 runuser -u "" → 「user  does not exist」，① 永远 ❓。
+# 她第一次跑就撞上了。命令展开写，不玩花活。
+fetch_branch() {
+    if [ "$AS_OWNER" = 1 ]; then
+        timeout 25 runuser -u "$OWNER" -- git -C "$REPO" fetch origin "$1" --quiet
+    else
+        timeout 25 git -C "$REPO" fetch origin "$1" --quiet
+    fi
+}
 
 # ---------- ① 代码：磁盘上的提交是不是远端最新 ----------
 CODE_OK=2   # 0 没到 / 1 到了 / 2 测不出来
@@ -50,7 +62,7 @@ else
     echo "   磁盘上的提交：$HEAD_LINE"
     FETCHED=1
     if [ -z "${PERSONA_LIVE_NO_FETCH:-}" ]; then
-        if ! FERR=$(timeout 25 bash -c "$(declare -f g); g fetch origin '$BRANCH' --quiet" 2>&1); then
+        if ! FERR=$(fetch_branch "$BRANCH" 2>&1); then
             FETCHED=0
             echo "   ❓ fetch 失败（${FERR:0:120}）——下面只能跟本地上次拉到的远端比"
         fi
@@ -116,10 +128,13 @@ for s in "${SERVICES[@]}"; do
         RUNNING_OK=0
         continue
     fi
+    # 顺带把主进程本身的启动时间和 PID 印出来：ActiveEnterTimestamp 是 unit 的，
+    # ExecMainStartTimestamp 是进程的。两者对不上就是「restart 发出去了、进程没换」。
+    MAIN="pid $(systemctl show "$s" -p MainPID --value 2>/dev/null) 起于 $(systemctl show "$s" -p ExecMainStartTimestamp --value 2>/dev/null | cut -c1-24)"
     if [ "$STE" -ge "$PT" ]; then
-        echo "② $s：✅ 启动于 $(date -d "@$STE" '+%m-%d %H:%M')，晚于人设改动 → 跑的是磁盘上这一版"
+        echo "② $s：✅ 启动于 $(date -d "@$STE" '+%m-%d %H:%M')，晚于人设改动 → 跑的是磁盘上这一版（$MAIN）"
     else
-        echo "② $s：❌ 启动于 $(date -d "@$STE" '+%m-%d %H:%M')，早于人设改动 → 还在跑旧的"
+        echo "② $s：❌ 启动于 $(date -d "@$STE" '+%m-%d %H:%M')，早于人设改动 → 还在跑旧的（$MAIN）"
         RUNNING_OK=0
     fi
 done
