@@ -89,6 +89,7 @@ config = load_config()
 setup_logging(config.get("log_level", "INFO"))
 from memory_guard import data_dump_reason, refuse_message
 from verbatim_recall import merge_verbatim, wants_verbatim
+import raw_archive
 import health_store
 
 logger = logging.getLogger("ombre_brain")
@@ -722,27 +723,19 @@ async def breath(
             logger.warning(f"Failed to dehydrate search result / 检索结果脱水失败: {e}")
             continue
 
-    # --- Random surfacing: when search returns < 3, 40% chance to float old memories ---
-    # --- 随机浮现：检索结果不足 3 条时，40% 概率从低权重旧桶里漂上来 ---
-    if len(matches) < 3 and random.random() < 0.4:
-        try:
-            all_buckets = await bucket_mgr.list_all(include_archive=False)
-            matched_ids = {b["id"] for b in matches}
-            low_weight = [
-                b for b in all_buckets
-                if b["id"] not in matched_ids
-                and decay_engine.calculate_score(b["metadata"]) < 2.0
-            ]
-            if low_weight:
-                drifted = random.sample(low_weight, min(random.randint(1, 3), len(low_weight)))
-                drift_results = []
-                for b in drifted:
-                    clean_meta = {k: v for k, v in b["metadata"].items() if k != "tags"}
-                    summary = await dehydrator.dehydrate(strip_wikilinks(b["content"]), clean_meta)
-                    drift_results.append(f"[surface_type: random]\n{summary}")
-                results.append("--- 忽然想起来 ---\n" + "\n---\n".join(drift_results))
-        except Exception as e:
-            logger.warning(f"Random surfacing failed / 随机浮现失败: {e}")
+    # （「忽然想起来」随机漂浮已退役 2026-10-06：搜不到时 40% 概率塞几条不相干的旧桶进来，
+    #  跟「搜到什么就是什么」正好相反——那是往检索结果里掺噪音。）
+
+    # --- 聊天原文通道：逐字，原话优先（学 paramecium：原文是唯一真相）---
+    # 桶是摘要，会把名字吃掉（前夫哥那两条桶里一个 Eden 都没有）；原话在聊天存档里。
+    # 放在最前面：调用方（cc 桥替他搜）会截断长结果，原话不能被截掉。
+    try:
+        raw = raw_archive.search(query)
+    except Exception as e:  # noqa: BLE001 — 原文通道坏了不许拖垮整个检索
+        logger.warning(f"Raw archive search failed / 原文检索失败: {e}")
+        raw = ""
+    if raw:
+        results.insert(0, "=== 聊天原文（逐字，新→旧）===\n" + raw)
 
     if not results:
         return "未找到相关记忆。"
