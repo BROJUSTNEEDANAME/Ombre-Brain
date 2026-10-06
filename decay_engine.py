@@ -42,6 +42,10 @@ class DecayEngine:
         self.decay_lambda = decay_cfg.get("lambda", 0.05)
         self.threshold = decay_cfg.get("threshold", 0.3)
         self.check_interval = decay_cfg.get("check_interval_hours", 24)
+        # ⛔ 学 paramecium：没有遗忘曲线。默认**不再**把低分桶挪进 archive/。
+        # 分数照算（无参 breath 的浮现排序还要用），但不再拿它把记忆藏起来。
+        # 想要旧行为：config 里 decay.auto_archive: true。
+        self.auto_archive = bool(decay_cfg.get("auto_archive", False))
 
         # --- Emotion weight params (continuous arousal coordinate) ---
         # --- 情感权重参数（基于连续 arousal 坐标）---
@@ -237,7 +241,7 @@ class DecayEngine:
 
             # --- Below threshold → archive (simulate forgetting) ---
             # --- 低于阈值 → 归档（模拟遗忘）---
-            if score < self.threshold:
+            if self.auto_archive and score < self.threshold:
                 try:
                     success = await self.bucket_mgr.archive(bucket["id"])
                     if success:

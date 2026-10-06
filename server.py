@@ -655,7 +655,7 @@ async def breath(
     # 测试能真的跑到）：query 原样出现在正文里的桶必然捞回来、排最前。
     try:
         matches = merge_verbatim(query, matches,
-                                 await bucket_mgr.list_all(include_archive=False))
+                                 await bucket_mgr.list_all(include_archive=True))  # 归档也是她说过的话
     except Exception as e:
         logger.warning(f"Verbatim channel failed / 逐字通道失败: {e}")
 

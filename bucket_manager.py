@@ -453,7 +453,12 @@ class BucketManager:
             return []
 
         limit = limit or self.max_results
-        all_buckets = await self.list_all(include_archive=False)
+        # ⛔ 学 paramecium：搜到什么就是什么。归档桶（衰减沉底的、已解决的）**照样搜**。
+        # 由来 2026-10-06：她问「Eden」，库里明明有「前夫哥」问答录、「前夫的东西要丢吗」，
+        # 全在 archive/ 里——这里原来 include_archive=False，关键词根本碰不到，
+        # 他回「没找着、你告诉我」，她以为记忆全丢了。说明书写的「沉底等关键词激活」
+        # 实际是关键词也唤不醒，等于删了。
+        all_buckets = await self.list_all(include_archive=True)
 
         if not all_buckets:
             return []
@@ -505,10 +510,8 @@ class BucketManager:
                 weight_sum = self.w_topic + self.w_emotion + self.w_time + self.w_importance
                 normalized = (total / weight_sum) * 100 if weight_sum > 0 else 0
 
-                # Resolved buckets get ranking penalty (but still reachable by keyword)
-                # 已解决的桶降权排序（但仍可被关键词激活）
-                if meta.get("resolved", False):
-                    normalized *= 0.3
+                # （原来这里「已解决 ×0.3」——一件事解决了不等于它不值得被搜到。
+                #  已解决只影响无参 breath 的浮现，不影响带关键词的检索。去掉了。）
 
                 if normalized >= self.fuzzy_threshold:
                     bucket["score"] = round(normalized, 2)
