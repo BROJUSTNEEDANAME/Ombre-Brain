@@ -60,3 +60,21 @@ async def test_old_forgetting_behaviour_is_opt_in_only(test_config, bucket_mgr):
     eng.threshold = 10_000
     await eng.run_decay_cycle()
     assert (await bucket_mgr.get(bid))["metadata"].get("type") == "archived"
+
+
+def test_dream_is_retired_not_offered_as_a_tool():
+    """她：「dream 是干什么的，我感觉从来没用过」「拿掉 dream」。
+    它还会引导他把记忆 resolve，已解决就沉进归档——前夫哥就是这么搜不到的。"""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    srv = (root / "server.py").read_text(encoding="utf-8")
+    i = srv.index("async def dream() -> str:")
+    above = [ln.strip() for ln in srv[:i].splitlines()[-6:]]
+    assert "@mcp.tool()" not in above, "dream 不许再注册成 MCP 工具"
+    assert '"dream": dream' not in srv
+    assert '"name": "dream"' not in srv
+    persona = (root / "scripts" / "make-cc-persona.py").read_text(encoding="utf-8")
+    assert "/ read / dream" not in persona
+    bot = (root / "telegram_bot.py").read_text(encoding="utf-8")
+    code = [ln for ln in bot.splitlines() if not ln.lstrip().startswith("#")]
+    assert not any("run_daily(nightly_dream" in ln for ln in code)

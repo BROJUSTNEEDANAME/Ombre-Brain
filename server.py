@@ -230,6 +230,8 @@ async def dream_hook(request):
     from starlette.responses import PlainTextResponse
     if not _sensitive_gate(request):
         return PlainTextResponse("unauthorized", status_code=403)
+    # dream 已退役（2026-10-06），钩子不再返回任何东西。
+    return PlainTextResponse("")
     try:
         all_buckets = await bucket_mgr.list_all(include_archive=False)
         candidates = [
@@ -1343,7 +1345,9 @@ async def read(bucket_ids: str = "", max_tokens: int = 8000, pinned: bool = Fals
 # 读取最近新增的表层桶（≤10个），返回给 Claude 在提示词引导下自主思考。
 # Claude then decides: resolve some, write feels, or do nothing.
 # =============================================================
-@mcp.tool()
+# ⛔ 2026-10-06 退役（她：「dream 是干什么的，我感觉从来没用过」「拿掉 dream」）。
+# 学 paramecium：不做梦。而且它会引导他把记忆 trace(resolved=1)「放下」，已解决的会被
+# 挪进归档——前夫哥那两条就是这么沉底、搜不到的。函数留着备查（冻结不删除），不再注册成工具。
 async def dream() -> str:
     """做梦——读取最近新增的记忆桶,供你自省。读完后可以trace(resolved=1)放下,或hold(feel=True)写感受。"""
     await decay_engine.ensure_started()
@@ -1592,14 +1596,6 @@ _TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "dream",
-            "description": "做梦——读取最近记忆桶供自省。读完可trace(resolved=1)放下或hold(feel=true)写感受。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "make_page",
             "description": "把一段完整HTML存成一个可点开的网页,返回链接。用户想要网页/小网站/图表/贺卡这类能看的东西时用它,直接把链接发给用户,绝不要把HTML代码贴进聊天。html要自成一体(内联CSS/JS,不引外部资源)。",
             "parameters": {
@@ -1760,7 +1756,6 @@ _TOOL_DISPATCH = {
     "trace": trace,
     "pulse": pulse,
     "read": read,
-    "dream": dream,
     "set_state": set_state,
     "reading_status": reading_status,
     "reading_context": reading_context,

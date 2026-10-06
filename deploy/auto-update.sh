@@ -37,9 +37,13 @@ tg() {
     local envf="$REPO/.env.ccbridge"
     [ -f "$envf" ] || return 0
     local tok cid base
-    tok=$(grep -E '^TELEGRAM_BOT_TOKEN=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'")
-    cid=$(grep -E '^ALLOWED_CHAT_IDS=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'" | cut -d, -f1)
-    base=$(grep -E '^TELEGRAM_API_BASE=' "$envf" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'<>")
+    # ⛔⛔ 2026-10-06 实测：这里原来三条裸的 $(grep … | …)。.env 里一般**没有**
+    # TELEGRAM_API_BASE，grep 没命中 → pipefail → set -e 当场把脚本杀掉，curl 一次都没
+    # 跑到。也就是说「出事就发 Telegram 给她」这条从写上那天起**一条都没发出去过**——
+    # 她只能一次次自己开 VPS 看。每个 grep 都兜住，缺哪项就当空。
+    tok=$( { grep -E '^TELEGRAM_BOT_TOKEN=' "$envf" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'")
+    cid=$( { grep -E '^ALLOWED_CHAT_IDS=' "$envf" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'" | cut -d, -f1)
+    base=$( { grep -E '^TELEGRAM_API_BASE=' "$envf" 2>/dev/null || true; } | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'<>")
     [ -n "$tok" ] && [ -n "$cid" ] || return 0
     base=${base:-https://api.telegram.org}
     curl -s -m 15 -o /dev/null -X POST "${base%/}/bot${tok}/sendMessage" \
@@ -47,6 +51,21 @@ tg() {
         --data-urlencode "text=${msg}" || true
 }
 log() { logger -t ombre-autoupdate "$*"; echo "$*"; }
+
+# ⛔⛔ 任何一行意外退出，都要喊到她面前。
+# 由来：9/25 和 10/4 两段循环——部署器每 5 分钟死在同一行，日志只有一句「拉到新提交」，
+# 没 ❌ 也没 ✅；她每次都得自己开 VPS、跑命令、截图给我。死得悄无声息，是最坏的死法。
+# set -E 让函数里的失败也触发 ERR；trap 里先撤掉自己，防止通知本身失败再递归。
+set -E
+on_unexpected_exit() {
+    local rc=$? line=${1:-?}
+    trap - ERR
+    log "❌ 部署器在第 $line 行意外退出（退出码 $rc），这一轮什么都没部署"
+    tg "⚠️ 自动部署这一轮在第 $line 行自己崩了（退出码 $rc），新代码没上线，他还是旧的。
+不用你动手——把这条转给我（Claude）就行。" || true
+    exit "$rc"
+}
+trap 'on_unexpected_exit $LINENO' ERR
 g() { runuser -u ombre -- git -C "$REPO" "$@"; }
 
 cd "$REPO"
@@ -165,6 +184,7 @@ if printf '%s\n' "${SERVICES[@]}" | grep -qx ombre-ccbridge; then
         log "cc 人设已按新代码重新生成（$CC_WORKDIR）"
     else
         log "⚠️ cc 人设重新生成失败，那边可能还在用旧人设"
+        PERSONA_FAILED=1
     fi
 fi
 
@@ -219,3 +239,14 @@ if [ -n "$STUCK" ]; then
     exit 1
 fi
 log "✅ 已部署 $BRANCH @ $NEW，${#SERVICES[@]} 个服务都在跑新代码：${SERVICES[*]}"
+# 成功也要送到她眼前——不然她只能自己开 VPS 跑 persona-live.sh 才知道上没上线。
+# ⚠️ 走到这里的前提都是查实的：没有起不来的（FAILED）、没有没换进程的（STUCK，
+# 比的是重启前后的 ActiveEnterTimestampMonotonic）。人设重生成失败就不许说「成了」。
+SUBJECT=$(g log -1 --format=%s 2>/dev/null || echo "")
+if [ -n "${PERSONA_FAILED:-}" ]; then
+    tg "⚠️ 代码上线了（$NEW：$SUBJECT），进程也换了，但他那份人设重新生成失败——他说话还是旧人设。
+把这条转给我（Claude）。"
+    exit 1
+fi
+tg "✅ 已上线：$NEW $SUBJECT
+服务都换成了新进程，他的人设已按新代码重新生成。下一条消息就是新的，不用 /reset。"

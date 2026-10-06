@@ -63,7 +63,7 @@ def _run_inprocess():
 
         async def _gather():
             out = []
-            for handler in (server.breath_hook, server.dream_hook):
+            for handler in (server.breath_hook,):  # dream 已退役
                 try:
                     resp = await handler(None)
                     text = resp.body.decode("utf-8").strip()
@@ -96,7 +96,7 @@ def _run_http(base_url):
     except ValueError:
         timeout = 10.0
 
-    for path in ("/breath-hook", "/dream-hook"):
+    for path in ("/breath-hook",):  # dream 已退役
         try:
             headers = {"Accept": "text/plain"}
             token = os.environ.get("OMBRE_WEB_TOKEN", "").strip()

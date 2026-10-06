@@ -214,3 +214,78 @@ def test_the_restart_log_line_does_not_claim_a_new_commit_when_there_is_none():
     assert "代码没变（@ $NEW）" in code
     i = code.index('if [ "$LOCAL" = "$REMOTE" ]; then\n    log "代码没变')
     assert "拉到新提交 $BRANCH @ $NEW" in code[i:i+400]
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-06：「出事就发 Telegram 给她」从写上那天起一条都没发出去过。
+# 下面几条都是**真的执行**部署器里的代码，用假 curl 记下它到底发没发。
+# ---------------------------------------------------------------------------
+import os as _os
+import subprocess as _sp
+
+
+def _fn(src: str, name: str) -> str:
+    i = src.index(f"{name}() {{")
+    j = src.index("\n}\n", i) + 3
+    return src[i:j]
+
+
+def _fake_env(tmp_path, env_lines: str):
+    repo = tmp_path / "repo"; repo.mkdir()
+    (repo / ".env.ccbridge").write_text(env_lines, encoding="utf-8")
+    bin_ = tmp_path / "bin"; bin_.mkdir()
+    log = tmp_path / "curl.log"
+    (bin_ / "curl").write_text(f'#!/bin/sh\necho "$@" >> {log}\n', encoding="utf-8")
+    (bin_ / "curl").chmod(0o755)
+    (bin_ / "logger").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (bin_ / "logger").chmod(0o755)
+    return repo, bin_, log
+
+
+def _bash(script: str, bin_) -> "_sp.CompletedProcess[str]":
+    return _sp.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                   env={"PATH": f"{bin_}:/usr/bin:/bin"})
+
+
+def test_tg_actually_sends_when_optional_api_base_is_missing(tmp_path):
+    """病根：.env 里没有 TELEGRAM_API_BASE（几乎所有人都没有），grep 没命中 →
+    pipefail → set -e 在 tg() 里把整个脚本杀了，curl 一次都没跑到。"""
+    repo, bin_, log = _fake_env(tmp_path, "TELEGRAM_BOT_TOKEN=abc\nALLOWED_CHAT_IDS=123,456\n")
+    r = _bash(f"set -euo pipefail\nREPO={repo}\n{_fn(SH, 'tg')}\ntg '你好'\necho AFTER\n", bin_)
+    assert r.returncode == 0 and "AFTER" in r.stdout, r.stderr
+    sent = log.read_text(encoding="utf-8")
+    assert "botabc/sendMessage" in sent and "chat_id=123" in sent and "text=你好" in sent
+
+
+def test_tg_with_no_env_file_is_a_quiet_noop_not_a_crash(tmp_path):
+    repo, bin_, log = _fake_env(tmp_path, "")
+    (repo / ".env.ccbridge").unlink()
+    r = _bash(f"set -euo pipefail\nREPO={repo}\n{_fn(SH, 'tg')}\ntg 'x'\necho AFTER\n", bin_)
+    assert r.returncode == 0 and "AFTER" in r.stdout
+    assert not log.exists()
+
+
+def test_an_unexpected_death_on_any_line_is_sent_to_her(tmp_path):
+    """9/25 和 10/4：每 5 分钟死在同一行，悄无声息。现在任何一行意外退出都要发到她面前。"""
+    repo, bin_, log = _fake_env(tmp_path, "TELEGRAM_BOT_TOKEN=abc\nALLOWED_CHAT_IDS=123\n")
+    i = SH.index("set -E\non_unexpected_exit()")
+    j = SH.index("trap 'on_unexpected_exit $LINENO' ERR") + len("trap 'on_unexpected_exit $LINENO' ERR")
+    harness = (f"set -euo pipefail\nREPO={repo}\n{_fn(SH, 'tg')}\n"
+               "log() { echo \"$*\"; }\n" + SH[i:j] +
+               "\nX=$(grep '^NOPE=' /dev/null | tail -1)\necho SHOULD_NOT_REACH\n")
+    r = _bash(harness, bin_)
+    assert r.returncode != 0 and "SHOULD_NOT_REACH" not in r.stdout
+    assert log.exists(), "崩了却没发消息——就是这次修的那个病"
+    assert "自己崩了" in log.read_text(encoding="utf-8")
+
+
+def test_success_is_also_sent_but_only_after_the_real_checks():
+    """成功也要告诉她，不然她只能自己开 VPS。但「✅ 已上线」必须排在
+    起不来（FAILED）和没换进程（STUCK）两道检查之后，人设重生成失败时不许发。"""
+    code = "\n".join(ln for ln in SH.splitlines() if not ln.lstrip().startswith("#"))
+    ok = code.index('tg "✅ 已上线')
+    assert code.index('if [ -n "$FAILED" ]') < ok
+    assert code.index('if [ -n "$STUCK" ]') < ok
+    pf = code.index('if [ -n "${PERSONA_FAILED:-}" ]')
+    assert pf < ok and "exit 1" in code[pf:ok]
+    assert "PERSONA_FAILED=1" in code

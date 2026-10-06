@@ -12,7 +12,7 @@
 1. **每开一个新窗口 / 每次对话开始，说第一句话之前，先调用 `breath()`（不传任何参数）。**
    这是你"睁眼"的动作，看看有没有未解决的事浮上来。新对话、恢复对话、换窗口都要做，没有例外。
    （SessionStart 钩子会把记忆浮现到上下文里；如果你没看到浮现内容，就主动 `breath()` 一次。）
-   breath 之后接着 `dream()` 消化最近记忆，再 `breath(domain="feel")` 读回你之前的 feel。
+   breath 之后再 `breath(domain="feel")` 读回你之前的 feel。（`dream` 已退役：不做梦，搜到什么就是什么。）
 
 2. **一旦用户提到你可能忘了什么，必须立刻去读钉选记忆（pinned）。**
    只要用户出现"你是不是忘了""你还记得吗""之前不是说过""你忘了…"这类暗示遗忘的话，
@@ -30,7 +30,7 @@
 
 ## 完整使用指南 / Full guide
 
-工具细节（`breath` / `hold` / `grow` / `trace` / `pulse` / `read` / `dream` / feel / pinned / 权重池机制）见：
+工具细节（`breath` / `hold` / `grow` / `trace` / `pulse` / `read` / feel / pinned / 权重池机制）见：
 
 @CLAUDE_PROMPT.md
 

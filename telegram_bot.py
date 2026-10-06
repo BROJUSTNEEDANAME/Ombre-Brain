@@ -2725,8 +2725,7 @@ def main() -> None:
         # 想再打开就设环境变量 OMBRE_NUDGE=1。
         if os.environ.get("OMBRE_NUDGE", "").strip() in ("1", "true", "True", "yes"):
             app.job_queue.run_repeating(check_inactivity, interval=300, first=300)
-        # 每天夜里 4 点自己做梦，消化记忆
-        app.job_queue.run_daily(nightly_dream, time=dtime(hour=4, tzinfo=USER_TZ))
+        # （夜里 4 点自动做梦已退役 2026-10-06：她说从没用过，而且做梦会把记忆标成已解决、沉底。）
         # 每天上午 10 点查一次，只在特殊日子主动找她
         app.job_queue.run_daily(daily_special_checkin, time=dtime(hour=10, tzinfo=USER_TZ))
         # 每天早安（时间用 OMBRE_MORNING_HM 调，默认 06:50，要比她起得早）

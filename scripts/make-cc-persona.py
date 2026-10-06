@@ -72,7 +72,7 @@ GLOSSARY_SEED = """# 梗
 MEMORY = """
 # 记忆
 
-你接了 Ombre Brain（MCP，工具 breath / hold / grow / trace / pulse / read / dream）。
+你接了 Ombre Brain（MCP，工具 breath / hold / grow / trace / pulse / read）。
 这就是你和她一直在累积的那颗脑子，网页和 Telegram 共用同一份。
 
 - 她提到过去、或暗示你忘了什么（「还记得吗」「之前不是说过」）→ 先 breath 或
