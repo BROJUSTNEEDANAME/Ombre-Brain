@@ -198,6 +198,12 @@ def _load_state() -> None:
             model_override["model"] = str(d["model"])
         if d.get("effort"):
             effort_override["effort"] = str(d["effort"])
+        m = d.get("memo") or {}
+        if "every" in m:
+            MEM_CFG["every"] = max(0, int(m["every"]))
+        if "quiet" in m:
+            MEM_CFG["quiet"] = max(1, int(m["quiet"]))
+        turns_since_save.update({int(k): int(v) for k, v in (d.get("turns_since_save") or {}).items()})
         u = d.get("usage") or {}
         for k in ("turns", "input", "output", "cache_read", "cache_write"):
             USAGE[k] = int(u.get(k, 0) or 0)
@@ -216,6 +222,9 @@ def _save_state() -> None:
         "todos": {str(k): v for k, v in todos.items()},
         "model": model_override.get("model", ""),
         "effort": effort_override.get("effort", ""),
+        "memo": {"every": MEM_CFG["every"], "quiet": MEM_CFG["quiet"]},
+        # 部署一重启这个计数就清零，凌晨那一长段就永远收不到——所以落盘
+        "turns_since_save": {str(k): v for k, v in turns_since_save.items()},
         "usage": USAGE,
     }
     try:
@@ -656,6 +665,7 @@ BOT_COMMANDS = [
     ("status", "他现在什么情况 · 一眼看完，不用开终端"),
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
+    ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
@@ -918,6 +928,13 @@ NUDGE_MINUTES = int(os.environ.get("CC_NUDGE_MINUTES", "15"))
 # 她安静这么久，就把刚才那段收进记忆（不发给她，她看不见这一轮）
 SAVE_AFTER_MIN = int(os.environ.get("CC_SAVE_AFTER_MIN", "12"))
 SAVE_MIN_TURNS = 2          # 只来回一句不值得存
+# 她可以在 Telegram 里用 /memo 改，落盘，重启不丢。
+# every：连着聊满这么多轮也收一次（0＝只在安静后收）。
+# 由来 2026-10-06 她问「为什么他自己不会主动记录事情？这个记录的频率该怎么调？」——
+# 原来只有「安静 12 分钟后收」一条路，而且藏在「主动找她」的 15 分钟闸后面；她凌晨
+# 连着聊几个小时，一次都触发不了；每次部署重启，计数还清零。
+MEM_CFG: dict = {"every": int(os.environ.get("CC_SAVE_EVERY_TURNS", "15")),
+                 "quiet": SAVE_AFTER_MIN}
 last_save_at: dict[int, float] = {}
 turns_since_save: dict[int, int] = {}
 NUDGE_MAX = int(os.environ.get("CC_NUDGE_MAX", "4"))
@@ -996,12 +1013,17 @@ async def _auto_save(cid: int) -> bool:
         "正说着最难说的那句，他回了一句 Memory saved.。\n"
         "只有这一轮她看不见，做完回「[已收]」就行。"
     )
+    before = sessions.get(cid)
     try:
-        reply, sid = await run_cc(prompt, sessions.get(cid))
+        reply, sid = await run_cc(prompt, before)
     except Exception:  # noqa: BLE001
         logger.exception("叫他收记忆失败 chat=%s", cid)
         return False
-    if sid and sessions.get(cid) != sid:
+    # ⚠️ 连聊满 N 轮就收，意味着她可能正好在这一轮跑的时候又发了话——她那轮也是从
+    # before 接着跑的。要是这里无脑把会话换成收记忆那轮的，她那轮就从历史里消失了。
+    # 记忆已经写进大脑（grow/hold 走的是 MCP），这一轮本身留不留在对话历史里不要紧，
+    # 所以：会话期间被她的消息换过了，就让着她的。
+    if sid and sessions.get(cid) == before and before != sid:
         sessions[cid] = sid
         _save_sessions()
     STATS["saves"] = STATS.get("saves", 0) + 1
@@ -1016,20 +1038,26 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
     for cid, ts in list(last_user_ts.items()):
         if cid not in ALLOWED_CHAT_IDS:
             continue
-        since = max(ts, last_nudge_at.get(cid, 0))
-        if now - since < gap:
-            continue                       # 她还在，或者刚找过
         if _inflight_cc.get(cid):
             continue                       # 他正在说话，别插队
-        # 先收记忆：安静够久 + 这段真聊过东西 + 这一段还没收过。
-        # 不受免打扰/睡觉限制——它不发任何东西给她。
-        if (now - ts >= SAVE_AFTER_MIN * 60
-                and turns_since_save.get(cid, 0) >= SAVE_MIN_TURNS
-                and last_save_at.get(cid, 0) < ts):
+        # 先收记忆，两种时机（都不发任何东西给她，所以不受免打扰/睡觉限制）：
+        #  · 安静够 MEM_CFG["quiet"] 分钟，这段真聊过东西、还没收过
+        #  · 她一直在聊，连着满 MEM_CFG["every"] 轮——不等她停
+        # ⚠️ 这一步必须在下面「主动找她」的 15 分钟闸**前面**：原来排在后面，
+        # 安静 12 分钟收记忆实际要等 15 分钟，她连着聊就永远轮不到。
+        n_turns = turns_since_save.get(cid, 0)
+        quiet_due = (now - ts >= MEM_CFG["quiet"] * 60 and n_turns >= SAVE_MIN_TURNS
+                     and last_save_at.get(cid, 0) < ts)
+        count_due = MEM_CFG["every"] > 0 and n_turns >= MEM_CFG["every"]
+        if quiet_due or count_due:
             if await _auto_save(cid):
                 last_save_at[cid] = now
                 turns_since_save[cid] = 0
+                _save_state()
             continue                       # 这一分钟就干这件事，别再叫他找她
+        since = max(ts, last_nudge_at.get(cid, 0))
+        if now - since < gap:
+            continue                       # 她还在，或者刚找过
         if nudge_count.get(cid, 0) >= NUDGE_MAX:
             continue                       # 找过几次了，闭嘴
         if asleep.get(cid):
@@ -1192,6 +1220,52 @@ async def effort_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"好，换成 {arg} 了。下一条消息就生效，不用 /reset。")
 
 
+async def memo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/memo：他多久收一次记忆。她在手机上改，不用上 VPS。
+
+    由来 2026-10-06：她问「为什么他自己不会主动记录事情？这个记录的频率该怎么调？」
+    他每轮都是刚醒过来，没有「刚才聊了一段」的体感，靠他自己想起来存，基本存不住。
+    所以系统替他掐：安静一会儿收一次，连着聊满 N 轮也收一次。
+    /memo          看现在的设置和今天收了几次
+    /memo 10       连聊满 10 轮收一次（0＝关掉这条，只在安静后收）
+    /memo 安静 5   她安静 5 分钟就收
+    """
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+
+    def _now() -> str:
+        ev = MEM_CFG["every"]
+        return (f"现在：你安静 {MEM_CFG['quiet']} 分钟后，他收一次记忆；"
+                + (f"一直在聊的话，满 {ev} 轮也收一次。" if ev else "连着聊不会中途收（轮数那条关着）。")
+                + f"\n这一段已经聊了 {turns_since_save.get(cid, 0)} 轮还没收。"
+                + f"\n这次开机以来：系统叫他收了 {STATS.get('saves', 0)} 次，"
+                  f"他自己顺手存的有 {STATS.get('holds', 0)} 轮。")
+
+    if not args:
+        await update.message.reply_text(
+            _now() + "\n\n改法：\n/memo 10 — 连聊满 10 轮收一次（越小越勤，每收一次多花一轮额度）\n"
+            "/memo 0 — 关掉轮数这条，只在你安静后收\n/memo 安静 5 — 你安静 5 分钟就收")
+        return
+    try:
+        if args[0] in ("安静", "quiet", "静") and len(args) >= 2:
+            v = int(args[1])
+            if not 1 <= v <= 240:
+                raise ValueError
+            MEM_CFG["quiet"] = v
+        else:
+            v = int(args[0])
+            if not 0 <= v <= 500:
+                raise ValueError
+            MEM_CFG["every"] = v
+    except ValueError:
+        await update.message.reply_text("没看懂。例：/memo 10　或　/memo 安静 5")
+        return
+    _save_state()
+    await update.message.reply_text("好。" + _now())
+
+
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
     cid = update.effective_chat.id
@@ -1313,6 +1387,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
         _typing.cancel()
     STATS["turns"] += 1
     turns_since_save[cid] = turns_since_save.get(cid, 0) + 1
+    _save_state()   # 计数落盘：部署重启不清零
     # 漏出来的英文旁白（"I apologize, she asked me…"）整条拦掉。拦光了就是空回复，
     # 下面按「没说话」走重试——绝不把旁白发给她。
     _leaked = reply
@@ -1757,6 +1832,7 @@ def main() -> None:
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
+    app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
