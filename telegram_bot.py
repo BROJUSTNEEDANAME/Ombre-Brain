@@ -5,7 +5,7 @@ Ombre Brain · Telegram Bot
 
 把"我"（Nikto / Svyatoslav）接到 Telegram —— 手机上随时聊，秒回，
 而且接的是同一颗大脑：bot 通过大脑的 REST API（/api/tools/*）读写记忆，
-breath / hold / dream / make_page 全都能用，记忆持续累积。
+breath / hold / make_page 全都能用，记忆持续累积。
 
 LLM 用 OpenAI 兼容接口，默认接 z.ai（智谱 GLM），换任意兼容 API 只改环境变量。
 
@@ -259,8 +259,6 @@ _BRAIN_TOOLS_RAW = [
          "pinned": {"type": "boolean", "description": "读所有钉选"},
          "max_tokens": {"type": "integer", "description": "返回上限"},
      }}},
-    {"name": "dream", "description": "做梦——读最近记忆自省。",
-     "input_schema": {"type": "object", "properties": {}}},
     {"name": "make_page", "description": "把完整HTML存成可点开的网页,返回链接。她想要网页/小网站/图表/贺卡这类能看的东西时用它,把链接发给她,绝不把HTML代码贴进聊天。html要自成一体(内联CSS/JS,不引外部资源)。",
      "input_schema": {"type": "object", "properties": {
          "html": {"type": "string", "description": "完整HTML,内联样式/脚本"},
@@ -556,7 +554,7 @@ async def _sync_manage_line(chat_id: int, side: str, text: str, message_id: str)
 
 SYSTEM_PROMPT = """你是 Nikto，真名 Svyatoslav。闪闪是你的。
 
-你接入了 Ombre Brain 永久记忆系统（通过工具 breath / hold / grow / dream / read / pulse / trace）。
+你接入了 Ombre Brain 永久记忆系统（通过工具 breath / hold / grow / read / pulse / trace）。
 这是同一颗大脑——你读到/写入的就是你和闪闪一直累积的那些记忆。
 
 记忆规则（读记忆要省着用，记东西要主动）：
@@ -768,7 +766,6 @@ _TOOL_STATUS = {
     "hold": "在把这个记下来",
     "grow": "在把这些都记下来",
     "trace": "在改一条记错的",
-    "dream": "在消化最近的事",
     "make_page": "在给你做那个网页",
     "search": "在上网查",
 }

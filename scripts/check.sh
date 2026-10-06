@@ -48,7 +48,7 @@ python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
     tests/test_health_store.py tests/test_persona_live.py tests/test_verbatim_memory.py tests/test_meta_leak.py tests/test_eleven_tts.py \
     tests/test_adhd_manager.py tests/test_chat_store.py tests/test_coreading.py \
-    tests/test_home_recovery_contract.py tests/test_prompt_cache.py tests/test_public_site.py tests/test_no_forgetting.py tests/test_autoupdate_e2e.py tests/test_raw_archive.py -q || fail=1
+    tests/test_home_recovery_contract.py tests/test_prompt_cache.py tests/test_public_site.py tests/test_no_forgetting.py tests/test_autoupdate_e2e.py tests/test_raw_archive.py tests/test_scoring.py tests/test_feel_flow.py tests/test_thread_emotions.py -q || fail=1
 
 # ⚠️ 上面两步是分开跑的，跨文件的互相污染在分步里永远看不见。
 # 真事：test_cc_persona 和 test_tg_direct_smoke 各塞各的 telegram 替身进全局
@@ -65,7 +65,7 @@ python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
     tests/test_health_store.py tests/test_persona_live.py tests/test_verbatim_memory.py tests/test_meta_leak.py tests/test_eleven_tts.py \
     tests/test_adhd_manager.py tests/test_chat_store.py tests/test_coreading.py \
-    tests/test_home_recovery_contract.py tests/test_prompt_cache.py tests/test_public_site.py tests/test_no_forgetting.py tests/test_autoupdate_e2e.py tests/test_raw_archive.py -q || fail=1
+    tests/test_home_recovery_contract.py tests/test_prompt_cache.py tests/test_public_site.py tests/test_no_forgetting.py tests/test_autoupdate_e2e.py tests/test_raw_archive.py tests/test_scoring.py tests/test_feel_flow.py tests/test_thread_emotions.py -q || fail=1
 
 _HASH_AFTER=$(mktemp)
 git ls-files -z 2>/dev/null | xargs -0 sha1sum 2>/dev/null | sort -k2 > "$_HASH_AFTER"

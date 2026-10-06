@@ -14,6 +14,7 @@
 
 import math
 import pytest
+import pytest_asyncio
 from datetime import datetime, timedelta
 
 from tests.dataset import DATASET
@@ -22,7 +23,7 @@ from tests.dataset import DATASET
 # ============================================================
 # Fixtures: populate temp buckets from dataset
 # ============================================================
-@pytest.fixture
+@pytest_asyncio.fixture
 async def populated_env(test_config, bucket_mgr, decay_eng):
     """Create all dataset buckets in temp dir, return (bucket_mgr, decay_eng, bucket_ids)."""
     import frontmatter as fm
@@ -275,28 +276,16 @@ class TestSearchScoring:
         assert bucket_mgr._calc_time_score(recent) > bucket_mgr._calc_time_score(old)
 
     @pytest.mark.asyncio
-    async def test_resolved_bucket_penalized_in_normalized(self, populated_env):
-        """Resolved buckets get ×0.3 in normalized score (breath-debug logic)."""
-        bm, de, ids = populated_env
-        all_b = await bm.list_all()
-
-        resolved_b = None
-        for b in all_b:
-            m = b["metadata"]
-            if m.get("type") == "dynamic" and m.get("resolved") and not m.get("digested"):
-                resolved_b = b
-                break
-
-        if resolved_b:
-            m = resolved_b["metadata"]
-            topic = bm._calc_topic_score("bug", resolved_b)
-            emotion = bm._calc_emotion_score(0.5, 0.5, m)
-            time_s = bm._calc_time_score(m)
-            imp = max(1, min(10, int(m.get("importance", 5)))) / 10.0
-            raw = topic * 4.0 + emotion * 2.0 + time_s * 2.5 + imp * 1.0
-            normalized = (raw / 9.5) * 100
-            normalized_resolved = normalized * 0.3
-            assert normalized_resolved < normalized
+    async def test_resolved_twin_scores_the_same_as_its_live_twin(self, bucket_mgr):
+        """2026-10-06 起「已解决」不再在关键词检索里降权（原来 ×0.3）。
+        原来这里那条测试是自己算 x*0.3 < x——永远为真，从没碰过 search()。
+        现在造一对内容一模一样的桶，一条标已解决，分数必须相同、都搜得到。"""
+        a = await bucket_mgr.create(content="她说以后奶茶只喝乌龙轻乳茶", name="奶茶A", tags=["奶茶"], domain=["日常"])
+        b = await bucket_mgr.create(content="她说以后奶茶只喝乌龙轻乳茶", name="奶茶B", tags=["奶茶"], domain=["日常"])
+        await bucket_mgr.update(b, resolved=True)
+        hits = {h["id"]: h["score"] for h in await bucket_mgr.search("奶茶")}
+        assert a in hits and b in hits, "已解决的也得搜得到"
+        assert hits[a] == hits[b], "已解决不许再被打到 0.3 倍"
 
 
 # ============================================================

@@ -491,7 +491,7 @@ $$emotion\_weight = base + arousal \times arousal\_boost$$
 |---|---|---|
 | 未解决 Unresolved | ×1.0 | 正常权重 |
 | 已解决 Resolved | ×0.05 | 沉底，等关键词唤醒 |
-| 已解决+已消化 Resolved+Digested | ×0.02 | 加速淡化，归档为无限小 |
+| 已解决+已消化 Resolved+Digested | ×0.02 | 只影响浮现排序；不再自动归档（2026-10-06 起没有遗忘曲线） |
 | 高唤醒+未解决 Urgent | ×1.5 | arousal>0.7 的未解决记忆额外加权 |
 | 钉选 Pinned | 999.0 | 不衰减、不合并、importance=10 |
 | Feel | 50.0 | 固定分数，不参与衰减 |
