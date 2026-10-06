@@ -22,6 +22,10 @@ find . -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 # 埋了个真会写文件的测试进去它一声不响地放过了（自己验了才发现）。
 _HASH_BEFORE=$(mktemp)
 git ls-files -z 2>/dev/null | xargs -0 sha1sum 2>/dev/null | sort -k2 > "$_HASH_BEFORE"
+# 只比已入库的文件不够：2026-10-06 测试往仓库根写了个新的 .cc_state.json，
+# 它不在版本库里，上面那份哈希看不见它，护栏一声没吭。新冒出来的文件也要比。
+_NEW_BEFORE=$(mktemp)
+git ls-files --others --exclude-standard 2>/dev/null | sort > "$_NEW_BEFORE"
 
 echo "▶ 语法检查"
 python3 -m py_compile server.py telegram_bot.py personality.py writing_style.py \
@@ -68,6 +72,16 @@ git ls-files -z 2>/dev/null | xargs -0 sha1sum 2>/dev/null | sort -k2 > "$_HASH_
 _CHANGED=$(diff "$_HASH_BEFORE" "$_HASH_AFTER" 2>/dev/null \
            | grep '^[<>]' | awk '{print $3}' | sort -u)
 rm -f "$_HASH_BEFORE" "$_HASH_AFTER"
+_NEW_AFTER=$(mktemp)
+git ls-files --others --exclude-standard 2>/dev/null | sort > "$_NEW_AFTER"
+_CREATED=$(comm -13 "$_NEW_BEFORE" "$_NEW_AFTER" | grep -v '__pycache__' || true)
+rm -f "$_NEW_BEFORE" "$_NEW_AFTER"
+if [ -n "$_CREATED" ]; then
+    echo "❌ 跑测试往仓库里写了新文件——测试绝不许写仓库："
+    printf '%s\n' "$_CREATED" | sed 's/^/     /'
+    echo "   → 删掉它们，再去修那个写文件的测试（用 tmp_path / monkeypatch 路径）"
+    fail=1
+fi
 if [ -n "$_CHANGED" ]; then
     echo "❌ 跑测试把版本库里的文件改了——测试绝不许写仓库文件："
     printf '%s\n' "$_CHANGED" | sed 's/^/     /'

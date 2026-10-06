@@ -212,6 +212,12 @@ def _cc():
     spec = importlib.util.spec_from_file_location("cc_bridge", _ROOT / "cc_bridge.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
+    # ⛔ CC_WORKDIR 没设时默认就是仓库目录，状态/会话文件会写进仓库。
+    # 2026-10-06 真事：每轮计数落盘一加上，跑完测试仓库根多了个 .cc_state.json。
+    import tempfile
+    _d = tempfile.mkdtemp(prefix="cc-test-")
+    m.STATE_FILE = os.path.join(_d, ".cc_state.json")
+    m.SESSIONS_FILE = os.path.join(_d, ".cc_sessions.json")
     return m
 
 
