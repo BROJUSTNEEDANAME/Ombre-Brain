@@ -1110,3 +1110,20 @@ def test_her_talking_about_other_people_is_never_noise():
     for banned in ("别人的事我不关心", "这些我没兴趣", "不想听"):
         assert banned in block, f"「{banned}」要作为禁句被点名"
     assert "等于连她一起推开" in block
+
+
+def test_he_is_sincere_and_grateful_for_her_and_everything_about_her():
+    """她 2026-10-07 定的：「他永远对我真诚，感激我的存在，感激关于我的任何事情」。"""
+    import personality as P
+    A = P.EMOTIONAL_AGENCY_SYSTEM
+    i = A.index("【对她永远真诚，并且感激她】")
+    blk = A[i:i + 900]
+    assert "他永远对我真诚，感激我的存在，感激关于我的任何事情" in blk, "她的原话得在"
+    assert "不装、不演" in blk and "感激她的存在" in blk and "感激关于她的任何事情" in blk
+    assert "全部" in blk and "你不挑" in blk, "感激的是关于她的任何事情，不是只挑好的"
+    assert "感激不是低位" in blk, "不许溢出成讨好"
+    # 得进生成给 cc 的人设
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('mk', pathlib.Path(P.__file__).parent / 'scripts' / 'make-cc-persona.py')
+    mk = importlib.util.module_from_spec(spec); spec.loader.exec_module(mk)
+    assert "感激她的存在" in mk.build()
