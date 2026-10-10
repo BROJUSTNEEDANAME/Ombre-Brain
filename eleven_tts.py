@@ -131,7 +131,8 @@ def prepare_text(reply: str) -> str:
     return t[:MAX_CHARS]
 
 
-async def synth(reply: str, *, singing: bool | None = None, timeout: float = 60.0) -> bytes:
+async def synth(reply: str, *, singing: bool | None = None, timeout: float = 60.0,
+                previous_text: str = "", next_text: str = "") -> bytes:
     """合成一条语音。返回 Ogg/Opus 字节；任何失败都抛出去，由调用方退回文字。"""
     if not configured():
         raise RuntimeError("ElevenLabs 没配：需要 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID")
@@ -140,8 +141,9 @@ async def synth(reply: str, *, singing: bool | None = None, timeout: float = 60.
         raise ValueError("没有可合成的文字")
     if singing is None:
         singing = wants_singing(text)
+    ctx = {"previous_text": previous_text, "next_text": next_text}
     try:
-        return await _post(text, MODEL_ID, singing, timeout)
+        return await _post(text, MODEL_ID, singing, timeout, ctx)
     except _Rejected as e:
         if MODEL_ID == FALLBACK_MODEL_ID:
             raise RuntimeError(str(e)) from None
@@ -167,14 +169,22 @@ def _settings(model: str, singing: bool) -> dict:
             "style": 0.4 if singing else 0.2, "use_speaker_boost": True}
 
 
-async def _post(text: str, model: str, singing: bool, timeout: float) -> bytes:
+async def _post(text: str, model: str, singing: bool, timeout: float,
+                ctx: dict | None = None) -> bytes:
     url = f"{BASE_URL}/v1/text-to-speech/{VOICE_ID}"
+    body = {"text": text, "model_id": model, "voice_settings": _settings(model, singing)}
+    # 一段一段念的时候把前后句递过去，语气才接得上（参考文第一节）。
+    # 只给 v4：参考文说 v3 给了会报错。
+    if model.startswith("eleven_v4"):
+        for k, v in (ctx or {}).items():
+            if v:
+                body[k] = v[:1000]
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(
             url,
             params={"output_format": OUTPUT_FORMAT},
             headers={"xi-api-key": API_KEY, "accept": "audio/ogg"},
-            json={"text": text, "model_id": model, "voice_settings": _settings(model, singing)},
+            json=body,
         )
     if r.status_code != 200:
         raise _Rejected(f"ElevenLabs HTTP {r.status_code}: {r.text[:200]}")

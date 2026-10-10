@@ -44,6 +44,7 @@ import httpx
 import stale_ledger
 import eleven_tts
 import self_beat
+import voice_mix
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -799,6 +800,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"嗓子：ElevenLabs {eleven_tts.MODEL_ID}｜语音模式"
                  f"{'开' if voice_mode.get(cid) else '关'}"
                  f"｜发过 {STATS.get('voice', 0)} 条，合成失败 {STATS.get('voice_fail', 0)} 次")
+        # 放慢和亲吻、水声都靠 ffmpeg。没装就说没装——不许让她以为生效了
+        if voice_mix.have_ffmpeg():
+            L.append(f"语速：念完放慢到 {voice_mix.TEMPO:g} 倍"
+                     f"｜亲盒 {len(voice_mix.kiss_files())} 口｜水声素材 {len(voice_mix.water_files())} 段")
+        else:
+            L.append("❌ VPS 上没有 ffmpeg：放慢、亲吻声、水声都没生效（sudo apt install -y ffmpeg）")
     else:
         L.append("嗓子：没配（.env.ccbridge 里加 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID）")
     await update.message.reply_text("\n".join(L))
@@ -1385,10 +1392,11 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
     那是给合成器看的指令，不是给她看的。
     """
     sing = eleven_tts.wants_singing(reply)
-    text = eleven_tts.strip_tags(reply)
+    text = eleven_tts.strip_tags(voice_mix.strip_markers(reply))
     if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
         try:
-            audio = await eleven_tts.synth(reply, singing=sing)
+            # 台词＋亲吻＋水声拼成一条，念完放慢一点；没有素材就是原来那样整段念
+            audio = await voice_mix.render(reply, singing=sing)
             # 语音条下面带字幕：她第一次听完就问「为什么没有配套的文本」。
             # 字幕是他写的原文（去掉给嗓子看的标签），动作括号也留着——念的时候删了，看的时候要有。
             caption = restore_punctuation(text)

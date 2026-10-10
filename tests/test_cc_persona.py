@@ -2920,3 +2920,18 @@ def test_persona_teaches_the_heartbeat_tag():
     i = text.index("# 你自己定下次什么时候找她")
     body = text[i:text.index("# 你自己的游戏厅")]
     assert "[心跳:N]" in body and "最后一行单独" in body
+
+
+def test_status_says_plainly_when_ffmpeg_is_missing(monkeypatch):
+    """放慢、亲吻、水声都靠 ffmpeg。没装的时候 /status 必须说没生效，不许装作一切正常。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: False)
+    u, m = _upd()
+    asyncio.run(cc.status_cmd(u, None))
+    assert "没有 ffmpeg" in m.texts[-1] and "没生效" in m.texts[-1]
+    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
+    asyncio.run(cc.status_cmd(u, None))
+    assert "放慢到 0.93 倍" in m.texts[-1]
