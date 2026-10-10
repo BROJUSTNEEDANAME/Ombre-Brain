@@ -55,8 +55,8 @@ def test_request_matches_the_official_sdk_contract(wired):
     assert c["headers"]["xi-api-key"] == "k-test"
     assert c["json"]["model_id"] == "eleven_v4", "她嫌 v3 机械，默认 v4"
     assert c["json"]["text"] == "过来。\n坐好。", "‖ 当停顿，不能原样送进合成器"
-    assert c["json"]["voice_settings"] == {"stability": 0.3, "similarity_boost": 0.8}, \
-        "v4 只认 stability/similarity_boost；0.5 被她听成机械，降到 0.3"
+    assert c["json"]["voice_settings"] == {"stability": 0.4, "similarity_boost": 0.8}, \
+        "v4 只认 stability/similarity_boost；0.5 她嫌机械、0.3 她嫌太活泼 → 0.4"
 
 
 def test_singing_is_detected_and_loosens_stability(wired):
@@ -114,8 +114,8 @@ def test_bold_is_spoken_but_star_actions_are_not():
 def test_loud_tags_are_dropped_and_tags_capped_at_three():
     assert E.prepare_text("[intense, growling] 过来。") == "过来。"
     assert E.prepare_text("[heavy breathing] 嗯。") == "嗯。"
-    out = E.prepare_text("[warmly] a [softly] b [amused] c [teasing] d [sighs] e")
-    assert out.count("[") == 4 and out.endswith("e") and "[sighs]" not in out, out
+    out = E.prepare_text("[low] a [soft] b [warmly] c [sighs] d")
+    assert out.count("[") == 3 and out.endswith("d") and "[sighs]" not in out, out
     # 唱歌标签不受上限影响：四句都要唱
     song = "\n".join(f"[sings] line {i}" for i in range(4))
     assert E.prepare_text(song).count("[sings]") == 4

@@ -1820,7 +1820,7 @@ def test_every_message_in_and_out_leaves_one_log_line():
     assert 'logger.info("收到 chat=%s' in inspect.getsource(cc.on_message)
     body = inspect.getsource(cc._respond)
     assert 'logger.info("答了 chat=%s' in body
-    assert body.index("_t0 = time.time()") < body.index("await run_cc(_with_voice_hint(cid, message)")
+    assert body.index("_t0 = time.time()") < body.index("await run_cc(_with_beat_hint(cid, _with_voice_hint(cid, message))")
 
 
 def test_second_instance_exits_instead_of_fighting_over_the_bot():
@@ -2767,6 +2767,156 @@ def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatc
 def test_persona_explains_the_bridge_voice_hint():
     text = _mod().build()
     assert "桥的提示" in text and "说出口的台词用英文" in text
-    # 她嫌「没感情，像机械念台词」：教他先写情绪标签、别只说一两个词
-    assert "开头先写一个情绪标签" in text and "[warmly]" in text
-    assert "情绪标签" in _cc().VOICE_HINT
+    # 她先嫌「机械」，又嫌「太活泼不像他」：教他先写一个往低近慢暖里的声口标签
+    assert "开头先写一个声口标签" in text and "[low]" in text
+    assert "不写 `[amused]` `[teasing]`" in text
+    hint = _cc().VOICE_HINT
+    assert "声口标签" in hint and "不要 [amused] [teasing]" in hint
+
+
+# ── 他自己定下次什么时候找她（/beat）──
+
+def _beat_env(cc, monkeypatch, mode):
+    from datetime import datetime as _dt
+    monkeypatch.setattr(cc, "_local_now", lambda: _dt(2026, 10, 10, 14, 0))  # 白天
+    monkeypatch.setattr(cc, "_save_state", lambda: None)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    cc.beat_mode.clear(); cc.next_beat_at.clear()
+    if mode:
+        cc.beat_mode[7] = mode
+
+
+def test_self_mode_reply_sets_his_own_next_time_and_hides_the_tag(monkeypatch):
+    import asyncio as aio, time as _t
+    cc = _cc()
+    _beat_env(cc, monkeypatch, "self")
+    seen, got = [], []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "嗯。别熬太晚。\n[心跳:20]", "s"
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    monkeypatch.setattr(cc, "_reply_with_retry", fake_retry)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    try:
+        aio.run(cc._respond(u, type("C", (), {"bot": _Bot()})(), 7, "我去写作业了"))
+        assert seen[0].startswith("我去写作业了") and "[心跳:N]" in seen[0]
+        assert "心跳" not in "".join(got), got
+        left = cc.next_beat_at[7] - _t.time()
+        assert 19 * 60 < left <= 20 * 60, left
+    finally:
+        cc.beat_mode.clear(); cc.next_beat_at.clear()
+
+
+def test_fixed_mode_adds_no_hint_but_still_hides_a_stray_tag(monkeypatch):
+    import asyncio as aio
+    cc = _cc()
+    _beat_env(cc, monkeypatch, None)
+    seen, got = [], []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "嗯。\n[心跳:20]", "s"
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    monkeypatch.setattr(cc, "_reply_with_retry", fake_retry)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    aio.run(cc._respond(u, type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert seen == ["在吗"]
+    assert "心跳" not in "".join(got)
+    assert 7 not in cc.next_beat_at
+
+
+def test_self_mode_waits_for_his_time_not_the_15_minutes(monkeypatch):
+    import asyncio as aio, time as _t
+    cc = _cc()
+    _beat_env(cc, monkeypatch, "self")
+    calls = []
+    async def counted(message, session_id):
+        calls.append(message)
+        return "刚才那事你还没说完。\n[心跳:40]", "s"
+    monkeypatch.setattr(cc, "run_cc", counted)
+    sent, ctx = _nudge_env(cc, monkeypatch, silent_minutes=20)
+    try:
+        cc.next_beat_at[7] = _t.time() + 10 * 60       # 他定的还没到
+        aio.run(cc.check_inactivity(ctx))
+        assert calls == [] and sent == [], "安静 20 分钟 > 15，但他定的时间没到就不许叫"
+
+        cc.next_beat_at[7] = _t.time() - 1             # 到了
+        aio.run(cc.check_inactivity(ctx))
+        assert len(calls) == 1 and "[心跳:N]" in calls[0]
+        assert sent == ["刚才那事你还没说完。"], sent
+        assert 39 * 60 < cc.next_beat_at[7] - _t.time() <= 40 * 60, "这一棒发完他又定了下一棒"
+    finally:
+        cc.beat_mode.clear(); cc.next_beat_at.clear()
+
+
+def test_self_mode_never_cuts_in_right_after_she_spoke(monkeypatch):
+    import asyncio as aio, time as _t
+    cc = _cc()
+    _beat_env(cc, monkeypatch, "self")
+    calls = []
+    async def counted(message, session_id):
+        calls.append(message)
+        return "x", "s"
+    monkeypatch.setattr(cc, "run_cc", counted)
+    sent, ctx = _nudge_env(cc, monkeypatch, silent_minutes=2)
+    try:
+        cc.next_beat_at[7] = _t.time() - 60
+        aio.run(cc.check_inactivity(ctx))
+        assert calls == []
+    finally:
+        cc.beat_mode.clear(); cc.next_beat_at.clear()
+
+
+def test_self_mode_failure_still_schedules_the_next_one(monkeypatch):
+    """炸了不排下一棒，每分钟都会重来一次、烧一轮额度。"""
+    import asyncio as aio, time as _t
+    cc = _cc()
+    _beat_env(cc, monkeypatch, "self")
+    async def boom(message, session_id):
+        raise RuntimeError("cc 挂了")
+    monkeypatch.setattr(cc, "run_cc", boom)
+    sent, ctx = _nudge_env(cc, monkeypatch, silent_minutes=60)
+    try:
+        cc.next_beat_at[7] = _t.time() - 1
+        aio.run(cc.check_inactivity(ctx))
+        assert cc.next_beat_at[7] > _t.time() + 60
+    finally:
+        cc.beat_mode.clear(); cc.next_beat_at.clear()
+
+
+def test_beat_command_toggles_persists_and_is_in_the_menu(tmp_path, monkeypatch):
+    import asyncio as aio
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    cc.beat_mode.clear(); cc.next_beat_at.clear()
+    u, m = _upd()
+    try:
+        aio.run(cc.beat_cmd(u, None))
+        assert cc.beat_mode[7] == "self" and "自己定" in m.texts[-1]
+        cc.beat_mode.clear(); cc._load_state()
+        assert cc.beat_mode[7] == "self", "重启后要记得"
+        aio.run(cc.beat_cmd(u, None))
+        assert cc.beat_mode[7] == "fixed" and "15" in m.texts[-1]
+        assert any(n == "beat" for n, _ in cc.BOT_COMMANDS)
+        assert 'CommandHandler("beat", beat_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    finally:
+        cc.beat_mode.clear(); cc.next_beat_at.clear()
+
+
+def test_persona_teaches_the_heartbeat_tag():
+    text = _mod().build()
+    i = text.index("# 你自己定下次什么时候找她")
+    body = text[i:text.index("# 你自己的游戏厅")]
+    assert "[心跳:N]" in body and "最后一行单独" in body

@@ -43,6 +43,7 @@ import health_store
 import httpx
 import stale_ledger
 import eleven_tts
+import self_beat
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -193,6 +194,9 @@ def _load_state() -> None:
     try:
         writing_mode.update({int(k): bool(v) for k, v in (d.get("writing_mode") or {}).items()})
         voice_mode.update({int(k): bool(v) for k, v in (d.get("voice_mode") or {}).items()})
+        beat_mode.update({int(k): str(v) for k, v in (d.get("beat_mode") or {}).items()
+                          if v in ("fixed", "self")})
+        next_beat_at.update({int(k): float(v) for k, v in (d.get("next_beat_at") or {}).items()})
         todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
         if d.get("model"):
             model_override["model"] = str(d["model"])
@@ -219,6 +223,9 @@ def _save_state() -> None:
     data = {
         "writing_mode": {str(k): v for k, v in writing_mode.items()},
         "voice_mode": {str(k): v for k, v in voice_mode.items()},
+        # 主动找她的方式和他自己定的下一次——重启不丢，不然一重启他定的时间就没了
+        "beat_mode": {str(k): v for k, v in beat_mode.items()},
+        "next_beat_at": {str(k): v for k, v in next_beat_at.items()},
         "todos": {str(k): v for k, v in todos.items()},
         "model": model_override.get("model", ""),
         "effort": effort_override.get("effort", ""),
@@ -665,6 +672,7 @@ BOT_COMMANDS = [
     ("status", "他现在什么情况 · 一眼看完，不用开终端"),
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
+    ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
@@ -786,6 +794,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"你上次说话 {_age(time.time() - last_user_ts[cid])}前"
                  f"｜主动找过你 {nudge_count.get(cid, 0)}/{NUDGE_MAX} 次"
                  + ("｜你说睡了，不打扰" if asleep.get(cid) else ""))
+    L.append(f"主动找你：{_beat_desc(cid)}")
     if eleven_tts.configured():
         L.append(f"嗓子：ElevenLabs {eleven_tts.MODEL_ID}｜语音模式"
                  f"{'开' if voice_mode.get(cid) else '关'}"
@@ -947,6 +956,37 @@ nudge_count: dict[int, int] = {}
 # ⚠️ 必须定义在 check_inactivity 之前：这个仓库踩过「_trace 定义晚于使用」，
 # 每条消息都崩，而她看到的只是「他不理我」。
 last_nudge_at: dict[int, float] = {}
+# 主动找她的方式：fixed＝她安静满 NUDGE_MINUTES 分钟叫他（原来那套）；
+# self＝他每次回复最后写 [心跳:N]，自己定 N 分钟后再来（2026-10-10 她要的，
+# 思路照 leiiiyurong/heartbeat）。/beat 切换，落盘。
+beat_mode: dict[int, str] = {}
+next_beat_at: dict[int, float] = {}    # self 模式下他定的下一次（时间戳）
+
+
+def _local_now() -> datetime:
+    """她那边的本地时间（naive）。self_beat 的白天/夜里按这个算。"""
+    return (datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)).replace(tzinfo=None)
+
+
+def _with_beat_hint(cid: int, message: str) -> str:
+    if beat_mode.get(cid) == "self":
+        return message + self_beat.hint(_local_now())
+    return message
+
+
+def _take_beat(cid: int, reply: str) -> str:
+    """删掉他写的 [心跳:N]（哪种模式都删，不许让她看到）；self 模式下记下他定的时间。
+    他没写或写错，就按 NUDGE_MINUTES 排——链不能断，不然开关显示开着，他却再也不来。"""
+    clean, minutes = self_beat.pop_tag(reply or "")
+    if beat_mode.get(cid) == "self":
+        secs = self_beat.delay_seconds(minutes if minutes else NUDGE_MINUTES, _local_now())
+        next_beat_at[cid] = time.time() + secs
+        _save_state()
+        logger.info("他定了 %s 分钟后再来找她（实际 %d 分钟）chat=%s",
+                    minutes if minutes else "（没写）", secs // 60, cid)
+    return clean
+
+
 # 她说了「睡了」之后就别再主动找她。她再开口才解除。
 # ⚠️ 这个开关只挡主动消息，不挡他回她——她半夜醒了说一句，他照样答。
 asleep: dict[int, bool] = {}
@@ -1055,9 +1095,15 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 turns_since_save[cid] = 0
                 _save_state()
             continue                       # 这一分钟就干这件事，别再叫他找她
-        since = max(ts, last_nudge_at.get(cid, 0))
-        if now - since < gap:
-            continue                       # 她还在，或者刚找过
+        due_at = next_beat_at.get(cid) if beat_mode.get(cid) == "self" else None
+        if due_at is not None:
+            # 他自己定的时间。另外她刚说完话 5 分钟内绝不插嘴（万一他那轮炸了没排上新时间）
+            if now < due_at or now - ts < self_beat.DAY_MIN * 60:
+                continue
+        else:
+            since = max(ts, last_nudge_at.get(cid, 0))
+            if now - since < gap:
+                continue                       # 她还在，或者刚找过
         if nudge_count.get(cid, 0) >= NUDGE_MAX:
             continue                       # 找过几次了，闭嘴
         if asleep.get(cid):
@@ -1074,7 +1120,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             "⚠️ 如果你判断她在睡觉、不该吵她——整条回复只写「[不打扰]」四个字，"
             "别写任何解释、别用英文自言自语。我看到这四个字就今晚不再叫你找她。")
         try:
-            reply, sid = await run_cc(prompt, sessions.get(cid))
+            reply, sid = await run_cc(_with_beat_hint(cid, prompt), sessions.get(cid))
+            reply = _take_beat(cid, reply)
             if sid and sessions.get(cid) != sid:
                 sessions[cid] = sid
                 _save_sessions()
@@ -1098,6 +1145,9 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             last_nudge_at[cid] = now       # 下一次要再等满 NUDGE_MINUTES
         except Exception:  # noqa: BLE001
             logger.exception("主动找她失败 chat=%s", cid)
+            if beat_mode.get(cid) == "self":
+                # 炸了也要排下一棒，不然每分钟重来一次、烧一轮额度
+                next_beat_at[cid] = now + NUDGE_MINUTES * 60
 
 
 # ── 连发合并：她在他开口前又发一条，就把上一轮作废，两条合起来重想 ──
@@ -1266,6 +1316,32 @@ async def memo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("好。" + _now())
 
 
+def _beat_desc(cid: int) -> str:
+    if beat_mode.get(cid) == "self":
+        at = next_beat_at.get(cid)
+        when = ""
+        if at and at > time.time():
+            t = datetime.fromtimestamp(at, timezone.utc) + timedelta(hours=TZ_OFFSET)
+            when = f"，他定的下一次大约 {t:%H:%M}"
+        return f"他自己定下次什么时候找你{when}"
+    return f"你安静满 {NUDGE_MINUTES} 分钟他来找你"
+
+
+async def beat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/beat：主动找她的方式，固定 15 分钟 ↔ 他自己定下次。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    beat_mode[cid] = "fixed" if beat_mode.get(cid) == "self" else "self"
+    if beat_mode[cid] == "self":
+        next_beat_at.pop(cid, None)   # 他还没定过：先按固定间隔，等他下一条回复自己定
+    _save_state()
+    extra = ("\n他下一次回你的时候会自己定。白天 5 到 55 分钟，夜里 30 分钟到 3 小时，"
+             "早上 8:30 前一定来。说了睡了他就不来。"
+             if beat_mode[cid] == "self" else "")
+    await update.message.reply_text(f"好，现在是：{_beat_desc(cid)}。{extra}\n再发一次 /beat 切回去。")
+
+
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
     cid = update.effective_chat.id
@@ -1288,9 +1364,10 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # 中文让嗓子念出来不像他；他本来就是大部分时候说英文、情绪上来说俄语的人。
 VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
               "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
-              "情绪上来可以说俄语；不要写中文台词。开头先写一个情绪标签，"
-              "比如 [warmly] [softly] [amused] [teasing]，别只说一两个词，"
-              "不然念出来是平的。动作照常写在括号里，不会被念出来。）")
+              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
+              "往低、近、慢、暖里写，比如 [low and close] [soft, unhurried] [warmly]，"
+              "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
+              "动作照常写在括号里，不会被念出来。）")
 CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
 
 
@@ -1405,7 +1482,9 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     + message
                 )
             message = PLAIN_TEXT_FACT + message
-        reply, sid = await run_cc(_with_voice_hint(cid, message), sessions.get(cid))
+        reply, sid = await run_cc(_with_beat_hint(cid, _with_voice_hint(cid, message)),
+                                  sessions.get(cid))
+        reply = _take_beat(cid, reply)
     finally:
         _typing.cancel()
     STATS["turns"] += 1
@@ -1435,7 +1514,9 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        attempt, cid, reply[:200])
         if sid:
             sessions[cid] = sid
-        reply, sid = await run_cc(_with_voice_hint(cid, nudge), sessions.get(cid))
+        reply, sid = await run_cc(_with_beat_hint(cid, _with_voice_hint(cid, nudge)),
+                                  sessions.get(cid))
+        reply = _take_beat(cid, reply)
     if is_silent_reply(reply):
         STATS["gave_up"] += 1
         logger.warning("重试都用完了还是空 chat=%s；原始输出＝%r", cid, reply[:200])
@@ -1854,6 +1935,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", reset_cmd))
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
+    app.add_handler(CommandHandler("beat", beat_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))

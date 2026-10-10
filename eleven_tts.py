@@ -33,8 +33,9 @@ VOICE_ID = os.environ.get("ELEVEN_VOICE_ID", "").strip()
 MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v4").strip() or "eleven_v4"
 FALLBACK_MODEL_ID = "eleven_v3"
 OUTPUT_FORMAT = os.environ.get("ELEVEN_OUTPUT_FORMAT", "opus_48000_64").strip() or "opus_48000_64"
-# stability 越低情绪起伏越大、越高越平。0.5 被她听成「机械」，默认降到 0.3。
-STABILITY = float(os.environ.get("ELEVEN_STABILITY", "0.3") or 0.3)
+# stability 越低情绪起伏越大、越高越平。0.5 她听成「机械」；降到 0.3 又「太有情绪、
+# 太活泼，不像他平常会说的」，她说压一点点就行 → 0.4。参考文：0.35 有戏，0.5 像平常说话。
+STABILITY = float(os.environ.get("ELEVEN_STABILITY", "0.4") or 0.4)
 MAX_CHARS = 2500          # v3 单次上限附近，留余量；再长就是在念文章，不该发语音
 
 # 他回复里出现这些，就说明这条是要**唱**的——哪怕语音模式没开也发语音条
@@ -82,7 +83,7 @@ _SOUND_ACTIONS = (
     (re.compile(r"叹"), "[sighs]"),
     (re.compile(r"耳边|耳朵|贴.{0,3}耳|咬耳|低声|小声|压低|凑近"), "[low and close]"),
 )
-MAX_TAGS = 4   # 参考文说两三个就够；她嫌平，放宽到四个，再多就是在演
+MAX_TAGS = 3   # 参考文：一轮两三个就够，多了就是在演
 
 
 def _paren_to_tag(m: re.Match) -> str:
