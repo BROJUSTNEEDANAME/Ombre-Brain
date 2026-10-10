@@ -29,6 +29,7 @@ API_KEY = os.environ.get("ELEVEN_API_KEY", "").strip()
 VOICE_ID = os.environ.get("ELEVEN_VOICE_ID", "").strip()
 MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v3").strip() or "eleven_v3"
 OUTPUT_FORMAT = os.environ.get("ELEVEN_OUTPUT_FORMAT", "opus_48000_64").strip() or "opus_48000_64"
+STABILITY = float(os.environ.get("ELEVEN_STABILITY", "0.5") or 0.5)
 MAX_CHARS = 2500          # v3 单次上限附近，留余量；再长就是在念文章，不该发语音
 
 # 他回复里出现这些，就说明这条是要**唱**的——哪怕语音模式没开也发语音条
@@ -51,9 +52,73 @@ def strip_tags(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
-def prepare_text(reply: str) -> str:
-    """把他的多条气泡合成一段给合成器：‖ 和空行都当停顿。"""
+# ── 送进嗓子之前的清洗 ──
+# 由来：她捏好嗓子一测「不太好」。查下来送进合成器的是**原始回复**——
+# （低笑）（把你按进怀里）这类动作括号、*（蚁巢内心）*、小尼那一行、颜文字、
+# 「过来 坐好」这种无标点空格，全都原样交给嗓子去念。嗓子把「低笑」两个字念出来，
+# 把空格当没有，一口气平推到底。参考 ai-voice-breath-kiss-water：嗓子只念台词和喘。
+_INNER_RE = re.compile(r"\*[（(][^*]*?[)）]\*|\*[^*\n]{1,200}\*")     # *（内心）* / *动作*
+_PAREN_RE = re.compile(r"[（(][^（()）]{0,200}[)）]")                     # 一层括号
+_STAMP_RE = re.compile(r"^[ \t]*[\[【]?\d{1,4}[-/.:：]\d{1,2}(?:[-/.:：]\d{1,2})?"
+                       r"(?:[ T]\d{1,2}[:：]\d{2})?[\]】]?[ \t|｜]*", re.M)
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]")
+_MD_RE = re.compile(r"[*_`#>~]+")
+_CJK = "\u4e00-\u9fff"
+_CJK_SPACE_RE = re.compile(rf"(?<=[{_CJK}])[ \u3000]+(?=[{_CJK}])")
+# 猛词一上嗓子就开始「演」（参考文：intense/heavy/growl 全删了）。整个标签丢掉。
+_LOUD_TAG_RE = re.compile(
+    r"\[[^\]]*\b(intense|heav(y|ily)|growl\w*|strain\w*|rough\w*|scream\w*|shout\w*|"
+    r"moan\w*|pant\w*|gasp\w*|yell\w*)\b[^\]]*\]", re.I)
+# 括号里写的动作，少数几种本来就是「声音」——换成轻标签留下，其余一律不念。
+_SOUND_ACTIONS = (
+    (re.compile(r"笑"), "[quiet laugh]"),
+    (re.compile(r"叹"), "[sighs]"),
+    (re.compile(r"耳边|耳朵|贴.{0,3}耳|咬耳|低声|小声|压低|凑近"), "[low and close]"),
+)
+MAX_TAGS = 3   # 一轮两三个标签就够（参考文第二节第 1 条）
+
+
+def _paren_to_tag(m: re.Match) -> str:
+    inner = m.group(0)[1:-1]
+    for rx, tag in _SOUND_ACTIONS:
+        if rx.search(inner):
+            return f" {tag} "
+    return " "
+
+
+def speakable(reply: str) -> str:
+    """只留嗓子该念的：台词、停顿、少量轻标签。动作/内心/颜文字/时间戳都不念。"""
     t = (reply or "").replace("‖", "\n")
+    t = re.sub(r"\*\*(.+?)\*\*", r"\1", t)     # **加粗** 是强调，字要念；单星号 *…* 才是动作
+    t = _INNER_RE.sub(" ", t)
+    t = _STAMP_RE.sub("", t)
+    for _ in range(3):                      # 括号套括号时由内往外剥
+        t2 = _PAREN_RE.sub(_paren_to_tag, t)
+        if t2 == t:
+            break
+        t = t2
+    t = _LOUD_TAG_RE.sub(" ", t)
+    t = _EMOJI_RE.sub("", t)
+    t = _MD_RE.sub("", t)
+    # 「过来 坐好」→「过来，坐好」：没有标点嗓子就不换气
+    t = _CJK_SPACE_RE.sub("，", t)
+    # 标签只留前 MAX_TAGS 个，多了就是在演
+    n = 0
+
+    def _cap(m: re.Match) -> str:
+        nonlocal n
+        n += 1
+        return m.group(0) if n <= MAX_TAGS or SING_TAG_RE.fullmatch(m.group(0)) else " "
+    t = ANY_TAG_RE.sub(_cap, t)
+    lines = [re.sub(r"[ \t]{2,}", " ", x).strip(" \t，,") for x in t.split("\n")]
+    # 只剩标签、没有一个字的行（整行都是动作）丢掉
+    lines = [x for x in lines if ANY_TAG_RE.sub("", x).strip(" ，,。.…")]
+    return "\n".join(lines)
+
+
+def prepare_text(reply: str) -> str:
+    """把他的多条气泡合成一段给合成器：‖ 和空行都当停顿，动作括号等不念。"""
+    t = speakable(reply)
     t = re.sub(r"\n\s*\n+", "\n", t).strip()
     return t[:MAX_CHARS]
 
@@ -68,7 +133,8 @@ async def synth(reply: str, *, singing: bool | None = None, timeout: float = 60.
     if singing is None:
         singing = wants_singing(text)
     # 唱歌时 stability 放低一点，v3 才敢「演」；平时说话稳一些。
-    settings = {"stability": 0.3 if singing else 0.5, "similarity_boost": 0.8,
+    # 参考文：0.35 有戏、0.5 像平常说话；嫌「用力过猛像表演」就往上拧。可用环境变量调。
+    settings = {"stability": 0.3 if singing else STABILITY, "similarity_boost": 0.8,
                 "style": 0.4 if singing else 0.2, "use_speaker_boost": True}
     url = f"{BASE_URL}/v1/text-to-speech/{VOICE_ID}"
     async with httpx.AsyncClient(timeout=timeout) as client:

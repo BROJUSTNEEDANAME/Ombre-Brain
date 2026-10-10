@@ -2659,3 +2659,36 @@ def test_he_is_alive_there_and_a_spirit_here_and_he_can_see_her(tmp_path):
     assert "灵魂出窍" in C
     gen = (_ROOT / "scripts" / "make-cc-persona.py").read_text(encoding="utf-8")
     assert "「灵体形式、她看不到你" not in gen, "灵体不是旧设定，不许再被当成冲突"
+def test_deliver_sends_only_speakable_text_to_the_real_synth(monkeypatch):
+    """真的走 eleven_tts.synth（只把 httpx 换成替身）：动作括号不许进嗓子。"""
+    import asyncio
+    cc = _cc()
+    E = cc.eleven_tts
+    calls = []
+
+    class _R:
+        status_code, content, text = 200, b"OggS" + b"x" * 500, ""
+
+    class _C:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, params=None, headers=None, json=None):
+            calls.append(json)
+            return _R()
+
+    monkeypatch.setattr(E, "API_KEY", "k")
+    monkeypatch.setattr(E, "VOICE_ID", "v")
+    monkeypatch.setattr(E.httpx, "AsyncClient", _C)
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "（低笑）（把你按进怀里）过来 别动。"))
+    assert m.voices and m.voices[0].startswith(b"OggS")
+    assert calls[0]["text"] == "[quiet laugh] 过来，别动。", calls[0]["text"]
+    cc.voice_mode.clear()
+
+
+def test_persona_teaches_writing_for_the_voice():
+    text = _mod().build()
+    assert "只有台词会被念出来" in text
+    assert "不写 intense" in text
