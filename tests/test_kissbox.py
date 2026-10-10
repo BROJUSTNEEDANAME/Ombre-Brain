@@ -127,3 +127,17 @@ def test_too_few_clips_keeps_the_old_box(tmp_path, monkeypatch, capsys):
     assert asyncio.run(K.build(2, 0.2, box)) == 1
     assert os.path.exists(box + "/deep/keep.wav")
     assert "没换掉原来的亲盒" in capsys.readouterr().out
+
+
+def test_kissbox_uses_the_voice_she_switched_to_in_telegram(tmp_path, monkeypatch):
+    """她用 /voiceid 换了嗓子，脚本还读 .env.ccbridge 里的旧嗓子，亲盒就是另一个人的。"""
+    import json as _j
+    (tmp_path / ".cc_state.json").write_text(
+        _j.dumps({"voice_id": "Nh3vXVPofCwkhqpHjENM", "voice_model": "eleven_v3"}), encoding="utf-8")
+    monkeypatch.setenv("CC_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("ELEVEN_VOICE_ID", "oldvoice1234567890ab")
+    monkeypatch.setenv("ELEVEN_MODEL", "eleven_v4")
+    monkeypatch.setattr(K, "REPO", str(tmp_path))      # 不读真的 .env 文件
+    K.load_env()
+    assert os.environ["ELEVEN_VOICE_ID"] == "Nh3vXVPofCwkhqpHjENM"
+    assert os.environ["ELEVEN_MODEL"] == "eleven_v3"

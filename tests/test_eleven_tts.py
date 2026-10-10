@@ -53,17 +53,16 @@ def test_request_matches_the_official_sdk_contract(wired):
     assert c["url"] == "https://api.elevenlabs.io/v1/text-to-speech/v-nikto"
     assert c["params"] == {"output_format": "opus_48000_64"}
     assert c["headers"]["xi-api-key"] == "k-test"
-    assert c["json"]["model_id"] == "eleven_v4", "她嫌 v3 机械，默认 v4"
+    assert c["json"]["model_id"] == "eleven_v3", "她对比过：v3 可以，v4 容易变细"
     assert c["json"]["text"] == "过来。\n坐好。", "‖ 当停顿，不能原样送进合成器"
-    assert c["json"]["voice_settings"] == {"stability": 0.4, "similarity_boost": 0.8}, \
-        "v4 只认 stability/similarity_boost；0.5 她嫌机械、0.3 她嫌太活泼 → 0.4"
+    assert c["json"]["voice_settings"]["stability"] == 0.5, "v3 只有三档，0.4 吸到 Natural"
 
 
 def test_singing_is_detected_and_loosens_stability(wired):
     text = "[sings] Twinkle, twinkle, little star\n[sings] How I wonder what you are"
     assert E.wants_singing(text)
     asyncio.run(E.synth(text))
-    assert wired.calls[0]["json"]["voice_settings"]["stability"] == 0.3
+    assert wired.calls[0]["json"]["voice_settings"]["stability"] == 0.0, "v3 唱歌用 Creative"
     assert "[sings]" in wired.calls[0]["json"]["text"], "标签要原样交给 v3，那是它的指令"
     assert E.wants_singing("[singing quickly] la la la")
     assert E.wants_singing("[hums] mmm")
@@ -144,7 +143,18 @@ class _Seq(_Client):
         return _Seq.seq.pop(0)
 
 
+def test_v4_settings_only_carry_what_v4_accepts():
+    assert E._settings("eleven_v4", False) == {"stability": E.STABILITY, "similarity_boost": 0.8}
+
+
+def test_v3_stability_is_always_one_of_its_three_steps(monkeypatch):
+    for x, want in ((0.1, 0.0), (0.3, 0.5), (0.4, 0.5), (0.8, 1.0)):
+        monkeypatch.setattr(E, "STABILITY", x)
+        assert E._settings("eleven_v3", False)["stability"] == want, x
+
+
 def test_v4_rejected_falls_back_to_v3_with_the_same_voice(wired, monkeypatch):
+    monkeypatch.setattr(E, "MODEL_ID", "eleven_v4")
     monkeypatch.setattr(E.httpx, "AsyncClient", _Seq)
     _Seq.seq = [_Resp(status=400, content=b"", text="model not available"), _Resp()]
     out = asyncio.run(E.synth("[warmly] Come here. I missed you."))
@@ -156,6 +166,7 @@ def test_v4_rejected_falls_back_to_v3_with_the_same_voice(wired, monkeypatch):
 
 
 def test_both_models_failing_raises_with_both_reasons(wired, monkeypatch):
+    monkeypatch.setattr(E, "MODEL_ID", "eleven_v4")
     monkeypatch.setattr(E.httpx, "AsyncClient", _Seq)
     _Seq.seq = [_Resp(status=400, content=b"", text="v4 nope"),
                 _Resp(status=401, content=b"", text="bad key")]

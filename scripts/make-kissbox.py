@@ -181,6 +181,19 @@ def load_env() -> None:
                     os.environ.setdefault(k, v)
         except OSError:
             pass
+    # 她在 Telegram 里用 /voiceid、/vmodel 换过嗓子和型号的话，以那个为准——
+    # 不然亲盒做出来是旧嗓子的，插在新嗓子中间就是另一个人在亲她。
+    state = os.path.join(os.environ.get("CC_WORKDIR") or REPO, ".cc_state.json")
+    try:
+        with open(state, encoding="utf-8") as fh:
+            d = json.load(fh) or {}
+    except (OSError, ValueError):
+        return
+    vid = str(d.get("voice_id") or "")
+    if vid.isalnum() and 16 <= len(vid) <= 40:
+        os.environ["ELEVEN_VOICE_ID"] = vid
+    if d.get("voice_model") in ("eleven_v3", "eleven_v4"):
+        os.environ["ELEVEN_MODEL"] = d["voice_model"]
 
 
 async def build(takes: int, min_wet: float, out_dir: str) -> int:
@@ -191,8 +204,9 @@ async def build(takes: int, min_wet: float, out_dir: str) -> int:
     if not shutil.which("ffmpeg"):
         print("❌ 没有 ffmpeg，先跑：sudo apt install -y ffmpeg")
         return 1
-    eleven_tts.STABILITY = 0.35          # 参考文：v4，稳 0.35
+    eleven_tts.STABILITY = 0.35          # 参考文：稳 0.35（v3 只有三档，会吸到 0.5）
     model = eleven_tts.MODEL_ID
+    print(f"用的嗓子：{eleven_tts.VOICE_ID}，型号 {model}", flush=True)
     work = out_dir + ".new"
     shutil.rmtree(work, ignore_errors=True)
     for k in ("light", "deep"):

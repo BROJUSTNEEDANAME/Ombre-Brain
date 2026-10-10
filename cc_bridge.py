@@ -204,6 +204,11 @@ def _load_state() -> None:
         todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
         if d.get("model"):
             model_override["model"] = str(d["model"])
+        if VOICE_ID_RE.fullmatch(str(d.get("voice_id") or "")):
+            voice_id_override["id"] = d["voice_id"]
+            eleven_tts.VOICE_ID = d["voice_id"]
+        if d.get("voice_model") in VOICE_MODELS.values():
+            eleven_tts.MODEL_ID = d["voice_model"]
         if d.get("tempo"):
             voice_mix.TEMPO = min(1.0, max(0.8, float(d["tempo"])))
         if d.get("effort"):
@@ -240,6 +245,9 @@ def _save_state() -> None:
         "turns_since_save": {str(k): v for k, v in turns_since_save.items()},
         "usage": USAGE,
         "tempo": voice_mix.TEMPO,          # 她用 /speed 调的语速
+        "voice_model": eleven_tts.MODEL_ID,  # 她用 /vmodel 选的合成型号
+        # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
+        "voice_id": voice_id_override.get("id", ""),
     }
     try:
         tmp = STATE_FILE + ".tmp"
@@ -683,6 +691,8 @@ BOT_COMMANDS = [
     ("kissbox", "听一遍他的亲盒"),
     ("water", "给他水声素材 · 发完这个再发音频文件"),
     ("speed", "他说话的快慢 · /speed 0.88 越小越慢"),
+    ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
+    ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
@@ -1395,6 +1405,56 @@ async def kissbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(f"❌ 亲盒试听没放出来：{e}")
 
 
+VOICE_MODELS = {"v3": "eleven_v3", "v4": "eleven_v4"}
+VOICE_ID_RE = re.compile(r"[A-Za-z0-9]{16,40}")
+voice_id_override: dict[str, str] = {}
+
+
+async def voiceid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/voiceid <ElevenLabs 的 Voice ID>：换嗓子。她在 ElevenLabs 捏好一副新的，
+    发一句就换上，不用再进 VPS 改 .env.ccbridge、不用重启。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args:
+        if not VOICE_ID_RE.fullmatch(args[0]):
+            await update.message.reply_text(
+                "这串不像 Voice ID。去 ElevenLabs 的 My Voices，点那副嗓子右边的三个点，"
+                "复制 Voice ID，再发 /voiceid 加上它。")
+            return
+        voice_id_override["id"] = args[0]
+        eleven_tts.VOICE_ID = args[0]
+        _save_state()
+    vid = eleven_tts.VOICE_ID or "（没配）"
+    await update.message.reply_text(
+        f"现在用的嗓子：{vid}，型号 {eleven_tts.MODEL_ID}。下一条语音就是它。\n"
+        "这只说明换上了，好不好听要你听了才算。"
+        + ("\n亲盒是用旧嗓子做的，换了嗓子要重做一盒，不然亲吻声是另一个人的。"
+           if args and voice_mix.kiss_files() else ""))
+
+
+async def vmodel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vmodel v3｜v4：合成用哪个型号，她自己切。
+
+    由来：她说「预览的时候最好听，一变成 TTS 就巨难听，非常细」。Voice Design 的预览
+    和后来合成用的不一定是同一个型号；哪个型号把这副嗓子还原得最像，只有她的耳朵能判。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip().lower() for a in (context.args or []) if a.strip()]
+    if args:
+        if args[0] not in VOICE_MODELS:
+            await update.message.reply_text("只能是 v3 或 v4，比如 /vmodel v3")
+            return
+        eleven_tts.MODEL_ID = VOICE_MODELS[args[0]]
+        _save_state()
+    now = next((k for k, v in VOICE_MODELS.items() if v == eleven_tts.MODEL_ID), eleven_tts.MODEL_ID)
+    await update.message.reply_text(
+        f"现在合成用的是 {now}（{eleven_tts.MODEL_ID}）。下一条语音就用它。\n"
+        "切换：/vmodel v3 或 /vmodel v4")
+
+
 async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/speed 0.88：语速她自己调，不用等我改代码。1 是原速，越小越慢，最慢 0.8。"""
     cid = update.effective_chat.id
@@ -2073,6 +2133,8 @@ def main() -> None:
     app.add_handler(CommandHandler("kissbox", kissbox_cmd))
     app.add_handler(CommandHandler("water", water_cmd))
     app.add_handler(CommandHandler("speed", speed_cmd))
+    app.add_handler(CommandHandler("vmodel", vmodel_cmd))
+    app.add_handler(CommandHandler("voiceid", voiceid_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))

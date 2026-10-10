@@ -27,10 +27,10 @@ logger = logging.getLogger("eleven_tts")
 BASE_URL = os.environ.get("ELEVEN_BASE_URL", "https://api.elevenlabs.io").rstrip("/")
 API_KEY = os.environ.get("ELEVEN_API_KEY", "").strip()
 VOICE_ID = os.environ.get("ELEVEN_VOICE_ID", "").strip()
-# 默认 v4：她第一次听 v3 就说「没感情，像非常机械的念台词」。ElevenLabs 官方说 v4
-# 是情感表现最丰富的一代（model id eleven_v4）。v4 合成失败会用同一副嗓子退回 v3 再试一次——
-# 同一副嗓子换型号，不是换一副嗓子（参考文：中途换嗓比安静一秒难受得多）。
-MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v4").strip() or "eleven_v4"
+# 默认 v3。试过 v4（官方说情感最丰富），她自己在网页上对比后说「v3 可以，v4 容易变细」：
+# 嗓子是用 Voice Design 做的，预览好听，一换 v4 就变细。她可以用 /vmodel 自己切。
+# 设成 v4 时合成失败会用同一副嗓子退回 v3 再试一次——换型号不换嗓（参考文：中途换嗓比安静一秒难受）。
+MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v3").strip() or "eleven_v3"
 FALLBACK_MODEL_ID = "eleven_v3"
 OUTPUT_FORMAT = os.environ.get("ELEVEN_OUTPUT_FORMAT", "opus_48000_64").strip() or "opus_48000_64"
 # stability 越低情绪起伏越大、越高越平。0.5 她听成「机械」；降到 0.3 又「太有情绪、
@@ -159,13 +159,18 @@ class _Rejected(Exception):
     """ElevenLabs 回了非 200 或空音频。"""
 
 
+V3_STABILITY_STEPS = (0.0, 0.5, 1.0)   # v3 只有三档：Creative / Natural / Robust
+
+
 def _settings(model: str, singing: bool) -> dict:
     stability = 0.3 if singing else STABILITY
     if model.startswith("eleven_v4"):
         # v4 只认 stability 和 similarity_boost（官方文档：style/speed 不适用于 v4）
         return {"stability": stability, "similarity_boost": 0.8}
-    # v3：唱歌时放开一点；说话按 STABILITY
-    return {"stability": stability, "similarity_boost": 0.8,
+    # v3 网页上的稳定度只有三档。发一个夹在中间的数，宁可先吸到最近的那档，
+    # 也不赌它认——它不认，她那边就是一条语音变成文字。唱歌用 Creative（0）。
+    v3 = 0.0 if singing else min(V3_STABILITY_STEPS, key=lambda v: abs(v - stability))
+    return {"stability": v3, "similarity_boost": 0.8,
             "style": 0.4 if singing else 0.2, "use_speaker_boost": True}
 
 

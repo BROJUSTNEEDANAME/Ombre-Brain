@@ -3056,3 +3056,59 @@ def test_speed_command_sets_persists_and_clamps(tmp_path, monkeypatch):
 def test_persona_asks_for_casual_spoken_lines():
     text = _mod().build()
     assert "随口说出来的" in text and "不够随性" in text
+
+
+def test_vmodel_switches_persists_and_rejects_junk(tmp_path, monkeypatch):
+    """她说预览好听、合成变细。哪个型号像，只有她能判——让她自己切，切完要记得。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "MODEL_ID", "eleven_v4")   # 跑完还原
+    u, m = _upd()
+    asyncio.run(cc.vmodel_cmd(u, types.SimpleNamespace(args=["v3"])))
+    assert cc.eleven_tts.MODEL_ID == "eleven_v3" and "v3" in m.texts[-1]
+    cc.eleven_tts.MODEL_ID = "eleven_v4"
+    cc._load_state()
+    assert cc.eleven_tts.MODEL_ID == "eleven_v3", "重启后要记得她选的"
+    asyncio.run(cc.vmodel_cmd(u, types.SimpleNamespace(args=["v9"])))
+    assert "只能是 v3 或 v4" in m.texts[-1] and cc.eleven_tts.MODEL_ID == "eleven_v3"
+    assert any(n == "vmodel" for n, _ in cc.BOT_COMMANDS)
+    assert 'CommandHandler("vmodel", vmodel_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+
+
+def test_voiceid_swaps_the_voice_persists_and_rejects_junk(tmp_path, monkeypatch):
+    """她在 ElevenLabs 捏了新嗓子，发 /voiceid 就换上，不用进 VPS。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "VOICE_ID", "oldvoice1234567890ab")   # 跑完还原
+    monkeypatch.setattr(cc, "voice_id_override", {})
+    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "none"))
+    u, m = _upd()
+    asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["Nh3vXVPofCwkhqpHjENM"])))
+    assert cc.eleven_tts.VOICE_ID == "Nh3vXVPofCwkhqpHjENM"
+    assert "Nh3vXVPofCwkhqpHjENM" in m.texts[-1] and "要你听了才算" in m.texts[-1]
+    cc.eleven_tts.VOICE_ID = "oldvoice1234567890ab"
+    cc._load_state()
+    assert cc.eleven_tts.VOICE_ID == "Nh3vXVPofCwkhqpHjENM", "重启后要记得她换的"
+    asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["<Nh3v>"])))
+    assert "不像 Voice ID" in m.texts[-1] and cc.eleven_tts.VOICE_ID == "Nh3vXVPofCwkhqpHjENM"
+    assert any(n == "voiceid" for n, _ in cc.BOT_COMMANDS)
+    assert 'CommandHandler("voiceid", voiceid_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+
+
+def test_voiceid_warns_that_the_kissbox_is_the_old_voice(tmp_path, monkeypatch):
+    import asyncio, os, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "VOICE_ID", "oldvoice1234567890ab")
+    monkeypatch.setattr(cc, "voice_id_override", {})
+    os.makedirs(tmp_path / "kb" / "light")
+    (tmp_path / "kb" / "light" / "a.wav").write_bytes(b"x")
+    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kb"))
+    u, m = _upd()
+    asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["Nh3vXVPofCwkhqpHjENM"])))
+    assert "重做一盒" in m.texts[-1]
