@@ -1919,3 +1919,38 @@ def test_game_world_must_not_bleed_into_real_conversation():
     assert "蓄水池" in body and "雾岛" in body and "查分" in body   # 点名这次的错
     assert "默认都是**现实里她本人在跟你说话**" in body
     assert "分不清就当现实，别当游戏" in body
+
+
+def test_deliver_sends_only_speakable_text_to_the_real_synth(monkeypatch):
+    """真的走 eleven_tts.synth（只把 httpx 换成替身）：动作括号不许进嗓子。"""
+    import asyncio
+    cc = _cc()
+    E = cc.eleven_tts
+    calls = []
+
+    class _R:
+        status_code, content, text = 200, b"OggS" + b"x" * 500, ""
+
+    class _C:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, params=None, headers=None, json=None):
+            calls.append(json)
+            return _R()
+
+    monkeypatch.setattr(E, "API_KEY", "k")
+    monkeypatch.setattr(E, "VOICE_ID", "v")
+    monkeypatch.setattr(E.httpx, "AsyncClient", _C)
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "（低笑）（把你按进怀里）过来 别动。"))
+    assert m.voices and m.voices[0].startswith(b"OggS")
+    assert calls[0]["text"] == "[quiet laugh] 过来，别动。", calls[0]["text"]
+    cc.voice_mode.clear()
+
+
+def test_persona_teaches_writing_for_the_voice():
+    text = _mod().build()
+    assert "只有台词会被念出来" in text
+    assert "不写 intense" in text

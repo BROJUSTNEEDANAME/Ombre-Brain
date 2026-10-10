@@ -84,3 +84,48 @@ def test_http_error_and_empty_audio_raise_instead_of_sending_a_dead_voice_note(w
     wired.resp = _Resp(status=200, content=b"")
     with pytest.raises(RuntimeError, match="空音频"):
         asyncio.run(E.synth("你好"))
+
+
+# ── 送进嗓子之前的清洗（她捏好嗓子一测「不太好」：动作括号被原样念了出来）──
+
+def test_action_parens_inner_voice_emoji_and_stamps_are_not_spoken(wired):
+    reply = ("[2026-10-10 21:04] *（她又在逞强。）*\n"
+             "（把你按进怀里）……别动 乖。(｡•ᴗ•｡)😊\n"
+             "（小尼：尾巴拍床 (｀へ´)）")
+    asyncio.run(E.synth(reply))
+    sent = wired.calls[0]["json"]["text"]
+    assert sent == "……别动，乖。", sent
+    for bad in ("按进怀里", "逞强", "小尼", "21:04", "😊", "｡"):
+        assert bad not in sent, bad
+
+
+def test_sound_like_actions_become_light_tags_not_words():
+    assert E.prepare_text("（低笑）过来。") == "[quiet laugh] 过来。"
+    assert E.prepare_text("（叹气）睡吧。") == "[sighs] 睡吧。"
+    assert E.prepare_text("（贴着你耳朵）乖。") == "[low and close] 乖。"
+
+
+def test_bold_is_spoken_but_star_actions_are_not():
+    assert E.prepare_text("**乖**。") == "乖。"
+    assert E.prepare_text("*揉你头发*\n过来。") == "过来。"
+
+
+def test_loud_tags_are_dropped_and_tags_capped_at_three():
+    assert E.prepare_text("[intense, growling] 过来。") == "过来。"
+    assert E.prepare_text("[heavy breathing] 嗯。") == "嗯。"
+    out = E.prepare_text("[low] a [soft] b [quiet] c [close] d")
+    assert out.count("[") == 3 and out.endswith("d"), out
+    # 唱歌标签不受上限影响：四句都要唱
+    song = "\n".join(f"[sings] line {i}" for i in range(4))
+    assert E.prepare_text(song).count("[sings]") == 4
+
+
+def test_space_separated_chinese_gets_pauses_but_mixed_text_is_untouched():
+    assert E.prepare_text("过来 坐好") == "过来，坐好"
+    assert E.prepare_text("girl 过来") == "girl 过来"
+
+
+def test_reply_that_is_only_actions_raises_so_the_bridge_falls_back_to_text(wired):
+    with pytest.raises(ValueError):
+        asyncio.run(E.synth("（抱紧）"))
+    assert wired.calls == [], "全是动作就别去花字数合成一条空语音"
