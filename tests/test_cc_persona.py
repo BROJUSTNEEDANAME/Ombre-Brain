@@ -425,6 +425,9 @@ def test_the_handler_returns_immediately_so_the_next_message_can_interrupt():
     async def drive():
         # handler 必须秒退：0.5s 内跑完三条，而每一轮要 5s
         await aio.wait_for(cc.on_message(upd("一"), None), timeout=0.5)
+        # 让第一轮真的开跑一下。Python 3.12 起 wait_for 不再让出调度，
+        # 不加这一步，第一轮还没开始就被第二条合并掉，started[0] 就成了「一\n二」。
+        await aio.sleep(0)
         await aio.wait_for(cc.on_message(upd("二"), None), timeout=0.5)
         await aio.sleep(0)
         return cc._inflight_cc[7]["text"]
