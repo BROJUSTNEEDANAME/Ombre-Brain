@@ -3030,3 +3030,29 @@ def test_kiss_and_water_commands_are_wired_and_taught():
     assert {"kissbox", "water"} <= {n for n, _ in cc.BOT_COMMANDS}
     text = _mod().build()
     assert "单独一行写 `[kiss]`" in text and "`[low, close, wet]`" in text
+
+
+def test_speed_command_sets_persists_and_clamps(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "TEMPO", cc.voice_mix.TEMPO)   # 跑完还原
+    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
+    u, m = _upd()
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["0.88"])))
+    assert cc.voice_mix.TEMPO == 0.88 and "0.88" in m.texts[-1]
+    cc.voice_mix.TEMPO = 0.93
+    cc._load_state()
+    assert cc.voice_mix.TEMPO == 0.88, "重启后要记得她调的"
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["0.5"])))
+    assert cc.voice_mix.TEMPO == 0.8, "太慢就夹到 0.8"
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["快点"])))
+    assert "要写一个数" in m.texts[-1] and cc.voice_mix.TEMPO == 0.8
+    assert any(n == "speed" for n, _ in cc.BOT_COMMANDS)
+    assert 'CommandHandler("speed", speed_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+
+
+def test_persona_asks_for_casual_spoken_lines():
+    text = _mod().build()
+    assert "随口说出来的" in text and "不够随性" in text

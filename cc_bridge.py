@@ -204,6 +204,8 @@ def _load_state() -> None:
         todos.update({int(k): str(v) for k, v in (d.get("todos") or {}).items()})
         if d.get("model"):
             model_override["model"] = str(d["model"])
+        if d.get("tempo"):
+            voice_mix.TEMPO = min(1.0, max(0.8, float(d["tempo"])))
         if d.get("effort"):
             effort_override["effort"] = str(d["effort"])
         m = d.get("memo") or {}
@@ -237,6 +239,7 @@ def _save_state() -> None:
         # 部署一重启这个计数就清零，凌晨那一长段就永远收不到——所以落盘
         "turns_since_save": {str(k): v for k, v in turns_since_save.items()},
         "usage": USAGE,
+        "tempo": voice_mix.TEMPO,          # 她用 /speed 调的语速
     }
     try:
         tmp = STATE_FILE + ".tmp"
@@ -679,6 +682,7 @@ BOT_COMMANDS = [
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
     ("water", "给他水声素材 · 发完这个再发音频文件"),
+    ("speed", "他说话的快慢 · /speed 0.88 越小越慢"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
@@ -1391,6 +1395,26 @@ async def kissbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(f"❌ 亲盒试听没放出来：{e}")
 
 
+async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/speed 0.88：语速她自己调，不用等我改代码。1 是原速，越小越慢，最慢 0.8。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args:
+        try:
+            v = float(args[0])
+        except ValueError:
+            await update.message.reply_text("要写一个数，比如 /speed 0.9")
+            return
+        voice_mix.TEMPO = min(1.0, max(0.8, v))
+        _save_state()
+    note = "" if voice_mix.have_ffmpeg() else "\n❌ 但 VPS 上没有 ffmpeg，放慢现在不生效。"
+    await update.message.reply_text(
+        f"现在语速是 {voice_mix.TEMPO:g} 倍（1 是原速，越小越慢，最慢 0.8）。"
+        f"\n想改就发 /speed 加一个数，比如 /speed 0.88。下一条语音就用新的。{note}")
+
+
 async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/water：收水声素材。/water 清空 把素材全删了。"""
     cid = update.effective_chat.id
@@ -2048,6 +2072,7 @@ def main() -> None:
     app.add_handler(CommandHandler("beat", beat_cmd))
     app.add_handler(CommandHandler("kissbox", kissbox_cmd))
     app.add_handler(CommandHandler("water", water_cmd))
+    app.add_handler(CommandHandler("speed", speed_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
