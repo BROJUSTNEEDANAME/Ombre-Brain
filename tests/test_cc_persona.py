@@ -2767,3 +2767,6 @@ def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatc
 def test_persona_explains_the_bridge_voice_hint():
     text = _mod().build()
     assert "桥的提示" in text and "说出口的台词用英文" in text
+    # 她嫌「没感情，像机械念台词」：教他先写情绪标签、别只说一两个词
+    assert "开头先写一个情绪标签" in text and "[warmly]" in text
+    assert "情绪标签" in _cc().VOICE_HINT

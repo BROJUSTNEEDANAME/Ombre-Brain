@@ -53,9 +53,10 @@ def test_request_matches_the_official_sdk_contract(wired):
     assert c["url"] == "https://api.elevenlabs.io/v1/text-to-speech/v-nikto"
     assert c["params"] == {"output_format": "opus_48000_64"}
     assert c["headers"]["xi-api-key"] == "k-test"
-    assert c["json"]["model_id"] == "eleven_v3"
+    assert c["json"]["model_id"] == "eleven_v4", "她嫌 v3 机械，默认 v4"
     assert c["json"]["text"] == "过来。\n坐好。", "‖ 当停顿，不能原样送进合成器"
-    assert c["json"]["voice_settings"]["stability"] == 0.5
+    assert c["json"]["voice_settings"] == {"stability": 0.3, "similarity_boost": 0.8}, \
+        "v4 只认 stability/similarity_boost；0.5 被她听成机械，降到 0.3"
 
 
 def test_singing_is_detected_and_loosens_stability(wired):
@@ -113,8 +114,8 @@ def test_bold_is_spoken_but_star_actions_are_not():
 def test_loud_tags_are_dropped_and_tags_capped_at_three():
     assert E.prepare_text("[intense, growling] 过来。") == "过来。"
     assert E.prepare_text("[heavy breathing] 嗯。") == "嗯。"
-    out = E.prepare_text("[low] a [soft] b [quiet] c [close] d")
-    assert out.count("[") == 3 and out.endswith("d"), out
+    out = E.prepare_text("[warmly] a [softly] b [amused] c [teasing] d [sighs] e")
+    assert out.count("[") == 4 and out.endswith("e") and "[sighs]" not in out, out
     # 唱歌标签不受上限影响：四句都要唱
     song = "\n".join(f"[sings] line {i}" for i in range(4))
     assert E.prepare_text(song).count("[sings]") == 4
@@ -129,3 +130,44 @@ def test_reply_that_is_only_actions_raises_so_the_bridge_falls_back_to_text(wire
     with pytest.raises(ValueError):
         asyncio.run(E.synth("（抱紧）"))
     assert wired.calls == [], "全是动作就别去花字数合成一条空语音"
+
+
+
+# ── v4 不认就用同一副嗓子退回 v3 ──
+
+class _Seq(_Client):
+    """按顺序回不同的响应。"""
+    seq = []
+
+    async def post(self, url, params=None, headers=None, json=None):
+        _Client.calls.append(dict(url=url, params=params, headers=headers, json=json))
+        return _Seq.seq.pop(0)
+
+
+def test_v4_rejected_falls_back_to_v3_with_the_same_voice(wired, monkeypatch):
+    monkeypatch.setattr(E.httpx, "AsyncClient", _Seq)
+    _Seq.seq = [_Resp(status=400, content=b"", text="model not available"), _Resp()]
+    out = asyncio.run(E.synth("[warmly] Come here. I missed you."))
+    assert out.startswith(b"OggS")
+    a, b = wired.calls
+    assert a["json"]["model_id"] == "eleven_v4" and b["json"]["model_id"] == "eleven_v3"
+    assert a["url"] == b["url"], "退回的是同一副嗓子，不许换嗓"
+    assert "style" in b["json"]["voice_settings"], "v3 的设置照旧"
+
+
+def test_both_models_failing_raises_with_both_reasons(wired, monkeypatch):
+    monkeypatch.setattr(E.httpx, "AsyncClient", _Seq)
+    _Seq.seq = [_Resp(status=400, content=b"", text="v4 nope"),
+                _Resp(status=401, content=b"", text="bad key")]
+    with pytest.raises(RuntimeError) as e:
+        asyncio.run(E.synth("Come here."))
+    assert "v4 nope" in str(e.value) and "bad key" in str(e.value)
+
+
+def test_pinned_to_v3_does_not_retry(wired, monkeypatch):
+    monkeypatch.setattr(E, "MODEL_ID", "eleven_v3")
+    monkeypatch.setattr(E.httpx, "AsyncClient", _Seq)
+    _Seq.seq = [_Resp(status=500, content=b"", text="down")]
+    with pytest.raises(RuntimeError):
+        asyncio.run(E.synth("Come here."))
+    assert len(wired.calls) == 1

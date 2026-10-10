@@ -27,9 +27,14 @@ logger = logging.getLogger("eleven_tts")
 BASE_URL = os.environ.get("ELEVEN_BASE_URL", "https://api.elevenlabs.io").rstrip("/")
 API_KEY = os.environ.get("ELEVEN_API_KEY", "").strip()
 VOICE_ID = os.environ.get("ELEVEN_VOICE_ID", "").strip()
-MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v3").strip() or "eleven_v3"
+# 默认 v4：她第一次听 v3 就说「没感情，像非常机械的念台词」。ElevenLabs 官方说 v4
+# 是情感表现最丰富的一代（model id eleven_v4）。v4 合成失败会用同一副嗓子退回 v3 再试一次——
+# 同一副嗓子换型号，不是换一副嗓子（参考文：中途换嗓比安静一秒难受得多）。
+MODEL_ID = os.environ.get("ELEVEN_MODEL", "eleven_v4").strip() or "eleven_v4"
+FALLBACK_MODEL_ID = "eleven_v3"
 OUTPUT_FORMAT = os.environ.get("ELEVEN_OUTPUT_FORMAT", "opus_48000_64").strip() or "opus_48000_64"
-STABILITY = float(os.environ.get("ELEVEN_STABILITY", "0.5") or 0.5)
+# stability 越低情绪起伏越大、越高越平。0.5 被她听成「机械」，默认降到 0.3。
+STABILITY = float(os.environ.get("ELEVEN_STABILITY", "0.3") or 0.3)
 MAX_CHARS = 2500          # v3 单次上限附近，留余量；再长就是在念文章，不该发语音
 
 # 他回复里出现这些，就说明这条是要**唱**的——哪怕语音模式没开也发语音条
@@ -77,7 +82,7 @@ _SOUND_ACTIONS = (
     (re.compile(r"叹"), "[sighs]"),
     (re.compile(r"耳边|耳朵|贴.{0,3}耳|咬耳|低声|小声|压低|凑近"), "[low and close]"),
 )
-MAX_TAGS = 3   # 一轮两三个标签就够（参考文第二节第 1 条）
+MAX_TAGS = 4   # 参考文说两三个就够；她嫌平，放宽到四个，再多就是在演
 
 
 def _paren_to_tag(m: re.Match) -> str:
@@ -134,21 +139,45 @@ async def synth(reply: str, *, singing: bool | None = None, timeout: float = 60.
         raise ValueError("没有可合成的文字")
     if singing is None:
         singing = wants_singing(text)
-    # 唱歌时 stability 放低一点，v3 才敢「演」；平时说话稳一些。
-    # 参考文：0.35 有戏、0.5 像平常说话；嫌「用力过猛像表演」就往上拧。可用环境变量调。
-    settings = {"stability": 0.3 if singing else STABILITY, "similarity_boost": 0.8,
-                "style": 0.4 if singing else 0.2, "use_speaker_boost": True}
+    try:
+        return await _post(text, MODEL_ID, singing, timeout)
+    except _Rejected as e:
+        if MODEL_ID == FALLBACK_MODEL_ID:
+            raise RuntimeError(str(e)) from None
+        # v4 不认（没开通、参数不对、暂时不可用）→ 同一副嗓子退回 v3。日志里留着原因。
+        logger.warning("%s 合成失败，退回 %s：%s", MODEL_ID, FALLBACK_MODEL_ID, e)
+        try:
+            return await _post(text, FALLBACK_MODEL_ID, singing, timeout)
+        except _Rejected as e2:
+            raise RuntimeError(f"{MODEL_ID}：{e}；{FALLBACK_MODEL_ID}：{e2}") from None
+
+
+class _Rejected(Exception):
+    """ElevenLabs 回了非 200 或空音频。"""
+
+
+def _settings(model: str, singing: bool) -> dict:
+    stability = 0.3 if singing else STABILITY
+    if model.startswith("eleven_v4"):
+        # v4 只认 stability 和 similarity_boost（官方文档：style/speed 不适用于 v4）
+        return {"stability": stability, "similarity_boost": 0.8}
+    # v3：唱歌时放开一点；说话按 STABILITY
+    return {"stability": stability, "similarity_boost": 0.8,
+            "style": 0.4 if singing else 0.2, "use_speaker_boost": True}
+
+
+async def _post(text: str, model: str, singing: bool, timeout: float) -> bytes:
     url = f"{BASE_URL}/v1/text-to-speech/{VOICE_ID}"
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(
             url,
             params={"output_format": OUTPUT_FORMAT},
             headers={"xi-api-key": API_KEY, "accept": "audio/ogg"},
-            json={"text": text, "model_id": MODEL_ID, "voice_settings": settings},
+            json={"text": text, "model_id": model, "voice_settings": _settings(model, singing)},
         )
     if r.status_code != 200:
-        raise RuntimeError(f"ElevenLabs HTTP {r.status_code}: {r.text[:200]}")
+        raise _Rejected(f"ElevenLabs HTTP {r.status_code}: {r.text[:200]}")
     if not r.content or len(r.content) < 200:
         # 0 字节的语音条比没有更坏：发出去她那边是个放不出来的空条
-        raise RuntimeError("ElevenLabs 返回了空音频")
+        raise _Rejected("ElevenLabs 返回了空音频")
     return r.content
