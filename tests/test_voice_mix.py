@@ -171,3 +171,18 @@ def test_render_never_sends_the_translation_to_the_voice(fake_synth, monkeypatch
     monkeypatch.setattr(V, "WATER_DIR", str(tmp_path / "none"))
     asyncio.run(V.render("[low] Come here.\n译：过来。"))
     assert [c["text"] for c in fake_synth] == ["[low] Come here."]
+
+
+# ── 她手动定的声口（/tone）──
+
+def test_parse_tone_maps_chinese_and_keeps_english():
+    assert V.parse_tone("慵懒 低沉") == ("lazy, relaxed, low", [])
+    assert V.parse_tone("relaxed, Warm") == ("relaxed, warm", [])
+    assert V.parse_tone("温柔、乱写") == ("tender", ["乱写"])
+
+
+def test_apply_tone_replaces_his_opening_tag_but_keeps_wet():
+    assert V.apply_tone("[soft] Come here.\n[low] Stay.", "lazy") == "[lazy] Come here.\n[low] Stay."
+    assert V.apply_tone("Come here.", "lazy") == "[lazy] Come here."
+    assert V.apply_tone("[kiss]\n译：亲\n[low, wet] Easy.", "tender") == "[kiss]\n译：亲\n[tender, wet] Easy."
+    assert V.apply_tone("[soft] a", "") == "[soft] a"

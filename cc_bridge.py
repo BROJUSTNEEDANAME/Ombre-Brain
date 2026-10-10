@@ -207,6 +207,9 @@ def _load_state() -> None:
         if VOICE_ID_RE.fullmatch(str(d.get("voice_id") or "")):
             voice_id_override["id"] = d["voice_id"]
             eleven_tts.VOICE_ID = d["voice_id"]
+        voice_tone.update({int(k): str(v) for k, v in (d.get("voice_tone") or {}).items() if v})
+        if isinstance(d.get("stability"), (int, float)) and 0 <= d["stability"] <= 1:
+            eleven_tts.STABILITY = float(d["stability"])
         if d.get("voice_model") in VOICE_MODELS.values():
             eleven_tts.MODEL_ID = d["voice_model"]
         if d.get("tempo"):
@@ -246,6 +249,8 @@ def _save_state() -> None:
         "usage": USAGE,
         "tempo": voice_mix.TEMPO,          # 她用 /speed 调的语速
         "voice_model": eleven_tts.MODEL_ID,  # 她用 /vmodel 选的合成型号
+        "voice_tone": {str(k): v for k, v in voice_tone.items()},
+        "stability": eleven_tts.STABILITY,
         # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
         "voice_id": voice_id_override.get("id", ""),
     }
@@ -693,6 +698,8 @@ BOT_COMMANDS = [
     ("speed", "他说话的快慢 · /speed 0.88 越小越慢"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
+    ("tone", "定他语音的情绪 · /tone 慵懒 低沉；/tone 关 交给他自己"),
+    ("vstab", "嗓子放得开还是稳 · /vstab 自由／自然／稳"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
@@ -1406,6 +1413,57 @@ async def kissbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 VOICE_MODELS = {"v3": "eleven_v3", "v4": "eleven_v4"}
+voice_tone: dict[int, str] = {}        # 她用 /tone 手动定的声口
+STAB_STEPS = {"自由": 0.0, "creative": 0.0, "自然": 0.5, "natural": 0.5, "稳": 1.0, "robust": 1.0}
+
+
+async def tone_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tone 慵懒 低沉：她手动定他语音的情绪。/tone 关 交回给他自己选。
+
+    由来：她问「我能手动改他的情绪吗」。他自己选的声口她不一定想要；
+    她定了，桥就把它换到每条语音第一句的开头。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    raw = " ".join(context.args or []).strip()
+    if raw in ("关", "off", "清空", "默认", "auto"):
+        voice_tone.pop(cid, None)
+        _save_state()
+        await update.message.reply_text("好，声口交回给他自己选。")
+        return
+    if raw:
+        tone, bad = voice_mix.parse_tone(raw)
+        if bad or not tone:
+            await update.message.reply_text(
+                f"「{'、'.join(bad) or raw}」我还不认识。可以用这些：\n"
+                + "、".join(voice_mix.TONE_ZH) + "\n也可以直接写英文，比如 /tone relaxed, warm")
+            return
+        voice_tone[cid] = tone
+        _save_state()
+    cur = voice_tone.get(cid)
+    await update.message.reply_text(
+        (f"现在他语音的声口：{cur}。下一条语音开始用。\n/tone 关 交回给他自己选。" if cur else
+         "现在是他自己选声口。\n想定一个就发 /tone 加上词，比如 /tone 慵懒 低沉。能用的：\n"
+         + "、".join(voice_mix.TONE_ZH)))
+
+
+async def vstab_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/vstab 自由｜自然｜稳：嗓子放得开还是稳。v3 只有这三档。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip().lower() for a in (context.args or []) if a.strip()]
+    if args:
+        if args[0] not in STAB_STEPS:
+            await update.message.reply_text("只能是 自由、自然、稳 三个里的一个，比如 /vstab 自由")
+            return
+        eleven_tts.STABILITY = STAB_STEPS[args[0]]
+        _save_state()
+    names = {0.0: "自由", 0.5: "自然", 1.0: "稳"}
+    step = min(names, key=lambda v: abs(v - eleven_tts.STABILITY))
+    await update.message.reply_text(
+        f"现在是「{names[step]}」。自由最放得开，也最容易像在演；自然是中间；稳最平。\n"
+        "切换：/vstab 自由 或 /vstab 自然 或 /vstab 稳。下一条语音就用新的。")
 VOICE_ID_RE = re.compile(r"[A-Za-z0-9]{16,40}")
 voice_id_override: dict[str, str] = {}
 
@@ -1557,7 +1615,7 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
               "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
               "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
-              "往低、近、慢、暖里写，比如 [low and close] [soft, unhurried] [warmly]，"
+              "往低、近、放松、暖里写，比如 [relaxed, low] [casual, warm] [soft, unhurried]，"
               "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
               "动作照常写在括号里，不会被念出来。"
               "每句英文或俄语台词下面另起一行写「译：」加这句的中文意思，"
@@ -1567,7 +1625,9 @@ CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
 
 def _with_voice_hint(cid: int, message: str) -> str:
     if voice_mode.get(cid, False) and eleven_tts.configured():
-        return VOICE_HINT + "\n" + message
+        extra = (f"（她现在用 /tone 指定了声口「{voice_tone[cid]}」，照这个情绪说。）\n"
+                 if voice_tone.get(cid) else "")
+        return VOICE_HINT + "\n" + extra + message
     return message
 
 
@@ -1584,7 +1644,9 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
     if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
         try:
             # 台词＋亲吻＋水声拼成一条，念完放慢一点；没有素材就是原来那样整段念
-            audio = await voice_mix.render(reply, singing=sing)
+            # 她用 /tone 定了声口，就换到第一句开头（唱歌不动）
+            spoken = reply if sing else voice_mix.apply_tone(reply, voice_tone.get(cid, ""))
+            audio = await voice_mix.render(spoken, singing=sing)
             # 语音条下面带字幕：她第一次听完就问「为什么没有配套的文本」。
             # 字幕是他写的原文（去掉给嗓子看的标签），动作括号也留着——念的时候删了，看的时候要有。
             caption = restore_punctuation(text)
@@ -2138,6 +2200,8 @@ def main() -> None:
     app.add_handler(CommandHandler("speed", speed_cmd))
     app.add_handler(CommandHandler("vmodel", vmodel_cmd))
     app.add_handler(CommandHandler("voiceid", voiceid_cmd))
+    app.add_handler(CommandHandler("tone", tone_cmd))
+    app.add_handler(CommandHandler("vstab", vstab_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))

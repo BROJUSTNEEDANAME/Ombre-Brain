@@ -133,6 +133,49 @@ def show_translations(text: str) -> str:
     return "\n".join(out)
 
 
+# 她手动定的声口（/tone）。中文常用词换成嗓子认的英文标签；英文原样用。
+TONE_ZH = {
+    "温柔": "tender", "慵懒": "lazy, relaxed", "放松": "relaxed", "随意": "casual, relaxed",
+    "困": "sleepy", "困倦": "sleepy", "低沉": "low", "宠": "warm, doting", "宠溺": "warm, doting",
+    "心疼": "gentle, concerned", "哄": "soft, soothing", "想你": "longing", "吃醋": "quiet, jealous",
+    "生气": "cold, quiet", "严肃": "serious, firm", "坏": "smirking", "调情": "low, flirty",
+    "累": "tired", "耳语": "whispers", "贴耳": "low and close", "暖": "warm", "认真": "earnest",
+}
+_TONE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z '-]{0,30}")
+_LEAD_TAG_RE = re.compile(r"^[ \t]*\[([^\[\]\n]{1,60})\][ \t]*")
+
+
+def parse_tone(raw: str) -> tuple[str, list[str]]:
+    """「慵懒 低沉」→「lazy, relaxed, low」。返回 (标签内容, 认不出的词)。"""
+    out, bad = [], []
+    for w in re.split(r"[\s,，、/]+", (raw or "").strip()):
+        if not w:
+            continue
+        if w in TONE_ZH:
+            out.append(TONE_ZH[w])
+        elif _TONE_WORD_RE.fullmatch(w):
+            out.append(w.lower())
+        else:
+            bad.append(w)
+    return ", ".join(out)[:60], bad
+
+
+def apply_tone(reply: str, tone: str) -> str:
+    """把她定的声口换到第一句台词的开头（他自己写的开头标签让位；wet 留着）。"""
+    if not tone:
+        return reply
+    lines = (reply or "").split("\n")
+    for i, line in enumerate(lines):
+        if not line.strip() or KISS_LINE_RE.match(line) or _TRANS_LINE_RE.match(line):
+            continue
+        m = _LEAD_TAG_RE.match(line)
+        wet = bool(m and _WET_RE.search(m.group(1)))
+        body = line[m.end():] if m else line.lstrip()
+        lines[i] = f"[{tone}{', wet' if wet else ''}] {body}"
+        break
+    return "\n".join(lines)
+
+
 def strip_markers(reply: str) -> str:
     """亲吻行和 wet 都去掉——给不走拼接的那条路、也给字幕用。"""
     # ‖ 是他分条的记号，文字那条路靠它拆成几条消息——这里只删亲吻，‖ 原样留着

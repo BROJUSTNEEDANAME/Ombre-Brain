@@ -3134,3 +3134,61 @@ def test_voice_note_caption_is_bilingual_and_the_voice_never_reads_chinese(monke
         assert "`译：`" in _mod().build()
     finally:
         cc.voice_mode.clear()
+
+
+def test_tone_is_hers_to_set_and_reaches_the_voice_not_the_caption(tmp_path, monkeypatch):
+    """她问「我能手动改他的情绪吗」：/tone 定了，嗓子收到的第一句就是她的声口。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "voice_tone", {})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    spoken = []
+    async def synth(reply, singing=None, **k):
+        spoken.append(reply)
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    u, m = _upd()
+    asyncio.run(cc.tone_cmd(u, types.SimpleNamespace(args=["慵懒", "低沉"])))
+    assert cc.voice_tone[7] == "lazy, relaxed, low" and "lazy, relaxed, low" in m.texts[-1]
+    cc.voice_tone.clear(); cc._load_state()
+    assert cc.voice_tone[7] == "lazy, relaxed, low", "重启后要记得"
+    cc.voice_mode[7] = True
+    try:
+        assert "lazy, relaxed, low" in cc._with_voice_hint(7, "在吗")
+        asyncio.run(cc._deliver(u, 7, "[soft] Come here."))
+        assert spoken[-1].startswith("[lazy, relaxed, low] Come here."), spoken
+        assert m.captions[-1] == "Come here."
+        asyncio.run(cc.tone_cmd(u, types.SimpleNamespace(args=["乱写"])))
+        assert "不认识" in m.texts[-1] and cc.voice_tone[7] == "lazy, relaxed, low"
+        asyncio.run(cc.tone_cmd(u, types.SimpleNamespace(args=["关"])))
+        assert 7 not in cc.voice_tone
+        asyncio.run(cc._deliver(u, 7, "[soft] Come here."))
+        assert spoken[-1].startswith("[soft] Come here."), "关了就用他自己选的"
+    finally:
+        cc.voice_mode.clear()
+
+
+def test_vstab_picks_one_of_the_three_v3_steps_and_persists(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "STABILITY", 0.4)   # 跑完还原
+    u, m = _upd()
+    asyncio.run(cc.vstab_cmd(u, types.SimpleNamespace(args=["自由"])))
+    assert cc.eleven_tts.STABILITY == 0.0 and "自由" in m.texts[-1]
+    cc.eleven_tts.STABILITY = 0.4; cc._load_state()
+    assert cc.eleven_tts.STABILITY == 0.0
+    asyncio.run(cc.vstab_cmd(u, types.SimpleNamespace(args=["很活泼"])))
+    assert "只能是" in m.texts[-1] and cc.eleven_tts.STABILITY == 0.0
+    names = {n for n, _ in cc.BOT_COMMANDS}
+    assert {"tone", "vstab"} <= names
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    assert 'CommandHandler("tone", tone_cmd)' in src and 'CommandHandler("vstab", vstab_cmd)' in src
+
+
+def test_persona_loosens_the_voice_tags():
+    text = _mod().build()
+    assert "`[relaxed]`" in text and "死板" in text
