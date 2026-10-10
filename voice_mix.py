@@ -51,8 +51,9 @@ WATER_FADE_OUT = 1.4
 GAP = 0.12                # 段与段之间的小停顿
 # 念完原调放慢。她：「语速慢一点点，就慢一点点」。v4 不认 speed 杆（参考文：0.8 和 1.0
 # 出来一样长），所以念完用 ffmpeg atempo 放慢，音高不变。参考文用 0.9；她要「一点点」→ 0.93。
+TEMPO_MIN, TEMPO_MAX = 0.8, 1.2     # 她用 /speed 调，慢到 0.8、快到 1.2
 try:
-    TEMPO = min(1.0, max(0.8, float(os.environ.get("CC_VOICE_TEMPO", "0.93") or 0.93)))
+    TEMPO = min(TEMPO_MAX, max(TEMPO_MIN, float(os.environ.get("CC_VOICE_TEMPO", "0.93") or 0.93)))
 except ValueError:
     TEMPO = 0.93
 _recent_kisses: collections.deque = collections.deque(maxlen=10)
@@ -230,7 +231,7 @@ def encode_opus(x: np.ndarray) -> bytes:
 
 
 def slow_down(audio: bytes) -> bytes:
-    """整条语音原调放慢到 TEMPO。"""
+    """整条语音原调变速到 TEMPO（小于 1 放慢，大于 1 加快），音高不变。"""
     return encode_opus(decode(audio, af=f"atempo={TEMPO:.3f}"))
 
 
@@ -305,7 +306,7 @@ async def render(reply: str, *, singing: bool | None = None,
     if not any(s["kind"] == "kiss" or s.get("wet") for s in segs):
         # 原来那条路：整段一口气念（参考文：喘才不会断），念完放慢一点
         audio = await eleven_tts.synth(strip_markers(reply), singing=singing)
-        if singing or TEMPO >= 0.999 or not can_mix:
+        if singing or abs(TEMPO - 1.0) < 0.001 or not can_mix:
             return audio          # 唱歌不动节拍；没有 ffmpeg 就原样发
         try:
             return await asyncio.to_thread(slow_down, audio)
@@ -339,7 +340,7 @@ def _assemble(segs, says, audio, water_src, rng) -> bytes:
             i_say += 1
             if idx not in audio:
                 continue
-            v = decode(audio[idx], af=f"atempo={TEMPO:.3f}" if TEMPO < 0.999 else "")
+            v = decode(audio[idx], af=f"atempo={TEMPO:.3f}" if abs(TEMPO - 1.0) >= 0.001 else "")
             if s.get("wet") and water.size:
                 v = lay_water(v, water, rng)
             parts.append(v)

@@ -186,3 +186,14 @@ def test_apply_tone_replaces_his_opening_tag_but_keeps_wet():
     assert V.apply_tone("Come here.", "lazy") == "[lazy] Come here."
     assert V.apply_tone("[kiss]\n译：亲\n[low, wet] Easy.", "tender") == "[kiss]\n译：亲\n[tender, wet] Easy."
     assert V.apply_tone("[soft] a", "") == "[soft] a"
+
+
+@needs_ffmpeg
+def test_speed_can_go_faster_and_one_means_untouched(assets, fake_synth, monkeypatch):
+    monkeypatch.setattr(V, "TEMPO", 1.1)
+    assert 0.85 < _secs(asyncio.run(V.render("Come here."))) < 0.95
+    called = []
+    monkeypatch.setattr(V, "TEMPO", 1.0)
+    monkeypatch.setattr(V, "slow_down", lambda a: called.append(1) or a)
+    asyncio.run(V.render("Come here."))
+    assert called == [], "原速就别转码一遍"

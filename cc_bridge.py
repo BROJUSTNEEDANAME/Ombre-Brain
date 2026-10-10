@@ -213,7 +213,7 @@ def _load_state() -> None:
         if d.get("voice_model") in VOICE_MODELS.values():
             eleven_tts.MODEL_ID = d["voice_model"]
         if d.get("tempo"):
-            voice_mix.TEMPO = min(1.0, max(0.8, float(d["tempo"])))
+            voice_mix.TEMPO = min(voice_mix.TEMPO_MAX, max(voice_mix.TEMPO_MIN, float(d["tempo"])))
         if d.get("effort"):
             effort_override["effort"] = str(d["effort"])
         m = d.get("memo") or {}
@@ -695,7 +695,7 @@ BOT_COMMANDS = [
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
     ("water", "给他水声素材 · 发完这个再发音频文件"),
-    ("speed", "他说话的快慢 · /speed 0.88 越小越慢"),
+    ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
     ("tone", "定他语音的情绪 · /tone 慵懒 低沉；/tone 关 交给他自己"),
@@ -1513,24 +1513,45 @@ async def vmodel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "切换：/vmodel v3 或 /vmodel v4")
 
 
+speed_wait: dict[int, bool] = {}       # 她发了 /speed，下一条是个数就当新语速
+
+
+def _speed_note() -> str:
+    return "" if voice_mix.have_ffmpeg() else "\n❌ 但 VPS 上没有 ffmpeg，变速现在不生效。"
+
+
+async def _set_speed(update: Update, cid: int, raw: str) -> bool:
+    """把她给的数设成语速。不是数就返回 False（交给调用方决定怎么办）。"""
+    try:
+        v = float(raw.strip().replace("，", ".").replace("。", "."))
+    except ValueError:
+        return False
+    voice_mix.TEMPO = min(voice_mix.TEMPO_MAX, max(voice_mix.TEMPO_MIN, v))
+    speed_wait.pop(cid, None)
+    _save_state()
+    clamp = "" if abs(voice_mix.TEMPO - v) < 1e-9 else f"（{v:g} 超出范围，按 {voice_mix.TEMPO:g} 算）"
+    await update.message.reply_text(
+        f"好，语速改成 {voice_mix.TEMPO:g} 了{clamp}。下一条语音就用新的。{_speed_note()}")
+    return True
+
+
 async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/speed 0.88：语速她自己调，不用等我改代码。1 是原速，越小越慢，最慢 0.8。"""
+    """/speed：先告诉她现在是多少，她下一条直接回一个数就改。/speed 0.88 一步到位也行。
+
+    由来：她要「现在数值 xx，然后我可以输入新的数值调节」。"""
     cid = update.effective_chat.id
     if not _ok(cid):
         return
     args = [a.strip() for a in (context.args or []) if a.strip()]
     if args:
-        try:
-            v = float(args[0])
-        except ValueError:
+        if not await _set_speed(update, cid, args[0]):
             await update.message.reply_text("要写一个数，比如 /speed 0.9")
-            return
-        voice_mix.TEMPO = min(1.0, max(0.8, v))
-        _save_state()
-    note = "" if voice_mix.have_ffmpeg() else "\n❌ 但 VPS 上没有 ffmpeg，放慢现在不生效。"
+        return
+    speed_wait[cid] = True
     await update.message.reply_text(
-        f"现在语速是 {voice_mix.TEMPO:g} 倍（1 是原速，越小越慢，最慢 0.8）。"
-        f"\n想改就发 /speed 加一个数，比如 /speed 0.88。下一条语音就用新的。{note}")
+        f"现在语速是 {voice_mix.TEMPO:g}。\n"
+        f"直接回我一个新的数就行：1 是原速，越小越慢（最慢 {voice_mix.TEMPO_MIN:g}），"
+        f"越大越快（最快 {voice_mix.TEMPO_MAX:g}）。不想改了就随便说句别的。{_speed_note()}")
 
 
 async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1949,6 +1970,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if cid not in ALLOWED_CHAT_IDS:
         return
     text = update.message.text
+    # 她刚发了 /speed：这条要是个数，就是新语速，不当成跟他说的话
+    if speed_wait.pop(cid, False) and await _set_speed(update, cid, text or ""):
+        return
     # 每条都记一行。由来：她问「他怎么不回我」，我让她拉日志，日志里一片空白——
     # 正常收到、正常答了都不写，于是分不清「没收到」和「收到了但答得慢」。
     logger.info("收到 chat=%s %d字", cid, len(text or ""))

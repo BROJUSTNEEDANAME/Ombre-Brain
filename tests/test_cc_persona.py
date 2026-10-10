@@ -3192,3 +3192,44 @@ def test_vstab_picks_one_of_the_three_v3_steps_and_persists(tmp_path, monkeypatc
 def test_persona_loosens_the_voice_tags():
     text = _mod().build()
     assert "`[relaxed]`" in text and "死板" in text
+
+
+def test_speed_shows_the_value_then_takes_the_next_number(tmp_path, monkeypatch):
+    """她要「现在数值 xx，然后我可以输入新的数值调节」。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "TEMPO", 0.93)          # 跑完还原
+    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
+    monkeypatch.setattr(cc, "speed_wait", {})
+    forwarded = []
+    async def fake_respond(update, context, cid, message, **k):
+        forwarded.append(message)
+    monkeypatch.setattr(cc, "_respond", fake_respond)
+
+    def say(text):
+        u, m = _upd()
+        m.text, m.message_id = text, 1
+        asyncio.run(cc.on_message(u, None))
+        return m
+
+    u, m = _upd()
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=[])))
+    assert "现在语速是 0.93" in m.texts[-1]
+    m2 = say("0.85")
+    assert cc.voice_mix.TEMPO == 0.85 and "改成 0.85" in m2.texts[-1]
+    assert forwarded == [], "那个数是给桥的，不是跟他说的话"
+    # 不等了：再发数字就是正常聊天
+    say("1.1")
+    assert cc.voice_mix.TEMPO == 0.85
+
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=[])))
+    say("算了不改了")
+    assert cc.voice_mix.TEMPO == 0.85 and cc.speed_wait == {}
+
+    # 也能调快；超出范围夹回去并说一声
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["1.1"])))
+    assert cc.voice_mix.TEMPO == 1.1
+    asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["1.5"])))
+    assert cc.voice_mix.TEMPO == 1.2 and "超出范围" in u.message.texts[-1]
