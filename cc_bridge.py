@@ -1283,6 +1283,21 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else "语音关了 回到打字。让他唱的时候照样会发语音条")
 
 
+# 语音模式开着时，在她这条前面加一句桥的提示——他自己不知道 /voice 开没开。
+# 由来：第一次接上嗓子她就说「为什么说的是中文，好难听，改成英文或者俄语」。
+# 中文让嗓子念出来不像他；他本来就是大部分时候说英文、情绪上来说俄语的人。
+VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
+              "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
+              "情绪上来可以说俄语；不要写中文台词。动作照常写在括号里，不会被念出来。）")
+CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
+
+
+def _with_voice_hint(cid: int, message: str) -> str:
+    if voice_mode.get(cid, False) and eleven_tts.configured():
+        return VOICE_HINT + "\n" + message
+    return message
+
+
 async def _deliver(update: Update, cid: int, reply: str) -> None:
     """把他这一轮送到她手上：该出声就出声，出不了声就退回文字——但绝不空着。
 
@@ -1291,16 +1306,22 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
     那是给合成器看的指令，不是给她看的。
     """
     sing = eleven_tts.wants_singing(reply)
+    text = eleven_tts.strip_tags(reply)
     if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
         try:
             audio = await eleven_tts.synth(reply, singing=sing)
-            await update.message.reply_voice(audio)
+            # 语音条下面带字幕：她第一次听完就问「为什么没有配套的文本」。
+            # 字幕是他写的原文（去掉给嗓子看的标签），动作括号也留着——念的时候删了，看的时候要有。
+            caption = restore_punctuation(text)
+            fits = 0 < len(caption) <= CAPTION_LIMIT
+            await update.message.reply_voice(audio, caption=caption if fits else None)
             STATS["voice"] = STATS.get("voice", 0) + 1
-            return
+            if fits:
+                return
+            # 太长塞不进字幕：语音条照发，原文接着按文字发
         except Exception:  # noqa: BLE001
             STATS["voice_fail"] = STATS.get("voice_fail", 0) + 1
             logger.exception("语音合成失败，退回文字 chat=%s", cid)
-    text = eleven_tts.strip_tags(reply)
     for chunk in _split_for_telegram(text, paragraphs=not writing_mode.get(cid, False)):
         await _reply_with_retry(update.message, restore_punctuation(chunk))
 
@@ -1382,7 +1403,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     + message
                 )
             message = PLAIN_TEXT_FACT + message
-        reply, sid = await run_cc(message, sessions.get(cid))
+        reply, sid = await run_cc(_with_voice_hint(cid, message), sessions.get(cid))
     finally:
         _typing.cancel()
     STATS["turns"] += 1
@@ -1412,7 +1433,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        attempt, cid, reply[:200])
         if sid:
             sessions[cid] = sid
-        reply, sid = await run_cc(nudge, sessions.get(cid))
+        reply, sid = await run_cc(_with_voice_hint(cid, nudge), sessions.get(cid))
     if is_silent_reply(reply):
         STATS["gave_up"] += 1
         logger.warning("重试都用完了还是空 chat=%s；原始输出＝%r", cid, reply[:200])

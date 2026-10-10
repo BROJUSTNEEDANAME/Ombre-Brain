@@ -49,7 +49,9 @@ def wants_singing(text: str) -> bool:
 def strip_tags(text: str) -> str:
     """语音合成失败退回文字时，把 [sings] 这类标签去掉——那是给合成器看的，不是给她看的。"""
     out = ANY_TAG_RE.sub("", text or "")
-    return re.sub(r"[ \t]{2,}", " ", out).strip()
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    # 去掉标签后行首会剩一个空格（「[sings] 歌词」→「 歌词」），字幕里看着歪
+    return "\n".join(x.strip(" \t") for x in out.split("\n")).strip()
 
 
 # ── 送进嗓子之前的清洗 ──

@@ -1695,11 +1695,12 @@ def test_archive_is_wired_into_both_send_paths():
 
 class _Msg:
     def __init__(self):
-        self.texts, self.voices = [], []
+        self.texts, self.voices, self.captions = [], [], []
     async def reply_text(self, t, **k):
         self.texts.append(t)
     async def reply_voice(self, a, **k):
         self.voices.append(a)
+        self.captions.append(k.get("caption"))
 
 
 def _upd(cid=7):
@@ -1739,8 +1740,9 @@ def test_singing_forces_a_voice_note_even_with_voice_mode_off(monkeypatch):
     u, m = _upd()
     asyncio.run(cc._deliver(u, 7, "[sings] Twinkle, twinkle, little star\n[sings] How I wonder what you are\n\n唱完了。"))
     assert m.voices and m.voices[0].startswith(b"OggS")
-    assert m.texts == [], "发了语音就不再发一遍文字"
+    assert m.texts == [], "发了语音就不再发一遍文字（原文在字幕里）"
     assert sent["singing"] is True and "[sings]" in sent["reply"]
+    assert m.captions[0] == "Twinkle, twinkle, little star\nHow I wonder what you are\n\n唱完了。"
 
 
 def test_voice_failure_falls_back_to_text_without_tags(monkeypatch):
@@ -1818,7 +1820,7 @@ def test_every_message_in_and_out_leaves_one_log_line():
     assert 'logger.info("收到 chat=%s' in inspect.getsource(cc.on_message)
     body = inspect.getsource(cc._respond)
     assert 'logger.info("答了 chat=%s' in body
-    assert body.index("_t0 = time.time()") < body.index("await run_cc(message")
+    assert body.index("_t0 = time.time()") < body.index("await run_cc(_with_voice_hint(cid, message)")
 
 
 def test_second_instance_exits_instead_of_fighting_over_the_bot():
@@ -2695,3 +2697,73 @@ def test_persona_teaches_writing_for_the_voice():
     text = _mod().build()
     assert "只有台词会被念出来" in text
     assert "不写 intense" in text
+
+
+def test_voice_note_carries_the_original_text_as_caption_actions_included(monkeypatch):
+    """她第一次听完：「为什么没有配套的文本」。字幕是原文——念的时候删了动作，看的时候要有。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def synth(reply, singing=None, **k):
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "[low] (pulls you closer) Come here."))
+    assert m.voices and m.texts == []
+    assert m.captions == ["(pulls you closer) Come here."], m.captions
+    cc.voice_mode.clear()
+
+
+def test_too_long_for_a_caption_still_sends_the_text_after_the_voice(monkeypatch):
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def synth(reply, singing=None, **k):
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    got = []
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    cc._reply_with_retry = fake_retry
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    long = "Stay. " * 300
+    asyncio.run(cc._deliver(u, 7, long))
+    assert m.voices and m.captions == [None]
+    assert "".join(got).count("Stay.") == 300, "字幕放不下就接着发文字，不许丢"
+    cc.voice_mode.clear()
+
+
+def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatch):
+    """真的跑 _respond：语音开着，他收到的那条前面有桥的提示；关着就原样。"""
+    import asyncio as aio
+    cc = _cc()
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "在。", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def synth(reply, singing=None, **k):
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    ctx = type("C", (), {"bot": _Bot()})()
+    cc.voice_mode[7] = True
+    aio.run(cc._respond(u, ctx, 7, "说句话"))
+    assert seen[-1].startswith(cc.VOICE_HINT) and seen[-1].endswith("说句话")
+    assert "英文" in cc.VOICE_HINT and "俄语" in cc.VOICE_HINT
+    cc.voice_mode[7] = False
+    aio.run(cc._respond(u, ctx, 7, "说句话"))
+    assert seen[-1] == "说句话"
+    cc.voice_mode.clear()
+
+
+def test_persona_explains_the_bridge_voice_hint():
+    text = _mod().build()
+    assert "桥的提示" in text and "说出口的台词用英文" in text
