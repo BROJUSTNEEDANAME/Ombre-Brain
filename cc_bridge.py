@@ -1559,7 +1559,9 @@ VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会�
               "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
               "往低、近、慢、暖里写，比如 [low and close] [soft, unhurried] [warmly]，"
               "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
-              "动作照常写在括号里，不会被念出来。）")
+              "动作照常写在括号里，不会被念出来。"
+              "每句英文或俄语台词下面另起一行写「译：」加这句的中文意思，"
+              "那一行不会被念，她在字幕里对着看。）")
 CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
 
 
@@ -1577,7 +1579,8 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
     那是给合成器看的指令，不是给她看的。
     """
     sing = eleven_tts.wants_singing(reply)
-    text = eleven_tts.strip_tags(voice_mix.strip_markers(reply))
+    # 字幕和文字：去掉给嗓子看的标签和亲吻行；「译：」行留着当双语字幕，前缀去掉
+    text = voice_mix.show_translations(eleven_tts.strip_tags(voice_mix.strip_markers(reply)))
     if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
         try:
             # 台词＋亲吻＋水声拼成一条，念完放慢一点；没有素材就是原来那样整段念

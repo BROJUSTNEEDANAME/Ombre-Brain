@@ -154,3 +154,20 @@ def test_slowdown_failure_still_sends_the_voice(fake_synth, monkeypatch, tmp_pat
     monkeypatch.setattr(V, "have_ffmpeg", lambda: True)
     out = asyncio.run(V.render("Come here."))
     assert out[:4] == b"OggS"
+
+
+# ── 双语字幕：「译：」行不念，只进字幕 ──
+
+def test_translation_lines_are_dropped_for_the_voice_and_shown_for_her():
+    reply = "[low] Come here.\n译：过来。\nDon't move.\n翻译: 别动。‖Stay.‖译：留下。"
+    assert V.drop_translations(reply) == "[low] Come here.\nDon't move.\nStay."
+    assert V.show_translations(reply) == "[low] Come here.\n过来。\nDon't move.\n别动。‖Stay.‖留下。"
+    # 台词里提到「译」字但不是译文行，不动
+    assert V.drop_translations("他说译：不对") == "他说译：不对"
+
+
+def test_render_never_sends_the_translation_to_the_voice(fake_synth, monkeypatch, tmp_path):
+    monkeypatch.setattr(V, "KISS_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(V, "WATER_DIR", str(tmp_path / "none"))
+    asyncio.run(V.render("[low] Come here.\n译：过来。"))
+    assert [c["text"] for c in fake_synth] == ["[low] Come here."]

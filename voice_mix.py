@@ -109,6 +109,30 @@ def plan(reply: str) -> list[dict]:
     return out
 
 
+# 双语字幕：他在每句英文/俄语台词下面另起一行写「译：中文意思」。
+# 这一行嗓子不念（念出来就是中文，她说过中文念出来难听），只进字幕，前缀去掉。
+# 由来：她「想把每个语音加一个双语翻译」。
+_TRANS_LINE_RE = re.compile(r"^[ \t]*(?:译|翻译|中文)[ \t]*[：:][ \t]*(.*)$")
+
+
+def drop_translations(reply: str) -> str:
+    """送进嗓子前：译文行整行去掉（‖ 分出来的小段也认）。"""
+    lines = []
+    for line in (reply or "").split("\n"):
+        pieces = [p for p in line.split("‖") if not _TRANS_LINE_RE.match(p)]
+        if pieces:
+            lines.append("‖".join(pieces))
+    return "\n".join(lines)
+
+
+def show_translations(text: str) -> str:
+    """给字幕和文字：「译：过来。」→「过来。」，紧跟在原句下面。"""
+    out = []
+    for line in (text or "").split("\n"):
+        out.append("‖".join(_TRANS_LINE_RE.sub(r"\1", p) for p in line.split("‖")))
+    return "\n".join(out)
+
+
 def strip_markers(reply: str) -> str:
     """亲吻行和 wet 都去掉——给不走拼接的那条路、也给字幕用。"""
     # ‖ 是他分条的记号，文字那条路靠它拆成几条消息——这里只删亲吻，‖ 原样留着
@@ -224,6 +248,7 @@ async def render(reply: str, *, singing: bool | None = None,
                  rng: random.Random | None = None) -> bytes:
     """合成一条语音条（Ogg/Opus）。任何失败都抛出去，由桥退回文字。"""
     rng = rng or random.Random()
+    reply = drop_translations(reply)       # 译文只进字幕，不念
     if singing is None:
         singing = eleven_tts.wants_singing(reply)
     segs = [] if singing else plan(reply)

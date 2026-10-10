@@ -3112,3 +3112,25 @@ def test_voiceid_warns_that_the_kissbox_is_the_old_voice(tmp_path, monkeypatch):
     u, m = _upd()
     asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["Nh3vXVPofCwkhqpHjENM"])))
     assert "重做一盒" in m.texts[-1]
+
+
+def test_voice_note_caption_is_bilingual_and_the_voice_never_reads_chinese(monkeypatch):
+    """她要每条语音带双语翻译。译文进字幕，但绝不能送进嗓子——中文念出来她说难听。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    spoken = []
+    async def synth(reply, singing=None, **k):
+        spoken.append(reply)
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    try:
+        asyncio.run(cc._deliver(u, 7, "[low] (pulls you closer) Come here.\n译：过来。"))
+        assert m.captions == ["(pulls you closer) Come here.\n过来。"], m.captions
+        assert spoken and "过来" not in spoken[0] and "译" not in spoken[0], spoken
+        assert "译：" in cc.VOICE_HINT
+        assert "`译：`" in _mod().build()
+    finally:
+        cc.voice_mode.clear()
