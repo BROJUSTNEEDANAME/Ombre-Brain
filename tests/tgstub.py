@@ -42,7 +42,8 @@ def install_telegram():
         _fill(ext, **{n: type(n, (), {})})
     _fill(ext,
           ContextTypes=type("ContextTypes", (), {"DEFAULT_TYPE": object}),
-          filters=types.SimpleNamespace(PHOTO=1, VOICE=2, TEXT=4, COMMAND=8))
+          filters=types.SimpleNamespace(PHOTO=1, VOICE=2, TEXT=4, COMMAND=8, AUDIO=16,
+                                        Document=types.SimpleNamespace(AUDIO=32)))
     return tg
 
 

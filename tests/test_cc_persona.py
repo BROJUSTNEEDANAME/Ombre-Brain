@@ -2935,3 +2935,98 @@ def test_status_says_plainly_when_ffmpeg_is_missing(monkeypatch):
     monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
     asyncio.run(cc.status_cmd(u, None))
     assert "放慢到 0.93 倍" in m.texts[-1]
+
+
+# ── 亲盒试听、水声上传 ──
+
+class _TgFile:
+    def __init__(self, data):
+        self.data = data
+    async def download_as_bytearray(self):
+        return bytearray(self.data)
+
+
+def _audio_upd(data, name="rain.wav"):
+    import types
+    m = _Msg()
+    doc = types.SimpleNamespace(file_id="f1", file_name=name)
+    m.audio, m.document, m.voice = None, doc, None
+    upd = types.SimpleNamespace(effective_chat=types.SimpleNamespace(id=7), message=m)
+    ctx = types.SimpleNamespace(bot=types.SimpleNamespace(), args=[])
+    async def get_file(fid):
+        return _TgFile(data)
+    ctx.bot.get_file = get_file
+    return upd, m, ctx
+
+
+def _wav(secs, amp=0.3):
+    import shutil, subprocess
+    if not shutil.which("ffmpeg"):
+        import pytest
+        pytest.skip("没有 ffmpeg")
+    return subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                           f"anoisesrc=color=pink:amplitude={amp}:duration={secs}",
+                           "-ac", "1", "-f", "wav", "pipe:1"], capture_output=True, check=True).stdout
+
+
+def test_water_is_only_taken_right_after_the_water_command(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
+    cc.water_wait.clear()
+    upd, m, ctx = _audio_upd(_wav(5))
+    asyncio.run(cc.on_audio(upd, ctx))
+    assert cc.voice_mix.water_files() == [] and "先发 /water" in m.texts[-1]
+
+    u2, m2 = _upd()
+    asyncio.run(cc.water_cmd(u2, types.SimpleNamespace(args=[])))
+    assert "CC0" in m2.texts[-1]
+    asyncio.run(cc.on_audio(upd, ctx))
+    files = cc.voice_mix.water_files()
+    assert len(files) == 1 and files[0].endswith(".wav") and "收好了" in m.texts[-1]
+    # 收完一段就不再等了
+    asyncio.run(cc.on_audio(upd, ctx))
+    assert len(cc.voice_mix.water_files()) == 1
+
+    asyncio.run(cc.water_cmd(u2, types.SimpleNamespace(args=["清空"])))
+    assert cc.voice_mix.water_files() == []
+
+
+def test_water_rejects_too_short_or_silent_files(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
+    for data, why in ((_wav(1), "太短"), (_wav(5, amp=0.0), "几乎没有声音")):
+        cc.water_wait[7] = True
+        upd, m, ctx = _audio_upd(data)
+        asyncio.run(cc.on_audio(upd, ctx))
+        assert why in m.texts[-1] and cc.voice_mix.water_files() == []
+
+
+def test_kissbox_preview_plays_real_clips_or_says_how_to_build(tmp_path, monkeypatch):
+    import asyncio, os
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kissbox"))
+    u, m = _upd()
+    asyncio.run(cc.kissbox_cmd(u, None))
+    assert "make-kissbox.py" in m.texts[-1] and m.voices == []
+    os.makedirs(tmp_path / "kissbox" / "light")
+    for i in range(3):
+        (tmp_path / "kissbox" / "light" / f"{i}.wav").write_bytes(_wav(0.3))
+    asyncio.run(cc.kissbox_cmd(u, None))
+    assert m.voices and m.voices[0][:4] == b"OggS"
+    assert "轻亲 3 口" in m.captions[-1]
+
+
+def test_kiss_and_water_commands_are_wired_and_taught():
+    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+    for h in ('CommandHandler("kissbox", kissbox_cmd)', 'CommandHandler("water", water_cmd)',
+              "filters.AUDIO | filters.Document.AUDIO | filters.VOICE, on_audio"):
+        assert h in src, h
+    cc = _cc()
+    assert {"kissbox", "water"} <= {n for n, _ in cc.BOT_COMMANDS}
+    text = _mod().build()
+    assert "单独一行写 `[kiss]`" in text and "`[low, close, wet]`" in text

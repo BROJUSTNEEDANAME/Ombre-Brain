@@ -45,6 +45,9 @@ import stale_ledger
 import eleven_tts
 import self_beat
 import voice_mix
+import random
+
+import numpy as np
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -674,6 +677,8 @@ BOT_COMMANDS = [
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
+    ("kissbox", "听一遍他的亲盒"),
+    ("water", "给他水声素材 · 发完这个再发音频文件"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
@@ -1349,6 +1354,102 @@ async def beat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"好，现在是：{_beat_desc(cid)}。{extra}\n再发一次 /beat 切回去。")
 
 
+# ── 亲盒和水声（参考 ai-voice-breath-kiss-water）──
+water_wait: dict[int, bool] = {}       # 她发了 /water，下一个音频文件当水声素材收
+
+
+async def kissbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/kissbox：听一遍亲盒。参考文：筛子过了不等于好听，交给她之前先自己听。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    if not voice_mix.have_ffmpeg():
+        await update.message.reply_text("❌ VPS 上没有 ffmpeg，亲盒用不了。先跑：sudo apt install -y ffmpeg")
+        return
+    files = voice_mix.kiss_files()
+    if not files:
+        await update.message.reply_text(
+            "亲盒还是空的。在 VPS 上跑一次：\n"
+            "cd /home/ombre/Ombre-Brain && sudo -u ombre .venv/bin/python scripts/make-kissbox.py")
+        return
+    light = len(voice_mix.kiss_files("light"))
+    try:
+        rng = random.Random()
+        picks = rng.sample(files, min(5, len(files)))
+        gap = np.zeros(int(0.5 * voice_mix.SR), dtype=np.float32)
+        def _mk() -> bytes:
+            parts = []
+            for f in picks:
+                parts += [voice_mix.decode(f), gap]
+            return voice_mix.encode_opus(np.concatenate(parts))
+        audio = await asyncio.to_thread(_mk)
+        await update.message.reply_voice(
+            audio, caption=f"亲盒：轻亲 {light} 口，深吻 {len(files) - light} 口。随机放 {len(picks)} 口给你听。"
+                           "不像的话跟我说，重做一盒。")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("亲盒试听失败")
+        await update.message.reply_text(f"❌ 亲盒试听没放出来：{e}")
+
+
+async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/water：收水声素材。/water 清空 把素材全删了。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args and args[0] in ("清空", "clear"):
+        n = 0
+        for f in voice_mix.water_files():
+            try:
+                os.remove(f)
+                n += 1
+            except OSError:
+                pass
+        water_wait.pop(cid, None)
+        await update.message.reply_text(f"水声素材删了 {n} 段。现在没有水声了。")
+        return
+    water_wait[cid] = True
+    await update.message.reply_text(
+        f"现在有 {len(voice_mix.water_files())} 段水声素材。\n"
+        "把下一段音频当文件发给我，我就收进去。要求：没有人声、公有领域（CC0）的录音，"
+        "几秒到一分钟都行。不收了就随便发句话。")
+
+
+async def on_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """她发来的音频文件。只有刚发过 /water 才当水声素材收。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    msg = update.message
+    if not water_wait.pop(cid, False):
+        await msg.reply_text("这段音频我先不收。要当水声素材的话，先发 /water 再发文件。")
+        return
+    f = msg.audio or msg.document or msg.voice
+    name = (getattr(f, "file_name", "") or "water.ogg").lower()
+    ext = os.path.splitext(name)[1] if name.endswith(voice_mix.AUDIO_EXT) else ".ogg"
+    try:
+        tg_file = await context.bot.get_file(f.file_id)
+        raw = bytes(await tg_file.download_as_bytearray())
+        x = await asyncio.to_thread(voice_mix.decode, raw)
+        secs = len(x) / voice_mix.SR
+        if secs < 2:
+            await msg.reply_text(f"❌ 这段只有 {secs:.1f} 秒，太短了，没收。")
+            return
+        if voice_mix.peak_db(x) < -50:
+            await msg.reply_text("❌ 这段几乎没有声音，没收。")
+            return
+        os.makedirs(voice_mix.WATER_DIR, exist_ok=True)
+        path = os.path.join(voice_mix.WATER_DIR, f"water_{int(time.time())}{ext}")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        await msg.reply_text(
+            f"收好了，{secs:.0f} 秒。现在一共 {len(voice_mix.water_files())} 段水声素材。\n"
+            "他在声口标签里写 wet 的那几句，底下就会垫上它。")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("收水声素材失败")
+        await msg.reply_text(f"❌ 没收进去：{e}")
+
+
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
     cid = update.effective_chat.id
@@ -1703,6 +1804,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # 正常收到、正常答了都不写，于是分不清「没收到」和「收到了但答得慢」。
     logger.info("收到 chat=%s %d字", cid, len(text or ""))
     _archive("闪闪", text)
+    water_wait.pop(cid, None)              # /water 之后她说了别的＝不收了
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
@@ -1944,6 +2046,8 @@ def main() -> None:
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("beat", beat_cmd))
+    app.add_handler(CommandHandler("kissbox", kissbox_cmd))
+    app.add_handler(CommandHandler("water", water_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
@@ -1951,6 +2055,7 @@ def main() -> None:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO | filters.VOICE, on_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
         # 每分钟看一眼；真正的间隔由 NUDGE_MINUTES 判断，这样她刚说完话
