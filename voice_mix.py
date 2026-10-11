@@ -30,6 +30,7 @@ import subprocess
 import numpy as np
 
 import eleven_tts
+import water_synth
 
 ASSET_DIR = (os.environ.get("CC_VOICE_ASSETS", "").strip()
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_assets"))
@@ -42,7 +43,7 @@ KISS_LINE_RE = re.compile(
     r"^[ \t]*\[(?:(deep|soft|light|neck)[ \t]+)?kiss(?:es)?(?:[ \t]+(deep|soft|light|neck))?[ \t]*\][ \t]*$",
     re.I)
 _TAG_RE = re.compile(r"\[([^\[\]\n]{1,60})\]")
-_WET_RE = re.compile(r"\bwet\b", re.I)
+_WET_RE = re.compile(r"\b(wet|squish\w*)\b", re.I)   # squish＝更黏的咕叽（参考文：换个词）
 
 WATER_GAP_DB = 12.0       # 水声峰比人声峰低多少
 WATER_FADE_IN = 0.5
@@ -74,29 +75,35 @@ def strip_wet(text: str) -> str:
     return _TAG_RE.sub(_strip_wet_tag, text or "")
 
 
-def _has_wet(text: str) -> bool | None:
-    """这段里有标签：有 wet 就 True，没有就 False；一个标签都没有：None（沿用上一段）。"""
+def _has_wet(text: str):
+    """这段里有标签：写了 squish 回 "squish"、写了 wet 回 "wet"、都没写回 False；
+    一个标签都没有：None（沿用上一段）。"""
     tags = _TAG_RE.findall(text or "")
     if not tags:
         return None
-    return any(_WET_RE.search(t) for t in tags)
+    words = [m.group(1).lower() for t in tags for m in _WET_RE.finditer(t)]
+    if any(w.startswith("squish") for w in words):
+        return "squish"
+    return "wet" if words else False
 
 
 def plan(reply: str) -> list[dict]:
-    """把他的回复拆成一段一段：{"kind":"say","text","wet"} 或 {"kind":"kiss","type"}。"""
+    """把他的回复拆成一段一段：{"kind":"say","text","wet"} 或 {"kind":"kiss","type"}。
+
+    只在两处切：亲吻行，和「水声状态变了」的那一行（参考文：下一个标签里不写 wet，
+    水声就退掉）。其余连着的台词整段一口气念——切太碎喘就断了。"""
     out: list[dict] = []
     buf: list[str] = []
-    wet = False
+    wet = False                # 当前这一段的水声状态（没标签的段沿用上一段）
+    fresh = True               # 这一段还没定下自己的状态
 
     def flush() -> None:
-        nonlocal wet, buf
+        nonlocal buf, fresh
         block = "\n".join(buf).strip()
         buf = []
-        if not block:
-            return
-        w = _has_wet(block)
-        wet = wet if w is None else w
-        out.append({"kind": "say", "text": strip_wet(block), "wet": wet})
+        fresh = True
+        if block:
+            out.append({"kind": "say", "text": strip_wet(block), "wet": wet})
 
     for line in (reply or "").replace("‖", "\n").split("\n"):
         m = KISS_LINE_RE.match(line)
@@ -104,8 +111,15 @@ def plan(reply: str) -> list[dict]:
             flush()
             kind = (m.group(1) or m.group(2) or "light").lower()
             out.append({"kind": "kiss", "type": "deep" if kind == "deep" else "light"})
-        else:
-            buf.append(line)
+            continue
+        w = _has_wet(line)
+        if w is not None:
+            if fresh:
+                wet, fresh = w, False
+            elif w != wet:
+                flush()
+                wet, fresh = w, False
+        buf.append(line)
     flush()
     return out
 
@@ -170,9 +184,9 @@ def apply_tone(reply: str, tone: str) -> str:
         if not line.strip() or KISS_LINE_RE.match(line) or _TRANS_LINE_RE.match(line):
             continue
         m = _LEAD_TAG_RE.match(line)
-        wet = bool(m and _WET_RE.search(m.group(1)))
+        w = _WET_RE.search(m.group(1)) if m else None
         body = line[m.end():] if m else line.lstrip()
-        lines[i] = f"[{tone}{', wet' if wet else ''}] {body}"
+        lines[i] = f"[{tone}{', ' + w.group(1).lower() if w else ''}] {body}"
         break
     return "\n".join(lines)
 
@@ -203,8 +217,35 @@ def kiss_files(kind: str | None = None) -> list[str]:
 
 
 def water_files() -> list[str]:
+    """她用 /water 传上来的真录音。"""
     return sorted(p for p in glob.glob(os.path.join(WATER_DIR, "*"))
                   if p.lower().endswith(AUDIO_EXT))
+
+
+WATER_BUILTIN = True      # 没有真录音时用合成的那段；她可以 /water 内置 关
+
+
+def water_sources() -> list[str]:
+    """真录音优先；一段都没有就用内置合成的（"builtin"）。"""
+    files = water_files()
+    if files:
+        return files
+    return ["builtin"] if WATER_BUILTIN else []
+
+
+def water_preview() -> bytes:
+    """给她试听现在会垫进去的水声。"""
+    gap = np.zeros(int(0.6 * SR), dtype=np.float32)
+    files = water_files()
+    if files:
+        parts = []
+        for f in files[:2]:
+            parts += [decode(f)[: 12 * SR], gap]
+    elif WATER_BUILTIN:
+        parts = [water_synth.get("wet")[: 10 * SR], gap, water_synth.get("squish")[: 6 * SR]]
+    else:
+        raise ValueError("没有水声：没有上传的，内置的也关了")
+    return encode_opus(np.concatenate(parts))
 
 
 # ── 音频小工具（同步，丢进线程里跑）──
@@ -299,7 +340,7 @@ async def render(reply: str, *, singing: bool | None = None,
     can_mix = have_ffmpeg()
     if not (can_mix and kiss_files()):
         segs = [s for s in segs if s["kind"] != "kiss"]
-    waters = water_files() if can_mix else []
+    waters = water_sources() if can_mix else []
     if not waters:
         for s in segs:
             s["wet"] = False
@@ -331,7 +372,16 @@ async def render(reply: str, *, singing: bool | None = None,
 
 def _assemble(segs, says, audio, water_src, rng) -> bytes:
     gap = np.zeros(int(GAP * SR), dtype=np.float32)
-    water = decode(water_src) if water_src else np.zeros(0, dtype=np.float32)
+    decoded: dict[str, np.ndarray] = {}
+
+    def water_for(kind) -> np.ndarray | None:
+        if not water_src:
+            return None
+        if water_src == "builtin":
+            return water_synth.get("squish" if kind == "squish" else "wet")
+        if "file" not in decoded:
+            decoded["file"] = decode(water_src)
+        return decoded["file"]
     parts: list[np.ndarray] = []
     i_say = 0
     for s in segs:
@@ -341,8 +391,9 @@ def _assemble(segs, says, audio, water_src, rng) -> bytes:
             if idx not in audio:
                 continue
             v = decode(audio[idx], af=f"atempo={TEMPO:.3f}" if abs(TEMPO - 1.0) >= 0.001 else "")
-            if s.get("wet") and water.size:
-                v = lay_water(v, water, rng)
+            w = water_for(s["wet"]) if s.get("wet") else None
+            if w is not None and w.size:
+                v = lay_water(v, w, rng)
             parts.append(v)
         else:
             f = pick_kiss(s["type"], rng)

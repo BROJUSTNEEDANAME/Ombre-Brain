@@ -33,10 +33,10 @@ def assets(tmp_path, monkeypatch):
     for kind in ("light", "deep"):
         (kiss / kind).mkdir(parents=True)
         for i in range(3):
-            _gen(str(kiss / kind / f"{i}.wav"), "anoisesrc=color=white:amplitude=0.3", 0.3)
+            _gen(str(kiss / kind / f"{i}.wav"), "anoisesrc=color=white:amplitude=0.3:seed=1", 0.3)
     water = tmp_path / "water"
     water.mkdir()
-    _gen(str(water / "w.wav"), "anoisesrc=color=pink:amplitude=0.5", 5)
+    _gen(str(water / "w.wav"), "anoisesrc=color=pink:amplitude=0.5:seed=2", 5)
     monkeypatch.setattr(V, "KISS_DIR", str(kiss))
     monkeypatch.setattr(V, "WATER_DIR", str(water))
     V._recent_kisses.clear()
@@ -71,7 +71,7 @@ def test_plan_splits_kisses_and_carries_wet_until_a_tag_without_it():
     p = V.plan(reply)
     assert [s["kind"] for s in p] == ["say", "kiss", "say", "kiss", "say"]
     assert p[1]["type"] == "light" and p[3]["type"] == "deep"
-    assert [s.get("wet") for s in p if s["kind"] == "say"] == [False, True, False]
+    assert [s.get("wet") for s in p if s["kind"] == "say"] == [False, "wet", False]
     assert "wet" not in p[2]["text"] and "[soft]" in p[2]["text"], "wet 摘掉，嗓子看不到"
 
 
@@ -197,3 +197,52 @@ def test_speed_can_go_faster_and_one_means_untouched(assets, fake_synth, monkeyp
     monkeypatch.setattr(V, "slow_down", lambda a: called.append(1) or a)
     asyncio.run(V.render("Come here."))
     assert called == [], "原速就别转码一遍"
+
+
+
+# ── 内置合成水声（她说「你自己找一段水声自己合成」）──
+
+def test_builtin_water_is_liquid_band_and_stable():
+    import water_synth as W
+    for kind, secs in (("wet", 20), ("squish", 8)):
+        x = W.get(kind)
+        assert abs(len(x) / W.SR - secs) < 0.01
+        X = np.abs(np.fft.rfft(x)) ** 2
+        f = np.fft.rfftfreq(len(x), 1 / W.SR)
+        mid = X[(f >= 200) & (f < 2000)].sum() / X.sum()
+        assert mid > 0.7, f"{kind}: 液体声该集中在 200–2000 Hz，现在 {mid:.0%}"
+        assert 0.5 < float(np.abs(x).max()) <= 0.71
+    assert W.get("wet") is W.get("wet"), "同一进程只算一次"
+
+
+def test_squish_tag_picks_the_sticky_one_and_is_never_spoken():
+    p = V.plan("[soft, squish] Easy.\n[low, wet] Slow.\nStay.\n[low] Done.")
+    assert [s["wet"] for s in p] == ["squish", "wet", False], "Stay. 没标签，跟 Slow. 同一段"
+    assert all("squish" not in s["text"] and "wet" not in s["text"] for s in p)
+    assert V.apply_tone("[soft, squish] Easy.", "tender") == "[tender, squish] Easy."
+
+
+@needs_ffmpeg
+def test_no_upload_uses_builtin_water_by_kind(fake_synth, monkeypatch, tmp_path):
+    import water_synth as W
+    monkeypatch.setattr(V, "KISS_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(V, "WATER_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(V, "TEMPO", 1.0)
+    asked = []
+    real = W.get
+    monkeypatch.setattr(W, "get", lambda kind="wet": asked.append(kind) or real(kind))
+    x = V.decode(asyncio.run(V.render("[low, squish] Easy.", rng=random.Random(5))))
+    assert asked == ["squish"]
+    assert len(x) / V.SR > 1.9 and V.peak_db(x[int(1.1 * V.SR):int(1.5 * V.SR)]) > -40, "尾巴上得有水声"
+    asked.clear()
+    monkeypatch.setattr(V, "WATER_BUILTIN", False)
+    x = V.decode(asyncio.run(V.render("[low, wet] Easy.", rng=random.Random(5))))
+    assert asked == [] and len(x) / V.SR < 1.2, "内置关了、又没上传：不垫水声"
+
+
+def test_uploaded_water_wins_over_builtin(monkeypatch, tmp_path):
+    (tmp_path / "w.wav").write_bytes(b"x")
+    monkeypatch.setattr(V, "WATER_DIR", str(tmp_path))
+    assert V.water_sources() == [str(tmp_path / "w.wav")]
+    monkeypatch.setattr(V, "WATER_DIR", str(tmp_path / "none"))
+    assert V.water_sources() == ["builtin"]

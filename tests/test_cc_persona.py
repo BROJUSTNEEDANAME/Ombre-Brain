@@ -3233,3 +3233,34 @@ def test_speed_shows_the_value_then_takes_the_next_number(tmp_path, monkeypatch)
     assert cc.voice_mix.TEMPO == 1.1
     asyncio.run(cc.speed_cmd(u, types.SimpleNamespace(args=["1.5"])))
     assert cc.voice_mix.TEMPO == 1.2 and "超出范围" in u.message.texts[-1]
+
+
+def test_water_listen_and_builtin_switch(tmp_path, monkeypatch):
+    """她说「你自己找一段水声自己合成」：没上传也有内置的；能试听；不喜欢能关；关了要记得。"""
+    import asyncio, types, shutil
+    import pytest
+    if not shutil.which("ffmpeg"):
+        pytest.skip("没有 ffmpeg")
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
+    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)   # 跑完还原
+    u, m = _upd()
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
+    assert m.voices and m.voices[-1][:4] == b"OggS" and "内置合成" in m.captions[-1]
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["内置", "关"])))
+    assert cc.voice_mix.WATER_BUILTIN is False and "没有" in m.texts[-1]
+    cc.voice_mix.WATER_BUILTIN = True; cc._load_state()
+    assert cc.voice_mix.WATER_BUILTIN is False, "重启后要记得她关了"
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
+    assert "没放出来" in m.texts[-1]
+    # 传了真录音就用真的
+    import os
+    os.makedirs(tmp_path / "water")
+    (tmp_path / "water" / "rain.wav").write_bytes(_wav(3))
+    assert "你上传的 1 段" in cc._water_desc()
+
+
+def test_persona_teaches_squish():
+    assert "`[low, squish]`" in _mod().build()

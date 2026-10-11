@@ -208,6 +208,8 @@ def _load_state() -> None:
             voice_id_override["id"] = d["voice_id"]
             eleven_tts.VOICE_ID = d["voice_id"]
         voice_tone.update({int(k): str(v) for k, v in (d.get("voice_tone") or {}).items() if v})
+        if isinstance(d.get("water_builtin"), bool):
+            voice_mix.WATER_BUILTIN = d["water_builtin"]
         if isinstance(d.get("stability"), (int, float)) and 0 <= d["stability"] <= 1:
             eleven_tts.STABILITY = float(d["stability"])
         if d.get("voice_model") in VOICE_MODELS.values():
@@ -251,6 +253,7 @@ def _save_state() -> None:
         "voice_model": eleven_tts.MODEL_ID,  # 她用 /vmodel 选的合成型号
         "voice_tone": {str(k): v for k, v in voice_tone.items()},
         "stability": eleven_tts.STABILITY,
+        "water_builtin": voice_mix.WATER_BUILTIN,
         # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
         "voice_id": voice_id_override.get("id", ""),
     }
@@ -694,7 +697,7 @@ BOT_COMMANDS = [
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
-    ("water", "给他水声素材 · 发完这个再发音频文件"),
+    ("water", "水声 · /water 听 试听；/water 内置 关；发完 /water 再发音频换真录音"),
     ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
@@ -829,7 +832,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # 放慢和亲吻、水声都靠 ffmpeg。没装就说没装——不许让她以为生效了
         if voice_mix.have_ffmpeg():
             L.append(f"语速：念完放慢到 {voice_mix.TEMPO:g} 倍"
-                     f"｜亲盒 {len(voice_mix.kiss_files())} 口｜水声素材 {len(voice_mix.water_files())} 段")
+                     f"｜亲盒 {len(voice_mix.kiss_files())} 口｜水声：{_water_desc()}")
         else:
             L.append("❌ VPS 上没有 ffmpeg：放慢、亲吻声、水声都没生效（sudo apt install -y ffmpeg）")
     else:
@@ -1554,12 +1557,40 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"越大越快（最快 {voice_mix.TEMPO_MAX:g}）。不想改了就随便说句别的。{_speed_note()}")
 
 
+def _water_desc() -> str:
+    n = len(voice_mix.water_files())
+    if n:
+        return f"你上传的 {n} 段"
+    return "内置合成的那段" if voice_mix.WATER_BUILTIN else "没有（内置的关了，也没上传）"
+
+
 async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/water：收水声素材。/water 清空 把素材全删了。"""
+    """/water：收水声素材。/water 听 试听；/water 内置 关｜开；/water 清空 删掉上传的。"""
     cid = update.effective_chat.id
     if not _ok(cid):
         return
     args = [a.strip() for a in (context.args or []) if a.strip()]
+    if args and args[0] in ("听", "试听", "listen"):
+        if not voice_mix.have_ffmpeg():
+            await update.message.reply_text("❌ VPS 上没有 ffmpeg，水声用不了。")
+            return
+        try:
+            audio = await asyncio.to_thread(voice_mix.water_preview)
+        except Exception as e:  # noqa: BLE001
+            await update.message.reply_text(f"❌ 没放出来：{e}")
+            return
+        await update.message.reply_voice(
+            audio, caption=f"现在会垫进去的水声：{_water_desc()}。不像的话发 /water 内置 关，"
+                           "或者发 /water 再传一段真录音，真录音优先。")
+        return
+    if args and args[0] == "内置":
+        if len(args) > 1 and args[1] in ("关", "off", "开", "on"):
+            voice_mix.WATER_BUILTIN = args[1] in ("开", "on")
+            _save_state()
+        await update.message.reply_text(
+            f"内置合成水声：{'开' if voice_mix.WATER_BUILTIN else '关'}。现在用的是：{_water_desc()}。\n"
+            "切换：/water 内置 开 或 /water 内置 关")
+        return
     if args and args[0] in ("清空", "clear"):
         n = 0
         for f in voice_mix.water_files():
@@ -1569,13 +1600,13 @@ async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             except OSError:
                 pass
         water_wait.pop(cid, None)
-        await update.message.reply_text(f"水声素材删了 {n} 段。现在没有水声了。")
+        await update.message.reply_text(f"上传的水声素材删了 {n} 段。现在用的是：{_water_desc()}。")
         return
     water_wait[cid] = True
     await update.message.reply_text(
-        f"现在有 {len(voice_mix.water_files())} 段水声素材。\n"
-        "把下一段音频当文件发给我，我就收进去。要求：没有人声、公有领域（CC0）的录音，"
-        "几秒到一分钟都行。不收了就随便发句话。")
+        f"现在用的水声：{_water_desc()}。发 /water 听 可以试听。\n"
+        "要换成真录音：把下一段音频当文件发给我，我就收进去，真录音优先于内置的。要求：没有人声、"
+        "公有领域（CC0）的录音，几秒到一分钟都行。不收了就随便发句话。")
 
 
 async def on_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
