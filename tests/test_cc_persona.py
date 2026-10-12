@@ -3264,3 +3264,45 @@ def test_water_listen_and_builtin_switch(tmp_path, monkeypatch):
 
 def test_persona_teaches_squish():
     assert "`[low, squish]`" in _mod().build()
+
+
+def test_names_in_her_message_are_searched_on_their_own_first(monkeypatch):
+    """2026-10-12 真事：整句「看我男友Jacky打游戏」去搜，只回来一条跑团游戏存档，
+    他说「搜了，没有，我不认识什么 Jacky」——库里其实有十来条。单搜「Jacky」全出来。"""
+    import asyncio
+    cc = _cc()
+    asked = []
+
+    async def brain(name, args, timeout=30):
+        asked.append(args["query"])
+        if args["query"] == "Jacky":
+            return "[逐字命中] [bucket_id:2edb19c115c5] 闪闪有个前任Jacky……"
+        return "[bucket_id:2bb1ae7e30cf] 游戏存档灰线之外第9天……"
+    monkeypatch.setattr(cc, "_call_brain_tool", brain)
+
+    state, got = asyncio.run(cc._auto_recall("看我男友Jacky打游戏"))
+    assert state == "hit"
+    assert set(asked) == {"Jacky", "看我男友Jacky打游戏"}, asked
+    assert got.index("Jacky……") < got.index("游戏存档"), "名字搜到的排前面，别被长存档挤掉"
+    assert "单搜「Jacky」" in got
+
+    # 名字那次失败、整句成功：不是「没搜成」
+    async def half(name, args, timeout=30):
+        if args["query"] == "Jacky":
+            raise RuntimeError("timeout")
+        return "[bucket_id:x] 别的"
+    monkeypatch.setattr(cc, "_call_brain_tool", half)
+    assert asyncio.run(cc._auto_recall("看我男友Jacky打游戏"))[0] == "hit"
+
+    assert cc._recall_terms("跟「火烧屁股组长」还有 Yuri 说 ok") == ["Yuri", "火烧屁股组长"]
+    assert cc._recall_terms("Nikto 你在吗") == [], "他自己的名字不用搜"
+
+
+def test_recall_hint_no_longer_forbids_searching_again():
+    """「别再去查一遍」让他在搜到的东西不对时也不再查，直接说没有。"""
+    import inspect
+    cc = _cc()
+    body = inspect.getsource(cc._respond)
+    assert "别再去查一遍" not in body
+    assert "不等于库里没有" in body and "只搜名字本身" in body
+    assert "只搜那个词本身" in _mod().build()

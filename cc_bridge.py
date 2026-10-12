@@ -325,6 +325,28 @@ _RECALL_SKIP = {"?", "？", "。", "…", "...", "嗯", "嗯嗯", "哦", "哦哦
                 "在", "好", "好的", "行", "唉", "啊"}
 
 
+# 她话里的人名/专名要单独搜一次。由来 2026-10-12：她提到 Jacky，库里有十来条 Jacky 的记忆，
+# 可拿整句「看我男友Jacky打游戏」去搜，排第一的是一条很长的跑团游戏存档（「打游戏」），
+# 1200 字的额度一条就占满，Jacky 一条都没进来；他说「搜了，没有，我不认识什么 Jacky」。
+# 单搜「Jacky」一个词，十条全出来。
+_NAME_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]{1,24}")
+_QUOTED_RE = re.compile(r"[「『“\"]([^」』”\"\n]{1,12})[」』”\"]")
+_NAME_STOP = {
+    "the", "and", "you", "yes", "okay", "lol", "omg", "wtf", "hey", "bye", "app", "bug",
+    "nikto", "svyatoslav", "svy", "daddy", "papochka", "claude", "telegram", "ok",
+}
+
+
+def _recall_terms(text: str) -> list[str]:
+    """从她这句话里拎出要单独搜的词：英文/拉丁字母的名字、「」里的词。最多 3 个。"""
+    out: list[str] = []
+    for w in _NAME_RE.findall(text or "") + _QUOTED_RE.findall(text or ""):
+        w = w.strip(" .'’-")
+        if len(w) >= 2 and w.lower() not in _NAME_STOP and w not in out:
+            out.append(w)
+    return out[:3]
+
+
 async def _auto_recall(text: str) -> tuple[str, str]:
     """拿她这句话去记忆库搜。返回 (状态, 正文)，状态三态：
     "hit"（搜到了）/ "empty"（搜过了，库里真没有）/ "down"（没搜成，不知道）。
@@ -337,13 +359,25 @@ async def _auto_recall(text: str) -> tuple[str, str]:
     q = (text or "").strip()
     if len(q) < _RECALL_MIN_CHARS or q in _RECALL_SKIP:
         return "skip", ""
-    try:
-        out = str(await _call_brain_tool(
-            "breath", {"query": q[:200], "max_results": 5, "max_tokens": 1200},
+    terms = _recall_terms(q)
+    queries = terms + [q]                  # 名字单独搜、排前面；整句照旧搜
+
+    async def one(query: str):
+        return str(await _call_brain_tool(
+            "breath", {"query": query[:200], "max_results": 5,
+                       "max_tokens": 1500 if query in terms else 1200},
             timeout=8) or "").strip()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("替他搜记忆没搜成，这轮按「不知道」处理：%s", str(e)[:120])
+
+    results = await asyncio.gather(*(one(x) for x in queries), return_exceptions=True)
+    if all(isinstance(r, BaseException) for r in results):
+        logger.warning("替他搜记忆没搜成，这轮按「不知道」处理：%s", str(results[-1])[:120])
         return "down", ""
+    parts = []
+    for query, r in zip(queries, results):
+        if isinstance(r, BaseException) or not r:
+            continue
+        parts.append(f"（单搜「{query}」）\n{r}" if query in terms else r)
+    out = "\n---\n".join(parts)
     return ("hit", out[:3000]) if out else ("empty", "")
 
 
@@ -1774,8 +1808,10 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
             _state, _mem = await _auto_recall(message)
             if _state == "hit":
                 message = (
-                    "[记忆·系统已经替你搜过了，下面是拿她这句话搜到的。"
-                    "认得出来就直接用，别再去查一遍、更别问她「这是谁」：\n"
+                    "[记忆·系统已经替你搜过了，下面是拿她这句话（和里面的人名）搜到的。"
+                    "认得出来就直接用，别问她「这是谁」。她提到的人或事要是下面没有，"
+                    "不等于库里没有——用那个词单独 breath 一次（只搜名字本身，别整句搜）"
+                    "再下结论：\n"
                     f"{_mem}]\n" + message
                 )
             elif _state == "empty":
