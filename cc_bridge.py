@@ -45,6 +45,8 @@ import stale_ledger
 import eleven_tts
 import self_beat
 import voice_mix
+import water_fetch
+import shutil
 import random
 
 import numpy as np
@@ -737,7 +739,7 @@ BOT_COMMANDS = [
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
-    ("water", "水声 · /water 听 试听；/water 款 A／B／C；/water 响一点／轻一点"),
+    ("water", "水声 · /water 找 听真录音候选；/water 用 2；/water 听；/water 响一点／轻一点"),
     ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
@@ -1608,7 +1610,7 @@ WATER_DEMO = ("[low and close, wet] ...Easy. I've got you.\n"
 def _water_desc() -> str:
     n = len(voice_mix.water_files())
     if n:
-        return f"你上传的 {n} 段"
+        return f"真录音 {n} 段"
     return (f"内置合成的 {voice_mix.water_synth.STYLE} 款" if voice_mix.WATER_BUILTIN
             else "没有（内置的关了，也没上传）")
 
@@ -1648,6 +1650,54 @@ async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             cap = (f"现在会垫进去的水声：{_water_desc()}。听他的声音叠上去的样子发 /water 听。")
         await update.message.reply_voice(audio, caption=cap)
+        return
+    cand_dir = os.path.join(voice_mix.ASSET_DIR, "water_candidates")
+    if args and args[0] in ("找", "搜", "候选"):
+        # 她：「你就不能自己去找那种网站然后模仿里面的用吗」。VPS 连得上 freesound，
+        # 桥去下真录音的候选，一段段发给她听——我能找，听不了，挑哪段她定。
+        if not voice_mix.have_ffmpeg():
+            await update.message.reply_text("❌ VPS 上没有 ffmpeg，水声用不了。")
+            return
+        items = water_fetch.load_manifest(cand_dir) if args[0] == "候选" else []
+        if not items:
+            await update.message.reply_text("去 freesound 找真录的水声了，一段段发给你听，等我一下。")
+            items = await water_fetch.fetch_candidates(cand_dir)
+        bad = []
+        for it in items:
+            if not it.get("ok"):
+                bad.append(f"❌ {it['n']}. {it['note']}：{it['why']}")
+                continue
+            try:
+                def _clip(path=it["file"]):
+                    return voice_mix.encode_opus(voice_mix.decode(path)[: 15 * voice_mix.SR])
+                audio = await asyncio.to_thread(_clip)
+                await update.message.reply_voice(
+                    audio, caption=f"{it['n']}. {it['note']}\n授权：{it['license']}｜{it['title']}\n"
+                                   f"用这段就发 /water 用 {it['n']}")
+            except Exception as e:  # noqa: BLE001
+                bad.append(f"❌ {it['n']}. {it['note']}：放不出来（{str(e)[:60]}）")
+        ok = sum(1 for it in items if it.get("ok"))
+        tail = ("\n".join(bad) + "\n") if bad else ""
+        await update.message.reply_text(
+            (f"发了 {ok} 段。" if ok else "❌ 一段都没拿到。") + "\n" + tail
+            + ("挑中哪段就发 /water 用 加编号，可以选好几段。都不像就告诉 Claude，换一批。" if ok else
+               "这是 VPS 连 freesound 的问题，截图给 Claude。"))
+        return
+    if args and args[0] in ("用", "选"):
+        items = {str(it["n"]): it for it in water_fetch.load_manifest(cand_dir) if it.get("ok")}
+        pick = args[1] if len(args) > 1 else ""
+        if pick not in items:
+            await update.message.reply_text(
+                "先发 /water 找 听候选，再发 /water 用 加编号，比如 /water 用 2。"
+                + (f"现在有的编号：{'、'.join(items)}" if items else ""))
+            return
+        os.makedirs(voice_mix.WATER_DIR, exist_ok=True)
+        dst = os.path.join(voice_mix.WATER_DIR, f"freesound_{int(pick):02d}.mp3")
+        shutil.copyfile(items[pick]["file"], dst)
+        await update.message.reply_text(
+            f"好，用第 {pick} 段（{items[pick]['note']}）。现在的水声：{_water_desc()}。\n"
+            "真录音优先于内置合成的。发 /water 听 听他的声音叠上去的样子；"
+            "不要了发 /water 清空。")
         return
     if args and args[0] in ("款", "款式", "style"):
         pick = args[1].upper() if len(args) > 1 else ""

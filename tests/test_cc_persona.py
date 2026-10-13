@@ -3259,7 +3259,7 @@ def test_water_listen_and_builtin_switch(tmp_path, monkeypatch):
     import os
     os.makedirs(tmp_path / "water")
     (tmp_path / "water" / "rain.wav").write_bytes(_wav(3))
-    assert "你上传的 1 段" in cc._water_desc()
+    assert "真录音 1 段" in cc._water_desc()
 
 
 def test_persona_teaches_squish():
@@ -3373,3 +3373,40 @@ def test_water_style_switch_persists(tmp_path, monkeypatch):
     assert cc.voice_mix.water_synth.STYLE == "B", "重启后要记得"
     asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["款", "Z"])))
     assert "只有 A、B、C" in m.texts[-1] and cc.voice_mix.water_synth.STYLE == "B"
+
+
+def test_water_find_sends_candidates_and_use_installs_one(tmp_path, monkeypatch):
+    """她：「你就不能自己去找那种网站然后模仿里面的用吗」——桥去下真录音，一段段发给她，她挑。"""
+    import asyncio, types, shutil, subprocess
+    import pytest
+    if not shutil.which("ffmpeg"):
+        pytest.skip("没有 ffmpeg")
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "ASSET_DIR", str(tmp_path))
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
+    mp3 = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                          "anoisesrc=color=pink:amplitude=0.4:seed=3:duration=4",
+                          "-ac", "1", "-f", "mp3", "pipe:1"], capture_output=True, check=True).stdout
+
+    async def fake_fetch(out_dir, candidates=None, timeout=30.0):
+        import json, os
+        os.makedirs(out_dir, exist_ok=True)
+        p = os.path.join(out_dir, "01.mp3")
+        open(p, "wb").write(mp3)
+        res = [{"n": 1, "url": "u1", "note": "燕麦", "ok": True, "why": "", "file": p,
+                "license": "CC0", "title": "Wet Squishy"},
+               {"n": 2, "url": "u2", "note": "海绵", "ok": False, "why": "页面打不开（HTTP 403）",
+                "file": "", "license": "", "title": ""}]
+        json.dump(res, open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8"))
+        return res
+    monkeypatch.setattr(cc.water_fetch, "fetch_candidates", fake_fetch)
+    u, m = _upd()
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["找"])))
+    assert len(m.voices) == 1 and m.voices[0][:4] == b"OggS"
+    assert "/water 用 1" in m.captions[0] and "CC0" in m.captions[0]
+    assert "发了 1 段" in m.texts[-1] and "❌ 2. 海绵：页面打不开" in m.texts[-1]
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["用", "2"])))
+    assert "现在有的编号：1" in m.texts[-1] and cc.voice_mix.water_files() == []
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["用", "1"])))
+    assert len(cc.voice_mix.water_files()) == 1 and "真录音 1 段" in m.texts[-1]
