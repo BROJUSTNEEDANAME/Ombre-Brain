@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import collections
 import glob
 import os
@@ -30,7 +31,10 @@ import subprocess
 import numpy as np
 
 import eleven_tts
+import voice_polish
 import water_synth
+
+logger = logging.getLogger("voice_mix")
 
 ASSET_DIR = (os.environ.get("CC_VOICE_ASSETS", "").strip()
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_assets"))
@@ -43,7 +47,24 @@ KISS_LINE_RE = re.compile(
     r"^[ \t]*\[(?:(deep|soft|light|neck)[ \t]+)?kiss(?:es)?(?:[ \t]+(deep|soft|light|neck))?[ \t]*\][ \t]*$",
     re.I)
 _TAG_RE = re.compile(r"\[([^\[\]\n]{1,60})\]")
-_WET_RE = re.compile(r"\b(wet|squish\w*)\b", re.I)   # squish＝更黏的咕叽（参考文：换个词）
+# 响动记号（参考文第二、三篇的响动盒）：写在声口标签里，送进嗓子前摘掉。
+# 慢的湿声：wet / stroke / licking / sucking；黏的咕叽：squish / squelch / fingering / thrust；
+# 停：still / stop / cum。spank 是「落一下」的，现在还没有那段素材，只摘掉不垫。
+_WET_RE = re.compile(
+    r"\b(fast\s+fingering|wet|squish\w*|squelch\w*|strok\w*|lick\w*|suck\w*|finger\w*|"
+    r"thrust\w*|spank\w*|still|stop|cum\w*)\b", re.I)
+
+
+def _sound_kind(word: str):
+    """记号词 → "wet" / "squish" / False（停）/ None（不改变底下的声音）。"""
+    w = word.lower()
+    if w.startswith(("still", "stop", "cum")):
+        return False
+    if w.startswith("spank"):
+        return None
+    if w.startswith(("squish", "squelch", "finger", "thrust", "fast")):
+        return "squish"
+    return "wet"
 
 # 水声多响。参考文按「峰」对齐（水声峰＝人声峰 −12 dB），对他们那段真录音合适；
 # 可内置合成的气泡声峰很尖、整体很轻，按峰对齐以后平均响度比人声低了 20 dB，
@@ -80,15 +101,13 @@ def strip_wet(text: str) -> str:
 
 
 def _has_wet(text: str):
-    """这段里有标签：写了 squish 回 "squish"、写了 wet 回 "wet"、都没写回 False；
-    一个标签都没有：None（沿用上一段）。"""
-    tags = _TAG_RE.findall(text or "")
-    if not tags:
-        return None
-    words = [m.group(1).lower() for t in tags for m in _WET_RE.finditer(t)]
-    if any(w.startswith("squish") for w in words):
-        return "squish"
-    return "wet" if words else False
+    """这一行改不改底下的声音：返回 "wet" / "squish" / False（停）；没写记号回 None（沿用）。
+
+    参考文第二篇：垫着的声音一直跟着往下，直到换成另一样、或者明说停——从前「下一个标签
+    里没写就停」，每一轮被切成好几截，每段开头嗓子都从高处重新起，音调一截一截跳。"""
+    kinds = [_sound_kind(m.group(1)) for t in _TAG_RE.findall(text or "") for m in _WET_RE.finditer(t)]
+    kinds = [k for k in kinds if k is not None]
+    return kinds[-1] if kinds else None
 
 
 def plan(reply: str) -> list[dict]:
@@ -195,6 +214,43 @@ def apply_tone(reply: str, tone: str) -> str:
     return "\n".join(lines)
 
 
+# 平常说话的口气（参考文第三篇第十二节）：低、慢、笃定、带一点坏。往软里调是反的。
+DAILY_TAG = "[low, slow, confident, a little teasing]"
+_LEADS = ("[exhales]", "[exhales]", "", "[chuckles softly]")
+_FILLS = ("Mm… ", "Hm… ", "Mm… ", "", "", "")
+_FILLER_START_RE = re.compile(r"^[\s….,]*(mm+|hm+|mhm|ah+|uh+|oh|well|yeah|嗯|啊|唔|哼|呃)\b", re.I)
+_BREATH_START_RE = re.compile(r"^\s*\[(inhales?|exhales?|sighs?|hisses?|chuckles?)[^\]]*\]", re.I)
+
+
+def daily_lead(reply: str, rng: random.Random | None = None) -> str:
+    """开口前随手垫一口气、一声轻笑或一个「Mm…」——有一半机会什么都不垫，不然就成了口头禅。
+    只改送去念的字，字幕不动。床上（有响动记号）、他自己已经垫了的，不动；
+    一个声口标签都没写的，补上他平常的口气。"""
+    rng = rng or random.Random()
+    if (not reply or _WET_RE.search(" ".join(_TAG_RE.findall(reply)))
+            or any(KISS_LINE_RE.match(x) for x in reply.split("\n"))):
+        return reply
+    lines = reply.split("\n")
+    for i, line in enumerate(lines):
+        if not line.strip() or _TRANS_LINE_RE.match(line):
+            continue
+        m = _LEAD_TAG_RE.match(line)
+        head = m.group(0).strip() if m else ""
+        body = line[m.end():] if m else line.strip()
+        if _BREATH_START_RE.match(body):
+            break                                  # 他自己垫了气，不再叠
+        if rng.random() < 0.5:                    # 一半的时候什么都不垫
+            lead = fill = ""
+        else:
+            lead = rng.choice(_LEADS)
+            fill = "" if _FILLER_START_RE.match(body) else rng.choice(_FILLS)
+        has_tag = bool(_TAG_RE.search(reply))
+        head = head or ("" if has_tag else DAILY_TAG)
+        lines[i] = " ".join(x for x in (head, lead, fill + body) if x)
+        break
+    return "\n".join(lines)
+
+
 def strip_markers(reply: str) -> str:
     """亲吻行和 wet 都去掉——给不走拼接的那条路、也给字幕用。"""
     # ‖ 是他分条的记号，文字那条路靠它拆成几条消息——这里只删亲吻，‖ 原样留着
@@ -275,9 +331,40 @@ def encode_opus(x: np.ndarray) -> bytes:
     return r.stdout
 
 
+POLISH = True     # 贴气＋稳口（参考文第三篇第三、五节）
+
+
+def retime(x: np.ndarray) -> np.ndarray:
+    """原调变速到 TEMPO（小于 1 放慢，大于 1 加快），音高不变。原速不动。"""
+    if abs(TEMPO - 1.0) < 0.001 or not x.size:
+        return x
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1", "-i", "pipe:0",
+         "-af", f"atempo={TEMPO:.3f}", "-f", "f32le", "-ac", "1", "-ar", str(SR), "pipe:1"],
+        input=x.astype(np.float32).tobytes(), capture_output=True, timeout=120, check=True)
+    return np.frombuffer(r.stdout, dtype=np.float32).copy()
+
+
+def polish_safe(x: np.ndarray) -> np.ndarray:
+    """贴气、稳口。出任何错、或者长度变了，就用原声——宁可不修，不许修坏。"""
+    if not POLISH:
+        return x
+    try:
+        y = voice_polish.polish(x, SR)
+        return y if len(y) == len(x) else x
+    except Exception:  # noqa: BLE001
+        logger.warning("贴气/稳口出错，这段用原声", exc_info=True)
+        return x
+
+
+def finish(audio: bytes) -> np.ndarray:
+    """念回来的一段：解码 → 贴气、稳口 → 变速。"""
+    return retime(polish_safe(decode(audio)))
+
+
 def slow_down(audio: bytes) -> bytes:
-    """整条语音原调变速到 TEMPO（小于 1 放慢，大于 1 加快），音高不变。"""
-    return encode_opus(decode(audio, af=f"atempo={TEMPO:.3f}"))
+    """整条语音：贴气、稳口、变速，再编回语音条。"""
+    return encode_opus(finish(audio))
 
 
 def peak_db(x: np.ndarray) -> float:
@@ -341,6 +428,30 @@ def pick_kiss(kind: str, rng: random.Random) -> str | None:
 
 # ── 主流程 ──
 
+ECHO_STATS = {"checked": 0, "redone": 0}
+
+
+async def synth_checked(text: str, **kw) -> bytes:
+    """念完先转录对账：念重了、吞了就重念一次，两版里留毛病少的（参考文第三篇第十节）。
+    转录做不了（没权限、没连上）就照发——那是「不知道」，不当「没问题」报。"""
+    audio = await eleven_tts.synth(text, **kw)
+    if kw.get("singing"):
+        return audio
+    expect = eleven_tts.prepare_text(text)
+    heard = await eleven_tts.transcribe(audio)
+    if heard is None:
+        return audio
+    ECHO_STATS["checked"] += 1
+    bad, why = eleven_tts.echo_bad(heard, expect)
+    if bad < 3:
+        return audio
+    ECHO_STATS["redone"] += 1
+    logger.info("念岔了（%s，分 %.1f），重念一次", why, bad)
+    audio2 = await eleven_tts.synth(text, **kw)
+    heard2 = await eleven_tts.transcribe(audio2)
+    bad2 = eleven_tts.echo_bad(heard2, expect)[0] if heard2 is not None else bad
+    return audio2 if bad2 < bad else audio
+
 async def render(reply: str, *, singing: bool | None = None,
                  rng: random.Random | None = None) -> bytes:
     """合成一条语音条（Ogg/Opus）。任何失败都抛出去，由桥退回文字。"""
@@ -358,8 +469,8 @@ async def render(reply: str, *, singing: bool | None = None,
             s["wet"] = False
     if not any(s["kind"] == "kiss" or s.get("wet") for s in segs):
         # 原来那条路：整段一口气念（参考文：喘才不会断），念完放慢一点
-        audio = await eleven_tts.synth(strip_markers(reply), singing=singing)
-        if singing or abs(TEMPO - 1.0) < 0.001 or not can_mix:
+        audio = await synth_checked(strip_markers(reply), singing=singing)
+        if singing or not can_mix:
             return audio          # 唱歌不动节拍；没有 ffmpeg 就原样发
         try:
             return await asyncio.to_thread(slow_down, audio)
@@ -373,7 +484,7 @@ async def render(reply: str, *, singing: bool | None = None,
     for i, s in enumerate(says):
         if not texts[i]:
             continue
-        audio[i] = await eleven_tts.synth(
+        audio[i] = await synth_checked(
             s["text"], previous_text=texts[i - 1] if i else "",
             next_text=texts[i + 1] if i + 1 < len(texts) else "")
     if not audio:
@@ -402,7 +513,7 @@ def _assemble(segs, says, audio, water_src, rng) -> bytes:
             i_say += 1
             if idx not in audio:
                 continue
-            v = decode(audio[idx], af=f"atempo={TEMPO:.3f}" if abs(TEMPO - 1.0) >= 0.001 else "")
+            v = finish(audio[idx])
             w = water_for(s["wet"]) if s.get("wet") else None
             if w is not None and w.size:
                 v = lay_water(v, w, rng)

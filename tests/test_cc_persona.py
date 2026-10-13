@@ -2685,6 +2685,7 @@ def test_deliver_sends_only_speakable_text_to_the_real_synth(monkeypatch):
     monkeypatch.setattr(E, "API_KEY", "k")
     monkeypatch.setattr(E, "VOICE_ID", "v")
     monkeypatch.setattr(E.httpx, "AsyncClient", _C)
+    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: r)   # 随手一口气是随机的，这条不测它
     cc.voice_mode[7] = True
     u, m = _upd()
     asyncio.run(cc._deliver(u, 7, "（低笑）（把你按进怀里）过来 别动。"))
@@ -2768,10 +2769,10 @@ def test_persona_explains_the_bridge_voice_hint():
     text = _mod().build()
     assert "桥的提示" in text and "说出口的台词用英文" in text
     # 她先嫌「机械」，又嫌「太活泼不像他」：教他先写一个往低近慢暖里的声口标签
-    assert "开头先写一个声口标签" in text and "[low]" in text
-    assert "不写 `[amused]` `[teasing]`" in text
+    assert "开头写一个声口标签" in text and "[low, slow, confident, a little teasing]" in text
+    assert "不写 `[amused]` `[excited]`" in text
     hint = _cc().VOICE_HINT
-    assert "声口标签" in hint and "不要 [amused] [teasing]" in hint
+    assert "声口标签" in hint and "不要 [amused] [excited]" in hint and "低、慢" in hint
 
 
 # ── 他自己定下次什么时候找她（/beat）──
@@ -3149,6 +3150,7 @@ def test_tone_is_hers_to_set_and_reaches_the_voice_not_the_caption(tmp_path, mon
         spoken.append(reply)
         return b"OggS" + b"x" * 300
     monkeypatch.setattr(cc.eleven_tts, "synth", synth)
+    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: r)   # 随手一口气是随机的，这条不测它
     u, m = _upd()
     asyncio.run(cc.tone_cmd(u, types.SimpleNamespace(args=["慵懒", "低沉"])))
     assert cc.voice_tone[7] == "lazy, relaxed, low" and "lazy, relaxed, low" in m.texts[-1]
@@ -3191,7 +3193,7 @@ def test_vstab_picks_one_of_the_three_v3_steps_and_persists(tmp_path, monkeypatc
 
 def test_persona_loosens_the_voice_tags():
     text = _mod().build()
-    assert "`[relaxed]`" in text and "死板" in text
+    assert "他不是这样的人" in text and "别把「Mm……」「Hm……」单独写成一行" in text
 
 
 def test_speed_shows_the_value_then_takes_the_next_number(tmp_path, monkeypatch):
@@ -3410,3 +3412,25 @@ def test_water_find_sends_candidates_and_use_installs_one(tmp_path, monkeypatch)
     assert "现在有的编号：1" in m.texts[-1] and cc.voice_mix.water_files() == []
     asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["用", "1"])))
     assert len(cc.voice_mix.water_files()) == 1 and "真录音 1 段" in m.texts[-1]
+
+
+
+def test_deliver_runs_the_daily_lead_on_voice_only(monkeypatch):
+    """参考文第三篇第十二节：开口前随手一口气——只改送去念的字，字幕不动。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    spoken = []
+    async def render(text, singing=None, **k):
+        spoken.append(text)
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.voice_mix, "render", render)
+    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: "[low] [exhales] " + r)
+    cc.voice_mode[7] = True
+    u, m = _upd()
+    try:
+        asyncio.run(cc._deliver(u, 7, "Come here."))
+        assert spoken == ["[low] [exhales] Come here."]
+        assert m.captions[-1] == "Come here.", "字幕不动"
+    finally:
+        cc.voice_mode.clear()

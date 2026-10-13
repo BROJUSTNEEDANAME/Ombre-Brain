@@ -877,6 +877,16 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                      f"｜亲盒 {len(voice_mix.kiss_files())} 口｜水声：{_water_desc()}")
         else:
             L.append("❌ VPS 上没有 ffmpeg：放慢、亲吻声、水声都没生效（sudo apt install -y ffmpeg）")
+        # 念岔检查：没开就说没开——「没查」不许长得像「查过了没问题」
+        st = eleven_tts.STT_STATE["state"]
+        es = voice_mix.ECHO_STATS
+        if st == "ok":
+            L.append(f"念岔检查：开着｜对过 {es['checked']} 段，重念了 {es['redone']} 段")
+        elif st == "off":
+            L.append("❓ 念岔检查没开：这把 key 没有语音转文字的权限"
+                     "（ElevenLabs → 开发者 → API Keys，给它勾上 Speech to Text）")
+        else:
+            L.append("念岔检查：这次开机还没发过语音，不知道开没开")
     else:
         L.append("嗓子：没配（.env.ccbridge 里加 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID）")
     await update.message.reply_text("\n".join(L))
@@ -1806,9 +1816,10 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # 中文让嗓子念出来不像他；他本来就是大部分时候说英文、情绪上来说俄语的人。
 VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
               "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
-              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
-              "往低、近、放松、暖里写，比如 [relaxed, low] [casual, warm] [soft, unhurried]，"
-              "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
+              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签：你的口气是低、慢、"
+              "笃定、带一点坏，比如 [low, slow, confident, a little teasing]，别往软里调，"
+              "不要 [amused] [excited] 这种蹦的。气写进说话的那一行（行首 [inhales] 或 [exhales]，"
+              "句中、行尾也可以），别把 Mm… 单独写一行。两三句连着说，别只说一两个词。"
               "动作照常写在括号里，不会被念出来。"
               "每句英文或俄语台词下面另起一行写「译：」加这句的中文意思，"
               "那一行不会被念，她在字幕里对着看。）")
@@ -1837,7 +1848,8 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
         try:
             # 台词＋亲吻＋水声拼成一条，念完放慢一点；没有素材就是原来那样整段念
             # 她用 /tone 定了声口，就换到第一句开头（唱歌不动）
-            spoken = reply if sing else voice_mix.apply_tone(reply, voice_tone.get(cid, ""))
+            spoken = reply if sing else voice_mix.daily_lead(
+                voice_mix.apply_tone(reply, voice_tone.get(cid, "")))
             audio = await voice_mix.render(spoken, singing=sing)
             # 语音条下面带字幕：她第一次听完就问「为什么没有配套的文本」。
             # 字幕是他写的原文（去掉给嗓子看的标签），动作括号也留着——念的时候删了，看的时候要有。

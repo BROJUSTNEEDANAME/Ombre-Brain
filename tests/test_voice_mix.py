@@ -61,7 +61,7 @@ def _secs(ogg: bytes) -> float:
 
 # ── 解析 ──
 
-def test_plan_splits_kisses_and_carries_wet_until_a_tag_without_it():
+def test_plan_splits_kisses_and_carries_wet_until_changed():
     reply = ("[low, close] Come here.\n"
              "[kiss]\n"
              "[soft, wet] Don't move.\n"
@@ -71,7 +71,8 @@ def test_plan_splits_kisses_and_carries_wet_until_a_tag_without_it():
     p = V.plan(reply)
     assert [s["kind"] for s in p] == ["say", "kiss", "say", "kiss", "say"]
     assert p[1]["type"] == "light" and p[3]["type"] == "deep"
-    assert [s.get("wet") for s in p if s["kind"] == "say"] == [False, "wet", False]
+    assert [s.get("wet") for s in p if s["kind"] == "say"] == [False, "wet", "wet"], \
+        "参考文第二篇：没写记号的标签不让水声退掉，写 still 才停"
     assert "wet" not in p[2]["text"] and "[soft]" in p[2]["text"], "wet 摘掉，嗓子看不到"
 
 
@@ -205,11 +206,8 @@ def test_apply_tone_replaces_his_opening_tag_but_keeps_wet():
 def test_speed_can_go_faster_and_one_means_untouched(assets, fake_synth, monkeypatch):
     monkeypatch.setattr(V, "TEMPO", 1.1)
     assert 0.85 < _secs(asyncio.run(V.render("Come here."))) < 0.95
-    called = []
     monkeypatch.setattr(V, "TEMPO", 1.0)
-    monkeypatch.setattr(V, "slow_down", lambda a: called.append(1) or a)
-    asyncio.run(V.render("Come here."))
-    assert called == [], "原速就别转码一遍"
+    assert 0.95 < _secs(asyncio.run(V.render("Come here."))) < 1.05, "原速：贴气稳口照做，长度不变"
 
 
 
@@ -242,7 +240,7 @@ def test_builtin_water_has_no_pitch_so_it_is_not_underwater():
 
 def test_squish_tag_picks_the_sticky_one_and_is_never_spoken():
     p = V.plan("[soft, squish] Easy.\n[low, wet] Slow.\nStay.\n[low] Done.")
-    assert [s["wet"] for s in p] == ["squish", "wet", False], "Stay. 没标签，跟 Slow. 同一段"
+    assert [s["wet"] for s in p] == ["squish", "wet"], "换种类才切段；没记号的接着垫"
     assert all("squish" not in s["text"] and "wet" not in s["text"] for s in p)
     assert V.apply_tone("[soft, squish] Easy.", "tender") == "[tender, squish] Easy."
 
@@ -271,3 +269,78 @@ def test_uploaded_water_wins_over_builtin(monkeypatch, tmp_path):
     assert V.water_sources() == [str(tmp_path / "w.wav")]
     monkeypatch.setattr(V, "WATER_DIR", str(tmp_path / "none"))
     assert V.water_sources() == ["builtin"]
+
+
+# ── 念完先转录对账（参考文第三篇第十节）──
+
+def test_echo_bad_catches_repeats_and_swallows_but_not_fillers():
+    E = eleven_tts
+    assert E.echo_bad("Come here I missed you come here I missed you so much",
+                      "Come here. I missed you so much.")[0] >= 3, "念重了"
+    assert E.echo_bad("Come here.", "Come here. I missed you so much. Stay with me tonight.")[0] >= 3, "吞了"
+    assert E.echo_bad("Mm, come here. I missed you so much.",
+                      "[low] Mm… come here. [exhales] I missed you so much.")[0] == 0, "语气词和标签不算"
+    assert E.echo_bad("过来过来过来", "过来。")[0] == 0, "稿子太短不判"
+
+
+def test_mangled_take_is_redone_once_and_the_cleaner_one_kept(monkeypatch, tmp_path):
+    takes, heard = [], iter(["come here I missed you come here I missed you so much",
+                             "come here I missed you so much"])
+
+    async def synth(text, singing=None, **k):
+        takes.append(text)
+        return b"OggS" + bytes([len(takes)]) * 300
+
+    async def transcribe(audio):
+        return next(heard)
+
+    monkeypatch.setattr(eleven_tts, "synth", synth)
+    monkeypatch.setattr(eleven_tts, "transcribe", transcribe)
+    V.ECHO_STATS.update(checked=0, redone=0)
+    out = asyncio.run(V.synth_checked("Come here. I missed you so much."))
+    assert len(takes) == 2 and out[4] == 2, "重念的那版更干净，留它"
+    assert V.ECHO_STATS == {"checked": 1, "redone": 1}
+
+
+def test_no_transcription_means_no_redo_and_singing_is_never_checked(monkeypatch):
+    calls = []
+
+    async def synth(text, singing=None, **k):
+        calls.append(text)
+        return b"OggS" + b"x" * 300
+
+    async def nope(audio):
+        return None
+
+    async def boom(audio):
+        raise AssertionError("唱歌不该转录")
+
+    monkeypatch.setattr(eleven_tts, "synth", synth)
+    monkeypatch.setattr(eleven_tts, "transcribe", nope)
+    asyncio.run(V.synth_checked("Come here. I missed you so much. Stay."))
+    assert len(calls) == 1
+    monkeypatch.setattr(eleven_tts, "transcribe", boom)
+    asyncio.run(V.synth_checked("[sings] la la la la la la", singing=True))
+
+
+# ── 随手一口气（参考文第三篇第十二节）──
+
+def test_daily_lead_is_random_half_bare_and_leaves_bed_and_kisses_alone():
+    import collections
+    c = collections.Counter(V.daily_lead("[low] Come here.", random.Random(i)) for i in range(400))
+    bare = c["[low] Come here."] / 400
+    assert 0.4 < bare < 0.75, f"一半左右什么都不垫，现在 {bare:.0%}"
+    assert any("[exhales]" in k for k in c) and any("[chuckles softly]" in k for k in c)
+    assert V.daily_lead("Come here.", random.Random(1)).startswith(V.DAILY_TAG), "没写声口就补他的口气"
+    assert V.daily_lead("[low] [inhales] Come here.", random.Random(3)) == "[low] [inhales] Come here."
+    assert V.daily_lead("[low, wet] Easy.", random.Random(3)) == "[low, wet] Easy.", "床上不垫"
+    assert V.daily_lead("[kiss]\nStay.", random.Random(3)) == "[kiss]\nStay."
+
+
+def test_sound_persists_until_changed_or_still():
+    """参考文第二篇：垫着的声音一直跟着往下，直到换成另一样、或者明说停。"""
+    p = V.plan("[low, close, wet] a\n[soft] b\n[low, still] c\nd")
+    assert [(s["wet"], s["text"]) for s in p] == [("wet", "[low, close] a\n[soft] b"), (False, "[low] c\nd")]
+    p = V.plan("[fingering] a\n[licking] b\n[spank] c\n[low, fast fingering] d")
+    assert [s["wet"] for s in p] == ["squish", "wet", "squish"]
+    assert all(w not in s["text"] for s in p for w in ("fingering", "licking", "spank"))
