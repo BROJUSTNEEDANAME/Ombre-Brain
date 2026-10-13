@@ -113,12 +113,8 @@ def test_bold_is_spoken_but_star_actions_are_not():
 def test_loud_tags_are_dropped_and_tags_capped_at_three():
     assert E.prepare_text("[intense, growling] 过来。") == "过来。"
     assert E.prepare_text("[heavy breathing] 嗯。") == "嗯。"
-    out = E.prepare_text("[low] a [soft] b [warmly] c [quiet] d")
-    assert out.count("[") == 3 and out.endswith("d") and "[quiet]" not in out, out
-    # 小气口不算声口、不占名额（参考文第三篇：气写进说话的那一行）
-    out = E.prepare_text("[low] [inhales] a [soft] b [exhales] [warmly] c [sighs] d [long pause]")
-    for t in ("[inhales]", "[exhales]", "[sighs]", "[long pause]", "[low]", "[soft]", "[warmly]"):
-        assert t in out, (t, out)
+    out = E.prepare_text("[low] a [soft] b [warmly] c [sighs] d")
+    assert out.count("[") == 3 and out.endswith("d") and "[sighs]" not in out, out
     # 唱歌标签不受上限影响：四句都要唱
     song = "\n".join(f"[sings] line {i}" for i in range(4))
     assert E.prepare_text(song).count("[sings]") == 4
@@ -186,15 +182,3 @@ def test_pinned_to_v3_does_not_retry(wired, monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(E.synth("Come here."))
     assert len(wired.calls) == 1
-
-
-
-def test_long_voice_tags_are_trimmed_to_the_line_length():
-    """参考文第二篇：12 词的标签配 4 个字的台词，4 次里 4 次把台词说两遍。"""
-    out = E.prepare_text("[low and close, breathy, slow, through the nose, let out slow, held] Mm.")
-    assert out == "[low and close, breathy] Mm.", out
-    long_line = "Come here and let me hold you for a while, you have been gone all day long."
-    kept = E.prepare_text("[low, slow, confident, a little teasing] " + long_line)
-    assert kept.startswith("[low, slow, confident, a little teasing]"), "台词够长就不裁"
-    assert E.strip_tags("[low and close, breathy, slow, through the nose, let out slow, held] Mm.") == "Mm.", \
-        "长标签也要从字幕里删干净"

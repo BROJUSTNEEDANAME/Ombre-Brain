@@ -2685,7 +2685,6 @@ def test_deliver_sends_only_speakable_text_to_the_real_synth(monkeypatch):
     monkeypatch.setattr(E, "API_KEY", "k")
     monkeypatch.setattr(E, "VOICE_ID", "v")
     monkeypatch.setattr(E.httpx, "AsyncClient", _C)
-    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: r)   # 随手一口气是随机的，这条不测它
     cc.voice_mode[7] = True
     u, m = _upd()
     asyncio.run(cc._deliver(u, 7, "（低笑）（把你按进怀里）过来 别动。"))
@@ -2769,10 +2768,10 @@ def test_persona_explains_the_bridge_voice_hint():
     text = _mod().build()
     assert "桥的提示" in text and "说出口的台词用英文" in text
     # 她先嫌「机械」，又嫌「太活泼不像他」：教他先写一个往低近慢暖里的声口标签
-    assert "开头写一个声口标签" in text and "[low, slow, confident, a little teasing]" in text
-    assert "不写 `[amused]` `[excited]`" in text
+    assert "开头先写一个声口标签" in text and "[low]" in text
+    assert "不写 `[amused]` `[teasing]`" in text
     hint = _cc().VOICE_HINT
-    assert "声口标签" in hint and "不要 [amused] [excited]" in hint and "低、慢" in hint
+    assert "声口标签" in hint and "不要 [amused] [teasing]" in hint
 
 
 # ── 他自己定下次什么时候找她（/beat）──
@@ -2924,7 +2923,7 @@ def test_persona_teaches_the_heartbeat_tag():
 
 
 def test_status_says_plainly_when_ffmpeg_is_missing(monkeypatch):
-    """放慢、亲吻、水声都靠 ffmpeg。没装的时候 /status 必须说没生效，不许装作一切正常。"""
+    """变速靠 ffmpeg。没装的时候 /status 必须说没生效，不许装作一切正常。"""
     import asyncio
     cc = _cc()
     monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
@@ -2935,102 +2934,7 @@ def test_status_says_plainly_when_ffmpeg_is_missing(monkeypatch):
     assert "没有 ffmpeg" in m.texts[-1] and "没生效" in m.texts[-1]
     monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
     asyncio.run(cc.status_cmd(u, None))
-    assert "放慢到 0.93 倍" in m.texts[-1]
-
-
-# ── 亲盒试听、水声上传 ──
-
-class _TgFile:
-    def __init__(self, data):
-        self.data = data
-    async def download_as_bytearray(self):
-        return bytearray(self.data)
-
-
-def _audio_upd(data, name="rain.wav"):
-    import types
-    m = _Msg()
-    doc = types.SimpleNamespace(file_id="f1", file_name=name)
-    m.audio, m.document, m.voice = None, doc, None
-    upd = types.SimpleNamespace(effective_chat=types.SimpleNamespace(id=7), message=m)
-    ctx = types.SimpleNamespace(bot=types.SimpleNamespace(), args=[])
-    async def get_file(fid):
-        return _TgFile(data)
-    ctx.bot.get_file = get_file
-    return upd, m, ctx
-
-
-def _wav(secs, amp=0.3):
-    import shutil, subprocess
-    if not shutil.which("ffmpeg"):
-        import pytest
-        pytest.skip("没有 ffmpeg")
-    return subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                           f"anoisesrc=color=pink:amplitude={amp}:duration={secs}",
-                           "-ac", "1", "-f", "wav", "pipe:1"], capture_output=True, check=True).stdout
-
-
-def test_water_is_only_taken_right_after_the_water_command(tmp_path, monkeypatch):
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
-    cc.water_wait.clear()
-    upd, m, ctx = _audio_upd(_wav(5))
-    asyncio.run(cc.on_audio(upd, ctx))
-    assert cc.voice_mix.water_files() == [] and "先发 /water" in m.texts[-1]
-
-    u2, m2 = _upd()
-    asyncio.run(cc.water_cmd(u2, types.SimpleNamespace(args=[])))
-    assert "CC0" in m2.texts[-1]
-    asyncio.run(cc.on_audio(upd, ctx))
-    files = cc.voice_mix.water_files()
-    assert len(files) == 1 and files[0].endswith(".wav") and "收好了" in m.texts[-1]
-    # 收完一段就不再等了
-    asyncio.run(cc.on_audio(upd, ctx))
-    assert len(cc.voice_mix.water_files()) == 1
-
-    asyncio.run(cc.water_cmd(u2, types.SimpleNamespace(args=["清空"])))
-    assert cc.voice_mix.water_files() == []
-
-
-def test_water_rejects_too_short_or_silent_files(tmp_path, monkeypatch):
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
-    for data, why in ((_wav(1), "太短"), (_wav(5, amp=0.0), "几乎没有声音")):
-        cc.water_wait[7] = True
-        upd, m, ctx = _audio_upd(data)
-        asyncio.run(cc.on_audio(upd, ctx))
-        assert why in m.texts[-1] and cc.voice_mix.water_files() == []
-
-
-def test_kissbox_preview_plays_real_clips_or_says_how_to_build(tmp_path, monkeypatch):
-    import asyncio, os
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kissbox"))
-    u, m = _upd()
-    asyncio.run(cc.kissbox_cmd(u, None))
-    assert "make-kissbox.py" in m.texts[-1] and m.voices == []
-    os.makedirs(tmp_path / "kissbox" / "light")
-    for i in range(3):
-        (tmp_path / "kissbox" / "light" / f"{i}.wav").write_bytes(_wav(0.3))
-    asyncio.run(cc.kissbox_cmd(u, None))
-    assert m.voices and m.voices[0][:4] == b"OggS"
-    assert "轻亲 3 口" in m.captions[-1]
-
-
-def test_kiss_and_water_commands_are_wired_and_taught():
-    src = (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
-    for h in ('CommandHandler("kissbox", kissbox_cmd)', 'CommandHandler("water", water_cmd)',
-              "filters.AUDIO | filters.Document.AUDIO | filters.VOICE, on_audio"):
-        assert h in src, h
-    cc = _cc()
-    assert {"kissbox", "water"} <= {n for n, _ in cc.BOT_COMMANDS}
-    text = _mod().build()
-    assert "单独一行写 `[kiss]`" in text and "`[low, close, wet]`" in text
+    assert "语速：0.93 倍" in m.texts[-1]
 
 
 def test_speed_command_sets_persists_and_clamps(tmp_path, monkeypatch):
@@ -3086,7 +2990,6 @@ def test_voiceid_swaps_the_voice_persists_and_rejects_junk(tmp_path, monkeypatch
     monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
     monkeypatch.setattr(cc.eleven_tts, "VOICE_ID", "oldvoice1234567890ab")   # 跑完还原
     monkeypatch.setattr(cc, "voice_id_override", {})
-    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "none"))
     u, m = _upd()
     asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["Nh3vXVPofCwkhqpHjENM"])))
     assert cc.eleven_tts.VOICE_ID == "Nh3vXVPofCwkhqpHjENM"
@@ -3098,21 +3001,6 @@ def test_voiceid_swaps_the_voice_persists_and_rejects_junk(tmp_path, monkeypatch
     assert "不像 Voice ID" in m.texts[-1] and cc.eleven_tts.VOICE_ID == "Nh3vXVPofCwkhqpHjENM"
     assert any(n == "voiceid" for n, _ in cc.BOT_COMMANDS)
     assert 'CommandHandler("voiceid", voiceid_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
-
-
-def test_voiceid_warns_that_the_kissbox_is_the_old_voice(tmp_path, monkeypatch):
-    import asyncio, os, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.eleven_tts, "VOICE_ID", "oldvoice1234567890ab")
-    monkeypatch.setattr(cc, "voice_id_override", {})
-    os.makedirs(tmp_path / "kb" / "light")
-    (tmp_path / "kb" / "light" / "a.wav").write_bytes(b"x")
-    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kb"))
-    u, m = _upd()
-    asyncio.run(cc.voiceid_cmd(u, types.SimpleNamespace(args=["Nh3vXVPofCwkhqpHjENM"])))
-    assert "重做一盒" in m.texts[-1]
 
 
 def test_voice_note_caption_is_bilingual_and_the_voice_never_reads_chinese(monkeypatch):
@@ -3150,7 +3038,6 @@ def test_tone_is_hers_to_set_and_reaches_the_voice_not_the_caption(tmp_path, mon
         spoken.append(reply)
         return b"OggS" + b"x" * 300
     monkeypatch.setattr(cc.eleven_tts, "synth", synth)
-    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: r)   # 随手一口气是随机的，这条不测它
     u, m = _upd()
     asyncio.run(cc.tone_cmd(u, types.SimpleNamespace(args=["慵懒", "低沉"])))
     assert cc.voice_tone[7] == "lazy, relaxed, low" and "lazy, relaxed, low" in m.texts[-1]
@@ -3193,7 +3080,7 @@ def test_vstab_picks_one_of_the_three_v3_steps_and_persists(tmp_path, monkeypatc
 
 def test_persona_loosens_the_voice_tags():
     text = _mod().build()
-    assert "他不是这样的人" in text and "别把「Mm……」「Hm……」单独写成一行" in text
+    assert "`[relaxed]`" in text and "死板" in text
 
 
 def test_speed_shows_the_value_then_takes_the_next_number(tmp_path, monkeypatch):
@@ -3237,37 +3124,6 @@ def test_speed_shows_the_value_then_takes_the_next_number(tmp_path, monkeypatch)
     assert cc.voice_mix.TEMPO == 1.2 and "超出范围" in u.message.texts[-1]
 
 
-def test_water_listen_and_builtin_switch(tmp_path, monkeypatch):
-    """她说「你自己找一段水声自己合成」：没上传也有内置的；能试听；不喜欢能关；关了要记得。"""
-    import asyncio, types, shutil
-    import pytest
-    if not shutil.which("ffmpeg"):
-        pytest.skip("没有 ffmpeg")
-    cc = _cc()
-    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
-    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)   # 跑完还原
-    u, m = _upd()
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
-    assert m.voices and m.voices[-1][:4] == b"OggS" and "内置合成" in m.captions[-1]
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["内置", "关"])))
-    assert cc.voice_mix.WATER_BUILTIN is False and "没有" in m.texts[-1]
-    cc.voice_mix.WATER_BUILTIN = True; cc._load_state()
-    assert cc.voice_mix.WATER_BUILTIN is False, "重启后要记得她关了"
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
-    assert "没放出来" in m.texts[-1]
-    # 传了真录音就用真的
-    import os
-    os.makedirs(tmp_path / "water")
-    (tmp_path / "water" / "rain.wav").write_bytes(_wav(3))
-    assert "真录音 1 段" in cc._water_desc()
-
-
-def test_persona_teaches_squish():
-    assert "`[low, squish]`" in _mod().build()
-
-
 def test_names_in_her_message_are_searched_on_their_own_first(monkeypatch):
     """2026-10-12 真事：整句「看我男友Jacky打游戏」去搜，只回来一条跑团游戏存档，
     他说「搜了，没有，我不认识什么 Jacky」——库里其实有十来条。单搜「Jacky」全出来。"""
@@ -3309,128 +3165,3 @@ def test_recall_hint_no_longer_forbids_searching_again():
     assert "不等于库里没有" in body and "只搜名字本身" in body
     assert "只搜那个词本身" in _mod().build()
 
-
-def test_water_listen_plays_the_combined_version(tmp_path, monkeypatch):
-    """她：「我想要的是结合版的啊」。/water 听 要放他的声音＋底下水声＋亲吻，不是光放水。"""
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
-    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
-    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kiss"))
-    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)
-    monkeypatch.setattr(cc, "voice_tone", {7: "lazy"})
-    rendered = []
-    async def render(text, singing=None, **k):
-        rendered.append(text)
-        return b"OggS" + b"x" * 300
-    monkeypatch.setattr(cc.voice_mix, "render", render)
-    u, m = _upd()
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
-    assert rendered, "要真的合成一段他的声音"
-    demo = rendered[0]
-    assert demo.startswith("[lazy, wet]"), "她定的声口照用，水声记号留着"
-    assert "[kiss]" in demo and "wet" in demo
-    assert m.voices and "结合版" in m.captions[-1] and "亲盒还没做" in m.captions[-1]
-    # 只听水：不花合成字数
-    rendered.clear()
-    monkeypatch.setattr(cc.voice_mix, "water_preview", lambda: b"OggS" + b"w" * 300)
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["只听水"])))
-    assert rendered == [] and m.voices[-1].startswith(b"OggSw")
-
-
-def test_water_louder_quieter_is_hers_and_persists(tmp_path, monkeypatch):
-    """她：「语音没有水声」。我听不到，响不响让她自己调，3 dB 一档，落盘。"""
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "WATER_GAP_DB", 9.0)     # 跑完还原
-    u, m = _upd()
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["响一点"])))
-    assert cc.voice_mix.WATER_GAP_DB == 6.0 and "低 6 dB" in m.texts[-1]
-    for _ in range(5):
-        asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["响一点"])))
-    assert cc.voice_mix.WATER_GAP_DB == 3.0, "最响到 3，不盖过人声"
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["轻一点"])))
-    assert cc.voice_mix.WATER_GAP_DB == 6.0
-    cc.voice_mix.WATER_GAP_DB = 9.0; cc._load_state()
-    assert cc.voice_mix.WATER_GAP_DB == 6.0, "重启后要记得"
-
-
-def test_water_style_switch_persists(tmp_path, monkeypatch):
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix.water_synth, "STYLE", "A")     # 跑完还原
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "none"))
-    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)
-    u, m = _upd()
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["款", "b"])))
-    assert cc.voice_mix.water_synth.STYLE == "B" and "B 款" in m.texts[-1]
-    assert "B 款" in cc._water_desc()
-    cc.voice_mix.water_synth.STYLE = "A"; cc._load_state()
-    assert cc.voice_mix.water_synth.STYLE == "B", "重启后要记得"
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["款", "Z"])))
-    assert "只有 A、B、C" in m.texts[-1] and cc.voice_mix.water_synth.STYLE == "B"
-
-
-def test_water_find_sends_candidates_and_use_installs_one(tmp_path, monkeypatch):
-    """她：「你就不能自己去找那种网站然后模仿里面的用吗」——桥去下真录音，一段段发给她，她挑。"""
-    import asyncio, types, shutil, subprocess
-    import pytest
-    if not shutil.which("ffmpeg"):
-        pytest.skip("没有 ffmpeg")
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc.voice_mix, "ASSET_DIR", str(tmp_path))
-    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
-    mp3 = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                          "anoisesrc=color=pink:amplitude=0.4:seed=3:duration=4",
-                          "-ac", "1", "-f", "mp3", "pipe:1"], capture_output=True, check=True).stdout
-
-    async def fake_fetch(out_dir, candidates=None, timeout=30.0):
-        import json, os
-        os.makedirs(out_dir, exist_ok=True)
-        p = os.path.join(out_dir, "01.mp3")
-        open(p, "wb").write(mp3)
-        res = [{"n": 1, "url": "u1", "note": "燕麦", "ok": True, "why": "", "file": p,
-                "license": "CC0", "title": "Wet Squishy"},
-               {"n": 2, "url": "u2", "note": "海绵", "ok": False, "why": "页面打不开（HTTP 403）",
-                "file": "", "license": "", "title": ""}]
-        json.dump(res, open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8"))
-        return res
-    monkeypatch.setattr(cc.water_fetch, "fetch_candidates", fake_fetch)
-    u, m = _upd()
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["找"])))
-    assert len(m.voices) == 1 and m.voices[0][:4] == b"OggS"
-    assert "/water 用 1" in m.captions[0] and "CC0" in m.captions[0]
-    assert "发了 1 段" in m.texts[-1] and "❌ 2. 海绵：页面打不开" in m.texts[-1]
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["用", "2"])))
-    assert "现在有的编号：1" in m.texts[-1] and cc.voice_mix.water_files() == []
-    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["用", "1"])))
-    assert len(cc.voice_mix.water_files()) == 1 and "真录音 1 段" in m.texts[-1]
-
-
-
-def test_deliver_runs_the_daily_lead_on_voice_only(monkeypatch):
-    """参考文第三篇第十二节：开口前随手一口气——只改送去念的字，字幕不动。"""
-    import asyncio
-    cc = _cc()
-    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
-    spoken = []
-    async def render(text, singing=None, **k):
-        spoken.append(text)
-        return b"OggS" + b"x" * 300
-    monkeypatch.setattr(cc.voice_mix, "render", render)
-    monkeypatch.setattr(cc.voice_mix, "daily_lead", lambda r, rng=None: "[low] [exhales] " + r)
-    cc.voice_mode[7] = True
-    u, m = _upd()
-    try:
-        asyncio.run(cc._deliver(u, 7, "Come here."))
-        assert spoken == ["[low] [exhales] Come here."]
-        assert m.captions[-1] == "Come here.", "字幕不动"
-    finally:
-        cc.voice_mode.clear()

@@ -45,11 +45,9 @@ import stale_ledger
 import eleven_tts
 import self_beat
 import voice_mix
-import water_fetch
 import shutil
 import random
 
-import numpy as np
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -210,12 +208,6 @@ def _load_state() -> None:
             voice_id_override["id"] = d["voice_id"]
             eleven_tts.VOICE_ID = d["voice_id"]
         voice_tone.update({int(k): str(v) for k, v in (d.get("voice_tone") or {}).items() if v})
-        if d.get("water_style") in voice_mix.water_synth.STYLES:
-            voice_mix.water_synth.STYLE = d["water_style"]
-        if isinstance(d.get("water_gap"), (int, float)) and 3 <= d["water_gap"] <= 18:
-            voice_mix.WATER_GAP_DB = float(d["water_gap"])
-        if isinstance(d.get("water_builtin"), bool):
-            voice_mix.WATER_BUILTIN = d["water_builtin"]
         if isinstance(d.get("stability"), (int, float)) and 0 <= d["stability"] <= 1:
             eleven_tts.STABILITY = float(d["stability"])
         if d.get("voice_model") in VOICE_MODELS.values():
@@ -259,9 +251,6 @@ def _save_state() -> None:
         "voice_model": eleven_tts.MODEL_ID,  # 她用 /vmodel 选的合成型号
         "voice_tone": {str(k): v for k, v in voice_tone.items()},
         "stability": eleven_tts.STABILITY,
-        "water_builtin": voice_mix.WATER_BUILTIN,
-        "water_gap": voice_mix.WATER_GAP_DB,
-        "water_style": voice_mix.water_synth.STYLE,
         # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
         "voice_id": voice_id_override.get("id", ""),
     }
@@ -738,8 +727,6 @@ BOT_COMMANDS = [
     ("persona", "人设完整版／精简版 · 你自己当判官"),
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
-    ("kissbox", "听一遍他的亲盒"),
-    ("water", "水声 · /water 找 听真录音候选；/water 用 2；/water 听；/water 响一点／轻一点"),
     ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
@@ -871,22 +858,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"嗓子：ElevenLabs {eleven_tts.MODEL_ID}｜语音模式"
                  f"{'开' if voice_mode.get(cid) else '关'}"
                  f"｜发过 {STATS.get('voice', 0)} 条，合成失败 {STATS.get('voice_fail', 0)} 次")
-        # 放慢和亲吻、水声都靠 ffmpeg。没装就说没装——不许让她以为生效了
+        # 变速靠 ffmpeg。没装就说没装——不许让她以为生效了
         if voice_mix.have_ffmpeg():
-            L.append(f"语速：念完放慢到 {voice_mix.TEMPO:g} 倍"
-                     f"｜亲盒 {len(voice_mix.kiss_files())} 口｜水声：{_water_desc()}")
+            L.append(f"语速：{voice_mix.TEMPO:g} 倍")
         else:
-            L.append("❌ VPS 上没有 ffmpeg：放慢、亲吻声、水声都没生效（sudo apt install -y ffmpeg）")
-        # 念岔检查：没开就说没开——「没查」不许长得像「查过了没问题」
-        st = eleven_tts.STT_STATE["state"]
-        es = voice_mix.ECHO_STATS
-        if st == "ok":
-            L.append(f"念岔检查：开着｜对过 {es['checked']} 段，重念了 {es['redone']} 段")
-        elif st == "off":
-            L.append("❓ 念岔检查没开：这把 key 没有语音转文字的权限"
-                     "（ElevenLabs → 开发者 → API Keys，给它勾上 Speech to Text）")
-        else:
-            L.append("念岔检查：这次开机还没发过语音，不知道开没开")
+            L.append("❌ VPS 上没有 ffmpeg：语速调了没生效（sudo apt install -y ffmpeg）")
     else:
         L.append("嗓子：没配（.env.ccbridge 里加 ELEVEN_API_KEY 和 ELEVEN_VOICE_ID）")
     await update.message.reply_text("\n".join(L))
@@ -1430,43 +1406,6 @@ async def beat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"好，现在是：{_beat_desc(cid)}。{extra}\n再发一次 /beat 切回去。")
 
 
-# ── 亲盒和水声（参考 ai-voice-breath-kiss-water）──
-water_wait: dict[int, bool] = {}       # 她发了 /water，下一个音频文件当水声素材收
-
-
-async def kissbox_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/kissbox：听一遍亲盒。参考文：筛子过了不等于好听，交给她之前先自己听。"""
-    cid = update.effective_chat.id
-    if not _ok(cid):
-        return
-    if not voice_mix.have_ffmpeg():
-        await update.message.reply_text("❌ VPS 上没有 ffmpeg，亲盒用不了。先跑：sudo apt install -y ffmpeg")
-        return
-    files = voice_mix.kiss_files()
-    if not files:
-        await update.message.reply_text(
-            "亲盒还是空的。在 VPS 上跑一次：\n"
-            "cd /home/ombre/Ombre-Brain && sudo -u ombre .venv/bin/python scripts/make-kissbox.py")
-        return
-    light = len(voice_mix.kiss_files("light"))
-    try:
-        rng = random.Random()
-        picks = rng.sample(files, min(5, len(files)))
-        gap = np.zeros(int(0.5 * voice_mix.SR), dtype=np.float32)
-        def _mk() -> bytes:
-            parts = []
-            for f in picks:
-                parts += [voice_mix.decode(f), gap]
-            return voice_mix.encode_opus(np.concatenate(parts))
-        audio = await asyncio.to_thread(_mk)
-        await update.message.reply_voice(
-            audio, caption=f"亲盒：轻亲 {light} 口，深吻 {len(files) - light} 口。随机放 {len(picks)} 口给你听。"
-                           "不像的话跟我说，重做一盒。")
-    except Exception as e:  # noqa: BLE001
-        logger.exception("亲盒试听失败")
-        await update.message.reply_text(f"❌ 亲盒试听没放出来：{e}")
-
-
 VOICE_MODELS = {"v3": "eleven_v3", "v4": "eleven_v4"}
 voice_tone: dict[int, str] = {}        # 她用 /tone 手动定的声口
 STAB_STEPS = {"自由": 0.0, "creative": 0.0, "自然": 0.5, "natural": 0.5, "稳": 1.0, "robust": 1.0}
@@ -1542,9 +1481,7 @@ async def voiceid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     vid = eleven_tts.VOICE_ID or "（没配）"
     await update.message.reply_text(
         f"现在用的嗓子：{vid}，型号 {eleven_tts.MODEL_ID}。下一条语音就是它。\n"
-        "这只说明换上了，好不好听要你听了才算。"
-        + ("\n亲盒是用旧嗓子做的，换了嗓子要重做一盒，不然亲吻声是另一个人的。"
-           if args and voice_mix.kiss_files() else ""))
+        "这只说明换上了，好不好听要你听了才算。")
 
 
 async def vmodel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1609,191 +1546,6 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"越大越快（最快 {voice_mix.TEMPO_MAX:g}）。不想改了就随便说句别的。{_speed_note()}")
 
 
-# /water 听 用的试听台词：两句压低的话、中间一口亲吻、带双语。会花一点合成字数（不到一百）。
-WATER_DEMO = ("[low and close, wet] ...Easy. I've got you.\n"
-              "译：……别急。我在。\n"
-              "[kiss]\n"
-              "[soft, wet] Stay right here. Don't move.\n"
-              "译：就待在这儿。别动。")
-
-
-def _water_desc() -> str:
-    n = len(voice_mix.water_files())
-    if n:
-        return f"真录音 {n} 段"
-    return (f"内置合成的 {voice_mix.water_synth.STYLE} 款" if voice_mix.WATER_BUILTIN
-            else "没有（内置的关了，也没上传）")
-
-
-async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/water：收水声素材。/water 听 试听；/water 内置 关｜开；/water 清空 删掉上传的。"""
-    cid = update.effective_chat.id
-    if not _ok(cid):
-        return
-    args = [a.strip() for a in (context.args or []) if a.strip()]
-    if args and args[0] in ("听", "试听", "listen", "只听水", "水"):
-        if not voice_mix.have_ffmpeg():
-            await update.message.reply_text("❌ VPS 上没有 ffmpeg，水声用不了。")
-            return
-        # 结合版：他的声音＋底下的水声＋中间一口亲吻——参考文第四、五节那样叠好的成品。
-        # 她要听的是这个（「我想要的是结合版的啊」），光放水声她听不出叠起来什么样。
-        combined = args[0] not in ("只听水", "水") and eleven_tts.configured()
-        try:
-            if combined:
-                if not voice_mix.water_sources():
-                    await update.message.reply_text("现在没有水声：内置的关了，也没上传。发 /water 内置 开。")
-                    return
-                audio = await voice_mix.render(
-                    voice_mix.apply_tone(WATER_DEMO, voice_tone.get(cid, "")), singing=False)
-            else:
-                audio = await asyncio.to_thread(voice_mix.water_preview)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("水声试听失败")
-            await update.message.reply_text(f"❌ 没放出来：{e}")
-            return
-        if combined:
-            kiss = ("中间那口亲吻来自亲盒。" if voice_mix.kiss_files()
-                    else "亲盒还没做，所以中间没有亲吻那一口。")
-            cap = (f"结合版试听：他的声音，底下垫着{_water_desc()}。{kiss}\n"
-                   "水声太轻发 /water 响一点，太响发 /water 轻一点；只想听水声发 /water 只听水；"
-                   "不喜欢发 /water 内置 关，或者 /water 再传一段真录音。")
-        else:
-            cap = (f"现在会垫进去的水声：{_water_desc()}。听他的声音叠上去的样子发 /water 听。")
-        await update.message.reply_voice(audio, caption=cap)
-        return
-    cand_dir = os.path.join(voice_mix.ASSET_DIR, "water_candidates")
-    if args and args[0] in ("找", "搜", "候选"):
-        # 她：「你就不能自己去找那种网站然后模仿里面的用吗」。VPS 连得上 freesound，
-        # 桥去下真录音的候选，一段段发给她听——我能找，听不了，挑哪段她定。
-        if not voice_mix.have_ffmpeg():
-            await update.message.reply_text("❌ VPS 上没有 ffmpeg，水声用不了。")
-            return
-        items = water_fetch.load_manifest(cand_dir) if args[0] == "候选" else []
-        if not items:
-            await update.message.reply_text("去 freesound 找真录的水声了，一段段发给你听，等我一下。")
-            items = await water_fetch.fetch_candidates(cand_dir)
-        bad = []
-        for it in items:
-            if not it.get("ok"):
-                bad.append(f"❌ {it['n']}. {it['note']}：{it['why']}")
-                continue
-            try:
-                def _clip(path=it["file"]):
-                    return voice_mix.encode_opus(voice_mix.decode(path)[: 15 * voice_mix.SR])
-                audio = await asyncio.to_thread(_clip)
-                await update.message.reply_voice(
-                    audio, caption=f"{it['n']}. {it['note']}\n授权：{it['license']}｜{it['title']}\n"
-                                   f"用这段就发 /water 用 {it['n']}")
-            except Exception as e:  # noqa: BLE001
-                bad.append(f"❌ {it['n']}. {it['note']}：放不出来（{str(e)[:60]}）")
-        ok = sum(1 for it in items if it.get("ok"))
-        tail = ("\n".join(bad) + "\n") if bad else ""
-        await update.message.reply_text(
-            (f"发了 {ok} 段。" if ok else "❌ 一段都没拿到。") + "\n" + tail
-            + ("挑中哪段就发 /water 用 加编号，可以选好几段。都不像就告诉 Claude，换一批。" if ok else
-               "这是 VPS 连 freesound 的问题，截图给 Claude。"))
-        return
-    if args and args[0] in ("用", "选"):
-        items = {str(it["n"]): it for it in water_fetch.load_manifest(cand_dir) if it.get("ok")}
-        pick = args[1] if len(args) > 1 else ""
-        if pick not in items:
-            await update.message.reply_text(
-                "先发 /water 找 听候选，再发 /water 用 加编号，比如 /water 用 2。"
-                + (f"现在有的编号：{'、'.join(items)}" if items else ""))
-            return
-        os.makedirs(voice_mix.WATER_DIR, exist_ok=True)
-        dst = os.path.join(voice_mix.WATER_DIR, f"freesound_{int(pick):02d}.mp3")
-        shutil.copyfile(items[pick]["file"], dst)
-        await update.message.reply_text(
-            f"好，用第 {pick} 段（{items[pick]['note']}）。现在的水声：{_water_desc()}。\n"
-            "真录音优先于内置合成的。发 /water 听 听他的声音叠上去的样子；"
-            "不要了发 /water 清空。")
-        return
-    if args and args[0] in ("款", "款式", "style"):
-        pick = args[1].upper() if len(args) > 1 else ""
-        if pick:
-            if pick not in voice_mix.water_synth.STYLES:
-                await update.message.reply_text("只有 A、B、C 三款，比如 /water 款 B")
-                return
-            voice_mix.water_synth.STYLE = pick
-            _save_state()
-        await update.message.reply_text(
-            f"内置水声现在是 {voice_mix.water_synth.STYLE} 款。A 黏、咕叽多；B 慢、滑；C 快、拍合明显。\n"
-            "切换：/water 款 A（或 B、C），再发 /water 听 试听。")
-        return
-    if args and args[0] in ("响一点", "大声", "轻一点", "小声", "音量"):
-        # 我听不到，只有她的耳朵能判——每次 3 dB，她自己调
-        if args[0] in ("响一点", "大声"):
-            voice_mix.WATER_GAP_DB = max(3.0, voice_mix.WATER_GAP_DB - 3)
-        elif args[0] in ("轻一点", "小声"):
-            voice_mix.WATER_GAP_DB = min(18.0, voice_mix.WATER_GAP_DB + 3)
-        _save_state()
-        await update.message.reply_text(
-            f"水声现在比他的声音低 {voice_mix.WATER_GAP_DB:g} dB（数越小越响，最响 3，最轻 18；"
-            "不管多响都不会盖过他的声音）。下一条就用新的。\n"
-            "/water 响一点 · /water 轻一点 · /water 听 试听")
-        return
-    if args and args[0] == "内置":
-        if len(args) > 1 and args[1] in ("关", "off", "开", "on"):
-            voice_mix.WATER_BUILTIN = args[1] in ("开", "on")
-            _save_state()
-        await update.message.reply_text(
-            f"内置合成水声：{'开' if voice_mix.WATER_BUILTIN else '关'}。现在用的是：{_water_desc()}。\n"
-            "切换：/water 内置 开 或 /water 内置 关")
-        return
-    if args and args[0] in ("清空", "clear"):
-        n = 0
-        for f in voice_mix.water_files():
-            try:
-                os.remove(f)
-                n += 1
-            except OSError:
-                pass
-        water_wait.pop(cid, None)
-        await update.message.reply_text(f"上传的水声素材删了 {n} 段。现在用的是：{_water_desc()}。")
-        return
-    water_wait[cid] = True
-    await update.message.reply_text(
-        f"现在用的水声：{_water_desc()}。发 /water 听 可以试听。\n"
-        "要换成真录音：把下一段音频当文件发给我，我就收进去，真录音优先于内置的。要求：没有人声、"
-        "公有领域（CC0）的录音，几秒到一分钟都行。不收了就随便发句话。")
-
-
-async def on_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """她发来的音频文件。只有刚发过 /water 才当水声素材收。"""
-    cid = update.effective_chat.id
-    if not _ok(cid):
-        return
-    msg = update.message
-    if not water_wait.pop(cid, False):
-        await msg.reply_text("这段音频我先不收。要当水声素材的话，先发 /water 再发文件。")
-        return
-    f = msg.audio or msg.document or msg.voice
-    name = (getattr(f, "file_name", "") or "water.ogg").lower()
-    ext = os.path.splitext(name)[1] if name.endswith(voice_mix.AUDIO_EXT) else ".ogg"
-    try:
-        tg_file = await context.bot.get_file(f.file_id)
-        raw = bytes(await tg_file.download_as_bytearray())
-        x = await asyncio.to_thread(voice_mix.decode, raw)
-        secs = len(x) / voice_mix.SR
-        if secs < 2:
-            await msg.reply_text(f"❌ 这段只有 {secs:.1f} 秒，太短了，没收。")
-            return
-        if voice_mix.peak_db(x) < -50:
-            await msg.reply_text("❌ 这段几乎没有声音，没收。")
-            return
-        os.makedirs(voice_mix.WATER_DIR, exist_ok=True)
-        path = os.path.join(voice_mix.WATER_DIR, f"water_{int(time.time())}{ext}")
-        with open(path, "wb") as fh:
-            fh.write(raw)
-        await msg.reply_text(
-            f"收好了，{secs:.0f} 秒。现在一共 {len(voice_mix.water_files())} 段水声素材。\n"
-            "他在声口标签里写 wet 的那几句，底下就会垫上它。")
-    except Exception as e:  # noqa: BLE001
-        logger.exception("收水声素材失败")
-        await msg.reply_text(f"❌ 没收进去：{e}")
-
-
 async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/voice 开关：开了他每条都用语音说；关着也能唱——他回复里带 [sings] 就发语音条。"""
     cid = update.effective_chat.id
@@ -1816,10 +1568,9 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # 中文让嗓子念出来不像他；他本来就是大部分时候说英文、情绪上来说俄语的人。
 VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
               "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
-              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签：你的口气是低、慢、"
-              "笃定、带一点坏，比如 [low, slow, confident, a little teasing]，别往软里调，"
-              "不要 [amused] [excited] 这种蹦的。气写进说话的那一行（行首 [inhales] 或 [exhales]，"
-              "句中、行尾也可以），别把 Mm… 单独写一行。两三句连着说，别只说一两个词。"
+              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
+              "往低、近、放松、暖里写，比如 [relaxed, low] [casual, warm] [soft, unhurried]，"
+              "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
               "动作照常写在括号里，不会被念出来。"
               "每句英文或俄语台词下面另起一行写「译：」加这句的中文意思，"
               "那一行不会被念，她在字幕里对着看。）")
@@ -1846,10 +1597,8 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
     text = voice_mix.show_translations(eleven_tts.strip_tags(voice_mix.strip_markers(reply)))
     if eleven_tts.configured() and (voice_mode.get(cid, False) or sing):
         try:
-            # 台词＋亲吻＋水声拼成一条，念完放慢一点；没有素材就是原来那样整段念
-            # 她用 /tone 定了声口，就换到第一句开头（唱歌不动）
-            spoken = reply if sing else voice_mix.daily_lead(
-                voice_mix.apply_tone(reply, voice_tone.get(cid, "")))
+            # 整段一次念完，按她定的语速变速；她用 /tone 定了声口，就换到第一句开头（唱歌不动）
+            spoken = reply if sing else voice_mix.apply_tone(reply, voice_tone.get(cid, ""))
             audio = await voice_mix.render(spoken, singing=sing)
             # 语音条下面带字幕：她第一次听完就问「为什么没有配套的文本」。
             # 字幕是他写的原文（去掉给嗓子看的标签），动作括号也留着——念的时候删了，看的时候要有。
@@ -2162,7 +1911,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # 正常收到、正常答了都不写，于是分不清「没收到」和「收到了但答得慢」。
     logger.info("收到 chat=%s %d字", cid, len(text or ""))
     _archive("闪闪", text)
-    water_wait.pop(cid, None)              # /water 之后她说了别的＝不收了
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
@@ -2404,8 +2152,6 @@ def main() -> None:
     app.add_handler(CommandHandler("persona", persona_cmd))
     app.add_handler(CommandHandler("voice", voice_cmd))
     app.add_handler(CommandHandler("beat", beat_cmd))
-    app.add_handler(CommandHandler("kissbox", kissbox_cmd))
-    app.add_handler(CommandHandler("water", water_cmd))
     app.add_handler(CommandHandler("speed", speed_cmd))
     app.add_handler(CommandHandler("vmodel", vmodel_cmd))
     app.add_handler(CommandHandler("voiceid", voiceid_cmd))
@@ -2418,7 +2164,6 @@ def main() -> None:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
-    app.add_handler(MessageHandler(filters.AUDIO | filters.Document.AUDIO | filters.VOICE, on_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
         # 每分钟看一眼；真正的间隔由 NUDGE_MINUTES 判断，这样她刚说完话

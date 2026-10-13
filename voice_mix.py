@@ -1,29 +1,14 @@
-"""语音条拼接：台词 + 亲吻 + 水声。
+"""语音条：送进嗓子前的清洗、双语字幕、她定的声口、念完变速。
 
-由来 2026-10-10：她要 sanqianzilanyue/ai-voice-breath-kiss-water 那一套。那篇的结论：
-- 嗓子只念台词和喘。亲吻、水声让嗓子念，出来都是演的（亲被念成「qiu qiu」，水声像嘴里啵啵）。
-- 亲吻：让同一副嗓子真亲几遍，剪成一盒（亲盒），用的时候随机抓一口，不重样，
-  快慢差一点点（只许放慢不许加快），最近用过的十口躲开。亲盒由 scripts/make-kissbox.py 在 VPS 上做。
-- 水声：真实录音（CC0）垫在人声底下。按峰对齐：水声的峰＝这段人声的峰 −12 dB；
-  进来 0.5 秒淡入，话说完水声再留 1 秒、用 1.4 秒淡出。亲吻那一块不垫水声。
-  水声素材她在 Telegram 里用 /water 发给他，存进 voice_assets/water/。
-
-他怎么写（人设里教了）：
-- 单独一行 `[kiss]` / `[kiss deep]` → 这里插一口亲吻。
-- 声口标签里多写一个 wet，比如 `[low, close, wet]` → 这几句底下垫水声；
-  下一个标签里不写 wet，水声就退掉。wet 这个词送进嗓子前会摘掉，嗓子看不到就不会去演。
-
-稳妥第一：没有 ffmpeg、亲盒是空的、没有水声素材——就退回原来那条路（整段一次合成），
-标记全部去掉。宁可没有亲吻声，也不能让她收不到语音。
+2026-10-13 她：「全都删了吧」——水声、亲吻声、贴气稳口、念岔重念那一整套声音效果拆掉了，
+只留她说过「可以」的：嗓子、双语字幕、语速、声口。
+他旧对话里可能还写着 [kiss] 行或 wet 之类的记号——送进嗓子前照样摘掉，
+不然嗓子会把它们念出来（亲被念成「qiu qiu」）。
 """
 from __future__ import annotations
 
 import asyncio
-import logging
-import collections
-import glob
 import os
-import random
 import re
 import shutil
 import subprocess
@@ -31,61 +16,25 @@ import subprocess
 import numpy as np
 
 import eleven_tts
-import voice_polish
-import water_synth
 
-logger = logging.getLogger("voice_mix")
-
-ASSET_DIR = (os.environ.get("CC_VOICE_ASSETS", "").strip()
-             or os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_assets"))
-KISS_DIR = os.path.join(ASSET_DIR, "kissbox")
-WATER_DIR = os.path.join(ASSET_DIR, "water")
 SR = 48000
-AUDIO_EXT = (".wav", ".mp3", ".ogg", ".oga", ".opus", ".m4a", ".flac", ".aac")
 
 KISS_LINE_RE = re.compile(
     r"^[ \t]*\[(?:(deep|soft|light|neck)[ \t]+)?kiss(?:es)?(?:[ \t]+(deep|soft|light|neck))?[ \t]*\][ \t]*$",
     re.I)
 _TAG_RE = re.compile(r"\[([^\[\]\n]{1,60})\]")
-# 响动记号（参考文第二、三篇的响动盒）：写在声口标签里，送进嗓子前摘掉。
-# 慢的湿声：wet / stroke / licking / sucking；黏的咕叽：squish / squelch / fingering / thrust；
-# 停：still / stop / cum。spank 是「落一下」的，现在还没有那段素材，只摘掉不垫。
+# 旧的响动记号：写在声口标签里，嗓子看到会去演，摘掉
 _WET_RE = re.compile(
     r"\b(fast\s+fingering|wet|squish\w*|squelch\w*|strok\w*|lick\w*|suck\w*|finger\w*|"
     r"thrust\w*|spank\w*|still|stop|cum\w*)\b", re.I)
 
-
-def _sound_kind(word: str):
-    """记号词 → "wet" / "squish" / False（停）/ None（不改变底下的声音）。"""
-    w = word.lower()
-    if w.startswith(("still", "stop", "cum")):
-        return False
-    if w.startswith("spank"):
-        return None
-    if w.startswith(("squish", "squelch", "finger", "thrust", "fast")):
-        return "squish"
-    return "wet"
-
-# 水声多响。参考文按「峰」对齐（水声峰＝人声峰 −12 dB），对他们那段真录音合适；
-# 可内置合成的气泡声峰很尖、整体很轻，按峰对齐以后平均响度比人声低了 20 dB，
-# 她听到的是「语音没有水声」。改成按平均响度（RMS）对齐，再用峰兜底：
-WATER_GAP_DB = 9.0        # 水声平均响度比人声低多少（她可以 /water 响一点｜轻一点 调）
-WATER_PEAK_ROOM_DB = 6.0  # 水声的峰至少比人声的峰低这么多——永远不盖过人声
-WATER_FADE_IN = 0.5
-WATER_TAIL = 1.0          # 话说完水声再留多久
-WATER_FADE_OUT = 1.4
-GAP = 0.12                # 段与段之间的小停顿
-# 念完原调放慢。她：「语速慢一点点，就慢一点点」。v4 不认 speed 杆（参考文：0.8 和 1.0
-# 出来一样长），所以念完用 ffmpeg atempo 放慢，音高不变。参考文用 0.9；她要「一点点」→ 0.93。
-TEMPO_MIN, TEMPO_MAX = 0.8, 1.2     # 她用 /speed 调，慢到 0.8、快到 1.2
+# 念完原调变速。她：「语速慢一点点，就慢一点点」→ 0.93；她用 /speed 调，慢到 0.8、快到 1.2
+TEMPO_MIN, TEMPO_MAX = 0.8, 1.2
 try:
     TEMPO = min(TEMPO_MAX, max(TEMPO_MIN, float(os.environ.get("CC_VOICE_TEMPO", "0.93") or 0.93)))
 except ValueError:
     TEMPO = 0.93
-_recent_kisses: collections.deque = collections.deque(maxlen=10)
 
-
-# ── 解析 ──
 
 def _strip_wet_tag(m: re.Match) -> str:
     inner = m.group(1)
@@ -96,55 +45,8 @@ def _strip_wet_tag(m: re.Match) -> str:
 
 
 def strip_wet(text: str) -> str:
-    """把标签里的 wet 摘掉（[wet] 整个删掉）。嗓子看不到它才不会去演。"""
+    """把标签里的旧响动记号摘掉（[wet] 整个删掉）。"""
     return _TAG_RE.sub(_strip_wet_tag, text or "")
-
-
-def _has_wet(text: str):
-    """这一行改不改底下的声音：返回 "wet" / "squish" / False（停）；没写记号回 None（沿用）。
-
-    参考文第二篇：垫着的声音一直跟着往下，直到换成另一样、或者明说停——从前「下一个标签
-    里没写就停」，每一轮被切成好几截，每段开头嗓子都从高处重新起，音调一截一截跳。"""
-    kinds = [_sound_kind(m.group(1)) for t in _TAG_RE.findall(text or "") for m in _WET_RE.finditer(t)]
-    kinds = [k for k in kinds if k is not None]
-    return kinds[-1] if kinds else None
-
-
-def plan(reply: str) -> list[dict]:
-    """把他的回复拆成一段一段：{"kind":"say","text","wet"} 或 {"kind":"kiss","type"}。
-
-    只在两处切：亲吻行，和「水声状态变了」的那一行（参考文：下一个标签里不写 wet，
-    水声就退掉）。其余连着的台词整段一口气念——切太碎喘就断了。"""
-    out: list[dict] = []
-    buf: list[str] = []
-    wet = False                # 当前这一段的水声状态（没标签的段沿用上一段）
-    fresh = True               # 这一段还没定下自己的状态
-
-    def flush() -> None:
-        nonlocal buf, fresh
-        block = "\n".join(buf).strip()
-        buf = []
-        fresh = True
-        if block:
-            out.append({"kind": "say", "text": strip_wet(block), "wet": wet})
-
-    for line in (reply or "").replace("‖", "\n").split("\n"):
-        m = KISS_LINE_RE.match(line)
-        if m:
-            flush()
-            kind = (m.group(1) or m.group(2) or "light").lower()
-            out.append({"kind": "kiss", "type": "deep" if kind == "deep" else "light"})
-            continue
-        w = _has_wet(line)
-        if w is not None:
-            if fresh:
-                wet, fresh = w, False
-            elif w != wet:
-                flush()
-                wet, fresh = w, False
-        buf.append(line)
-    flush()
-    return out
 
 
 # 双语字幕：他在每句英文/俄语台词下面另起一行写「译：中文意思」。
@@ -199,7 +101,7 @@ def parse_tone(raw: str) -> tuple[str, list[str]]:
 
 
 def apply_tone(reply: str, tone: str) -> str:
-    """把她定的声口换到第一句台词的开头（他自己写的开头标签让位；wet 留着）。"""
+    """把她定的声口换到第一句台词的开头（他自己写的开头标签让位）。"""
     if not tone:
         return reply
     lines = (reply or "").split("\n")
@@ -207,52 +109,14 @@ def apply_tone(reply: str, tone: str) -> str:
         if not line.strip() or KISS_LINE_RE.match(line) or _TRANS_LINE_RE.match(line):
             continue
         m = _LEAD_TAG_RE.match(line)
-        w = _WET_RE.search(m.group(1)) if m else None
         body = line[m.end():] if m else line.lstrip()
-        lines[i] = f"[{tone}{', ' + w.group(1).lower() if w else ''}] {body}"
-        break
-    return "\n".join(lines)
-
-
-# 平常说话的口气（参考文第三篇第十二节）：低、慢、笃定、带一点坏。往软里调是反的。
-DAILY_TAG = "[low, slow, confident, a little teasing]"
-_LEADS = ("[exhales]", "[exhales]", "", "[chuckles softly]")
-_FILLS = ("Mm… ", "Hm… ", "Mm… ", "", "", "")
-_FILLER_START_RE = re.compile(r"^[\s….,]*(mm+|hm+|mhm|ah+|uh+|oh|well|yeah|嗯|啊|唔|哼|呃)\b", re.I)
-_BREATH_START_RE = re.compile(r"^\s*\[(inhales?|exhales?|sighs?|hisses?|chuckles?)[^\]]*\]", re.I)
-
-
-def daily_lead(reply: str, rng: random.Random | None = None) -> str:
-    """开口前随手垫一口气、一声轻笑或一个「Mm…」——有一半机会什么都不垫，不然就成了口头禅。
-    只改送去念的字，字幕不动。床上（有响动记号）、他自己已经垫了的，不动；
-    一个声口标签都没写的，补上他平常的口气。"""
-    rng = rng or random.Random()
-    if (not reply or _WET_RE.search(" ".join(_TAG_RE.findall(reply)))
-            or any(KISS_LINE_RE.match(x) for x in reply.split("\n"))):
-        return reply
-    lines = reply.split("\n")
-    for i, line in enumerate(lines):
-        if not line.strip() or _TRANS_LINE_RE.match(line):
-            continue
-        m = _LEAD_TAG_RE.match(line)
-        head = m.group(0).strip() if m else ""
-        body = line[m.end():] if m else line.strip()
-        if _BREATH_START_RE.match(body):
-            break                                  # 他自己垫了气，不再叠
-        if rng.random() < 0.5:                    # 一半的时候什么都不垫
-            lead = fill = ""
-        else:
-            lead = rng.choice(_LEADS)
-            fill = "" if _FILLER_START_RE.match(body) else rng.choice(_FILLS)
-        has_tag = bool(_TAG_RE.search(reply))
-        head = head or ("" if has_tag else DAILY_TAG)
-        lines[i] = " ".join(x for x in (head, lead, fill + body) if x)
+        lines[i] = f"[{tone}] {body}"
         break
     return "\n".join(lines)
 
 
 def strip_markers(reply: str) -> str:
-    """亲吻行和 wet 都去掉——给不走拼接的那条路、也给字幕用。"""
+    """亲吻行和旧响动记号都去掉——给嗓子、也给字幕用。"""
     # ‖ 是他分条的记号，文字那条路靠它拆成几条消息——这里只删亲吻，‖ 原样留着
     lines = []
     for line in (reply or "").split("\n"):
@@ -262,53 +126,9 @@ def strip_markers(reply: str) -> str:
     return strip_wet("\n".join(lines))
 
 
-# ── 素材 ──
-
 def have_ffmpeg() -> bool:
     return bool(shutil.which("ffmpeg"))
 
-
-def kiss_files(kind: str | None = None) -> list[str]:
-    kinds = [kind] if kind else ["light", "deep"]
-    out: list[str] = []
-    for k in kinds:
-        out += sorted(glob.glob(os.path.join(KISS_DIR, k, "*.wav")))
-    return out
-
-
-def water_files() -> list[str]:
-    """她用 /water 传上来的真录音。"""
-    return sorted(p for p in glob.glob(os.path.join(WATER_DIR, "*"))
-                  if p.lower().endswith(AUDIO_EXT))
-
-
-WATER_BUILTIN = True      # 没有真录音时用合成的那段；她可以 /water 内置 关
-
-
-def water_sources() -> list[str]:
-    """真录音优先；一段都没有就用内置合成的（"builtin"）。"""
-    files = water_files()
-    if files:
-        return files
-    return ["builtin"] if WATER_BUILTIN else []
-
-
-def water_preview() -> bytes:
-    """给她试听现在会垫进去的水声。"""
-    gap = np.zeros(int(0.6 * SR), dtype=np.float32)
-    files = water_files()
-    if files:
-        parts = []
-        for f in files[:2]:
-            parts += [decode(f)[: 12 * SR], gap]
-    elif WATER_BUILTIN:
-        parts = [water_synth.get("wet")[: 10 * SR], gap, water_synth.get("squish")[: 6 * SR]]
-    else:
-        raise ValueError("没有水声：没有上传的，内置的也关了")
-    return encode_opus(np.concatenate(parts))
-
-
-# ── 音频小工具（同步，丢进线程里跑）──
 
 def decode(src: bytes | str, af: str = "") -> np.ndarray:
     """任意音频 → 48k 单声道 float32。"""
@@ -331,9 +151,6 @@ def encode_opus(x: np.ndarray) -> bytes:
     return r.stdout
 
 
-POLISH = True     # 贴气＋稳口（参考文第三篇第三、五节）
-
-
 def retime(x: np.ndarray) -> np.ndarray:
     """原调变速到 TEMPO（小于 1 放慢，大于 1 加快），音高不变。原速不动。"""
     if abs(TEMPO - 1.0) < 0.001 or not x.size:
@@ -345,184 +162,20 @@ def retime(x: np.ndarray) -> np.ndarray:
     return np.frombuffer(r.stdout, dtype=np.float32).copy()
 
 
-def polish_safe(x: np.ndarray) -> np.ndarray:
-    """贴气、稳口。出任何错、或者长度变了，就用原声——宁可不修，不许修坏。"""
-    if not POLISH:
-        return x
-    try:
-        y = voice_polish.polish(x, SR)
-        return y if len(y) == len(x) else x
-    except Exception:  # noqa: BLE001
-        logger.warning("贴气/稳口出错，这段用原声", exc_info=True)
-        return x
-
-
-def finish(audio: bytes) -> np.ndarray:
-    """念回来的一段：解码 → 贴气、稳口 → 变速。"""
-    return retime(polish_safe(decode(audio)))
-
-
 def slow_down(audio: bytes) -> bytes:
-    """整条语音：贴气、稳口、变速，再编回语音条。"""
-    return encode_opus(finish(audio))
+    """整条语音变速，再编回语音条。"""
+    return encode_opus(retime(decode(audio)))
 
 
-def peak_db(x: np.ndarray) -> float:
-    p = float(np.max(np.abs(x))) if x.size else 0.0
-    return 20 * np.log10(p) if p > 1e-9 else -120.0
-
-
-def _fade(x: np.ndarray, fade_in: float, fade_out: float) -> np.ndarray:
-    x = x.copy()
-    a = min(len(x), int(fade_in * SR))
-    b = min(len(x), int(fade_out * SR))
-    if a:
-        x[:a] *= np.linspace(0, 1, a, dtype=np.float32)
-    if b:
-        x[-b:] *= np.linspace(1, 0, b, dtype=np.float32)
-    return x
-
-
-def pick_water_window(water: np.ndarray, n: int, rng: random.Random) -> np.ndarray:
-    """随机切两个窗，挑响动多的那个（量峰值）。素材不够长就接着循环。"""
-    if water.size == 0:
-        return np.zeros(n, dtype=np.float32)
-    if len(water) < n:
-        water = np.tile(water, n // len(water) + 1)
-    best = None
-    for _ in range(2):
-        start = rng.randint(0, len(water) - n)
-        w = water[start:start + n]
-        if best is None or peak_db(w) > peak_db(best):
-            best = w
-    return best
-
-
-def rms_db(x: np.ndarray) -> float:
-    r = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if x.size else 0.0
-    return 20 * np.log10(r) if r > 1e-9 else -120.0
-
-
-def lay_water(voice: np.ndarray, water: np.ndarray, rng: random.Random) -> np.ndarray:
-    """人声不动，只动水声：平均响度比人声低 WATER_GAP_DB，峰再比人声峰低至少
-    WATER_PEAK_ROOM_DB；0.5 秒淡入，话说完再留 1 秒、1.4 秒淡出（参考文）。"""
-    v_rms, v_peak = rms_db(voice), peak_db(voice)
-    tail = int(WATER_TAIL * SR)
-    voice = np.concatenate([voice, np.zeros(tail, dtype=np.float32)])
-    w = pick_water_window(water, len(voice), rng)
-    gain_db = min((v_rms - WATER_GAP_DB) - rms_db(w),
-                  (v_peak - WATER_PEAK_ROOM_DB) - peak_db(w))
-    w = _fade(w * np.float32(10 ** (gain_db / 20)), WATER_FADE_IN, WATER_FADE_OUT)
-    return voice + w
-
-
-def pick_kiss(kind: str, rng: random.Random) -> str | None:
-    files = kiss_files(kind) or kiss_files()
-    if not files:
-        return None
-    fresh = [f for f in files if f not in _recent_kisses] or files
-    f = rng.choice(fresh)
-    _recent_kisses.append(f)
-    return f
-
-
-# ── 主流程 ──
-
-ECHO_STATS = {"checked": 0, "redone": 0}
-
-
-async def synth_checked(text: str, **kw) -> bytes:
-    """念完先转录对账：念重了、吞了就重念一次，两版里留毛病少的（参考文第三篇第十节）。
-    转录做不了（没权限、没连上）就照发——那是「不知道」，不当「没问题」报。"""
-    audio = await eleven_tts.synth(text, **kw)
-    if kw.get("singing"):
-        return audio
-    expect = eleven_tts.prepare_text(text)
-    heard = await eleven_tts.transcribe(audio)
-    if heard is None:
-        return audio
-    ECHO_STATS["checked"] += 1
-    bad, why = eleven_tts.echo_bad(heard, expect)
-    if bad < 3:
-        return audio
-    ECHO_STATS["redone"] += 1
-    logger.info("念岔了（%s，分 %.1f），重念一次", why, bad)
-    audio2 = await eleven_tts.synth(text, **kw)
-    heard2 = await eleven_tts.transcribe(audio2)
-    bad2 = eleven_tts.echo_bad(heard2, expect)[0] if heard2 is not None else bad
-    return audio2 if bad2 < bad else audio
-
-async def render(reply: str, *, singing: bool | None = None,
-                 rng: random.Random | None = None) -> bytes:
+async def render(reply: str, *, singing: bool | None = None) -> bytes:
     """合成一条语音条（Ogg/Opus）。任何失败都抛出去，由桥退回文字。"""
-    rng = rng or random.Random()
     reply = drop_translations(reply)       # 译文只进字幕，不念
     if singing is None:
         singing = eleven_tts.wants_singing(reply)
-    segs = [] if singing else plan(reply)
-    can_mix = have_ffmpeg()
-    if not (can_mix and kiss_files()):
-        segs = [s for s in segs if s["kind"] != "kiss"]
-    waters = water_sources() if can_mix else []
-    if not waters:
-        for s in segs:
-            s["wet"] = False
-    if not any(s["kind"] == "kiss" or s.get("wet") for s in segs):
-        # 原来那条路：整段一口气念（参考文：喘才不会断），念完放慢一点
-        audio = await synth_checked(strip_markers(reply), singing=singing)
-        if singing or not can_mix:
-            return audio          # 唱歌不动节拍；没有 ffmpeg 就原样发
-        try:
-            return await asyncio.to_thread(slow_down, audio)
-        except Exception:  # noqa: BLE001
-            return audio          # 放慢失败也照样有声音，绝不因为这个让她收不到
-
-    says = [s for s in segs if s["kind"] == "say"]
-    texts = [eleven_tts.prepare_text(s["text"]) for s in says]
-    # 每段都把前后句递给嗓子，语气才接得上
-    audio: dict[int, bytes] = {}
-    for i, s in enumerate(says):
-        if not texts[i]:
-            continue
-        audio[i] = await synth_checked(
-            s["text"], previous_text=texts[i - 1] if i else "",
-            next_text=texts[i + 1] if i + 1 < len(texts) else "")
-    if not audio:
-        raise ValueError("没有可合成的台词")
-    water_src = rng.choice(waters) if waters else None
-    return await asyncio.to_thread(_assemble, segs, says, audio, water_src, rng)
-
-
-def _assemble(segs, says, audio, water_src, rng) -> bytes:
-    gap = np.zeros(int(GAP * SR), dtype=np.float32)
-    decoded: dict[str, np.ndarray] = {}
-
-    def water_for(kind) -> np.ndarray | None:
-        if not water_src:
-            return None
-        if water_src == "builtin":
-            return water_synth.get("squish" if kind == "squish" else "wet")
-        if "file" not in decoded:
-            decoded["file"] = decode(water_src)
-        return decoded["file"]
-    parts: list[np.ndarray] = []
-    i_say = 0
-    for s in segs:
-        if s["kind"] == "say":
-            idx = i_say
-            i_say += 1
-            if idx not in audio:
-                continue
-            v = finish(audio[idx])
-            w = water_for(s["wet"]) if s.get("wet") else None
-            if w is not None and w.size:
-                v = lay_water(v, w, rng)
-            parts.append(v)
-        else:
-            f = pick_kiss(s["type"], rng)
-            if not f:
-                continue
-            # 快慢随机差一点点：只许放慢（≤3%），不许加快
-            parts.append(decode(f, af=f"atempo={rng.uniform(0.97, 1.0):.3f}"))
-        parts.append(gap)
-    return encode_opus(np.concatenate(parts))
+    audio = await eleven_tts.synth(strip_markers(reply), singing=singing)
+    if singing or not have_ffmpeg():
+        return audio          # 唱歌不动节拍；没有 ffmpeg 就原样发
+    try:
+        return await asyncio.to_thread(slow_down, audio)
+    except Exception:  # noqa: BLE001
+        return audio          # 变速失败也照样有声音，绝不因为这个让她收不到
