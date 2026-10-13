@@ -215,17 +215,29 @@ def test_speed_can_go_faster_and_one_means_untouched(assets, fake_synth, monkeyp
 
 # ── 内置合成水声（她说「你自己找一段水声自己合成」）──
 
-def test_builtin_water_is_liquid_band_and_stable():
+def _spikiness(x):
+    """频谱尖峰度：有音高的声音（气泡那种「啵」）很高，摩擦/粘连这种噪声类的很低。"""
+    X = np.abs(np.fft.rfft(x))
+    f = np.fft.rfftfreq(len(x), 1 / V.SR)
+    sm = np.convolve(X, np.ones(50) / 50, "same")
+    band = (f > 200) & (f < 4000)
+    return float(np.max(sm[band]) / np.median(sm[band]))
+
+
+def test_builtin_water_has_no_pitch_so_it_is_not_underwater():
+    """她听第一版：「感觉人都变成人鱼了，我要的是模仿那个时候的声音」。
+    气泡模型有音高（尖峰度 6.7），像水下。现在三款都必须是没有音高的湿摩擦声。"""
     import water_synth as W
-    for kind, secs in (("wet", 20), ("squish", 8)):
-        x = W.get(kind)
-        assert abs(len(x) / W.SR - secs) < 0.01
-        X = np.abs(np.fft.rfft(x)) ** 2
-        f = np.fft.rfftfreq(len(x), 1 / W.SR)
-        mid = X[(f >= 200) & (f < 2000)].sum() / X.sum()
-        assert mid > 0.7, f"{kind}: 液体声该集中在 200–2000 Hz，现在 {mid:.0%}"
-        assert 0.5 < float(np.abs(x).max()) <= 0.71
-    assert W.get("wet") is W.get("wet"), "同一进程只算一次"
+    for style in W.STYLES:
+        for kind, secs in (("wet", 20), ("squish", 8)):
+            x = W.get(kind, style)
+            assert abs(len(x) / W.SR - secs) < 0.01
+            assert _spikiness(x) < 3, f"{style}/{kind} 有音高，又成人鱼了：{_spikiness(x):.1f}"
+            X = np.abs(np.fft.rfft(x)) ** 2
+            f = np.fft.rfftfreq(len(x), 1 / W.SR)
+            assert X[(f >= 500) & (f < 8000)].sum() / X.sum() > 0.8
+            assert 0.5 < float(np.abs(x).max()) <= 0.71
+    assert W.get("wet") is W.get("wet"), "同一进程同一款只算一次"
 
 
 def test_squish_tag_picks_the_sticky_one_and_is_never_spoken():

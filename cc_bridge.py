@@ -208,6 +208,8 @@ def _load_state() -> None:
             voice_id_override["id"] = d["voice_id"]
             eleven_tts.VOICE_ID = d["voice_id"]
         voice_tone.update({int(k): str(v) for k, v in (d.get("voice_tone") or {}).items() if v})
+        if d.get("water_style") in voice_mix.water_synth.STYLES:
+            voice_mix.water_synth.STYLE = d["water_style"]
         if isinstance(d.get("water_gap"), (int, float)) and 3 <= d["water_gap"] <= 18:
             voice_mix.WATER_GAP_DB = float(d["water_gap"])
         if isinstance(d.get("water_builtin"), bool):
@@ -257,6 +259,7 @@ def _save_state() -> None:
         "stability": eleven_tts.STABILITY,
         "water_builtin": voice_mix.WATER_BUILTIN,
         "water_gap": voice_mix.WATER_GAP_DB,
+        "water_style": voice_mix.water_synth.STYLE,
         # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
         "voice_id": voice_id_override.get("id", ""),
     }
@@ -734,7 +737,7 @@ BOT_COMMANDS = [
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
-    ("water", "水声 · /water 听 试听；/water 响一点／轻一点；/water 内置 关"),
+    ("water", "水声 · /water 听 试听；/water 款 A／B／C；/water 响一点／轻一点"),
     ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
@@ -1606,7 +1609,8 @@ def _water_desc() -> str:
     n = len(voice_mix.water_files())
     if n:
         return f"你上传的 {n} 段"
-    return "内置合成的那段" if voice_mix.WATER_BUILTIN else "没有（内置的关了，也没上传）"
+    return (f"内置合成的 {voice_mix.water_synth.STYLE} 款" if voice_mix.WATER_BUILTIN
+            else "没有（内置的关了，也没上传）")
 
 
 async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1644,6 +1648,18 @@ async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             cap = (f"现在会垫进去的水声：{_water_desc()}。听他的声音叠上去的样子发 /water 听。")
         await update.message.reply_voice(audio, caption=cap)
+        return
+    if args and args[0] in ("款", "款式", "style"):
+        pick = args[1].upper() if len(args) > 1 else ""
+        if pick:
+            if pick not in voice_mix.water_synth.STYLES:
+                await update.message.reply_text("只有 A、B、C 三款，比如 /water 款 B")
+                return
+            voice_mix.water_synth.STYLE = pick
+            _save_state()
+        await update.message.reply_text(
+            f"内置水声现在是 {voice_mix.water_synth.STYLE} 款。A 黏、咕叽多；B 慢、滑；C 快、拍合明显。\n"
+            "切换：/water 款 A（或 B、C），再发 /water 听 试听。")
         return
     if args and args[0] in ("响一点", "大声", "轻一点", "小声", "音量"):
         # 我听不到，只有她的耳朵能判——每次 3 dB，她自己调

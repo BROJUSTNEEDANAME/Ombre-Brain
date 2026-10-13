@@ -1,12 +1,16 @@
-"""内置水声：用物理模型合成，不靠录音。
+"""内置水声：用程序合成，不靠录音。
 
-由来 2026-10-11：她说「你自己找一段水声自己合成」。参考文（ai-voice-breath-kiss-water）
-用的是 freesound 上的 CC0 真录音，但部署机和我这边都拿不到那边的素材，所以先合成一段垫着：
-- 液体里的气泡：频率略微上扬的衰减正弦（van den Doel 气泡模型），成团落在每一下动作中段。
-- 湿的挤压：带通噪声，中心频率扫过去，一下压进去、一下抽出来。
-- 一层很轻的湿底噪，别让间隙死寂。
-她用 /water 上传了真录音，就优先用真的；/water 内置 关 可以关掉这一段。
-参考文也说过 AI 生成的水声「太干净、一听就是机器做的」——这段是不是够像，只有她的耳朵能判。
+由来 2026-10-11：她说「你自己找一段水声自己合成」（部署机和我这边都拿不到 freesound 的素材）。
+第一版用的是「液体里的气泡」模型——有音高的「啵」，她一听：「我的妈呀，你这是水声吗，
+感觉人都变成人鱼了。我要的是模仿那个时候的声音」。气泡是水下的声音，不是那种时候的湿声。
+
+现在这版没有音高（频谱尖峰度 ~1.5，气泡版 6.7），三层：
+- 密集的细碎粘连声：一两毫秒的带通噪声小脉冲，密度跟着每一下的速度走；
+- 滑动的摩擦嘶声：带通噪声，速度越快越响；
+- 每次换方向那一下的吸附/拍合：十几二十毫秒、闷一点的短脉冲。
+三款（她用 /water 款 A｜B｜C 切）：A 黏、咕叽多；B 慢、滑；C 快、拍合明显。
+squish（更黏的咕叽）是同一款再密一点、摩擦少一点。
+她上传了真录音就优先用真的。像不像只有她的耳朵能判。
 """
 from __future__ import annotations
 
@@ -15,68 +19,96 @@ import functools
 import numpy as np
 
 SR = 48000
-def onepole_lp(x, fc):
-    a = np.exp(-2*np.pi*fc/SR); y = np.empty_like(x); s = 0.0
-    for i, v in enumerate(x):
-        s = (1-a)*v + a*s; y[i] = s
-    return y
+STYLES = {
+    "A": dict(period=(0.8, 1.3), crackle=900, friction=0.15, smack=0.6),
+    "B": dict(period=(1.3, 2.0), crackle=400, friction=0.35, smack=0.5),
+    "C": dict(period=(0.45, 0.7), crackle=700, friction=0.25, smack=1.0),
+}
+STYLE = "A"
 
-def bubble(rng, f0, amp):
-    """液体里一个气泡：频率略微上扬的衰减正弦（van den Doel 气泡模型）。"""
-    d = 0.043*f0 + 0.0014*f0**1.5           # 阻尼
-    n = int(min(0.08, 6/d)*SR)
-    t = np.arange(n)/SR
-    xi = rng.uniform(0.05, 0.25)            # 上扬
-    f = f0*(1 + xi*d*t)
-    ph = 2*np.pi*np.cumsum(f)/SR
-    return (amp*np.sin(ph)*np.exp(-d*t)).astype(np.float32)
 
-def squelch(rng, n, f_lo, f_hi):
-    """湿的挤压：带通噪声，中心频率扫过去。"""
-    noise = rng.standard_normal(n).astype(np.float32)
-    fc = np.linspace(f_lo, f_hi, n)
-    # 两级一阶低通减出一个粗带通
-    lp = noise.copy(); s1 = s2 = 0.0
-    out = np.empty(n, np.float32)
-    for i in range(n):
-        a = np.exp(-2*np.pi*fc[i]*1.6/SR); b = np.exp(-2*np.pi*fc[i]*0.6/SR)
-        s1 = (1-a)*noise[i] + a*s1; s2 = (1-b)*noise[i] + b*s2
-        out[i] = s1 - s2
-    env = np.sin(np.linspace(0, np.pi, n))**1.5
-    return out*env
+def band_noise(rng, n, lo, hi):
+    X = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1 / SR)
+    m = np.clip((f - lo) / (0.25 * lo + 1), 0, 1) * np.clip((hi - f) / (0.25 * hi + 1), 0, 1)
+    return np.fft.irfft(X * m, n).astype(np.float32)
 
-def strokes(secs, seed, period=(1.1, 1.9), dens=60, f_range=(350, 1400), squish=0.5):
+def kernels(rng, k=16):
+    out = []
+    for _ in range(k):
+        n = int(rng.uniform(0.0012, 0.004) * SR)
+        tau = rng.uniform(0.15, 0.9) / 1000
+        burst = band_noise(rng, n, rng.uniform(500, 1400), rng.uniform(2800, 7000))
+        out.append(burst * np.exp(-np.arange(n) / SR / tau).astype(np.float32))
+    return out
+
+def stroke_velocity(rng, N, period):
+    """每一下来回：速度从 0 到最大再回 0；返回速度曲线和每次换方向的位置。"""
+    v = np.zeros(N, np.float32); turns = []
+    i = 0
+    while i < N:
+        half = int(rng.uniform(*period) / 2 * SR)
+        j = min(N, i + half)
+        v[i:j] = np.sin(np.linspace(0, np.pi, j - i)) * rng.uniform(0.7, 1.0)
+        turns.append(i)
+        i = j
+    return v, turns
+
+def wet(secs, seed, period=(0.9, 1.6), crackle=500, friction=0.25, smack=0.8, base=40):
     rng = np.random.default_rng(seed)
-    N = int(secs*SR); y = np.zeros(N, np.float32)
-    t = 0.0
-    while t < secs - 0.3:
-        T = rng.uniform(*period)
-        a, b = int(t*SR), int(min(secs, t+T)*SR)
-        # 一下：前半段压进去、后半段抽出来，各一团挤压声
-        half = (b-a)//2
-        for k, (lo, hi) in enumerate(((f_range[0], f_range[1]), (f_range[1]*0.8, f_range[0]*1.2))):
-            st = a + k*half
-            n = int(half*rng.uniform(0.6, 0.9))
-            if st+n < N:
-                y[st:st+n] += squish*rng.uniform(0.5, 1.0)*squelch(rng, n, lo, hi)
-        # 这一下里的气泡：集中在动作中段
-        nb = rng.poisson(dens*T)
-        for _ in range(nb):
-            c = a + int(rng.beta(2, 2)*(b-a))
-            f0 = rng.lognormal(np.log(900), 0.45)
-            bb = bubble(rng, f0, rng.uniform(0.05, 0.35))
-            if c+len(bb) < N:
-                y[c:c+len(bb)] += bb
-        t += T
-    # 一层很轻的湿底噪，别让间隙死寂
-    bed = onepole_lp(rng.standard_normal(N).astype(np.float32), 900)*0.02
-    y = y + bed
-    return (y/np.max(np.abs(y))*0.7).astype(np.float32)
+    N = int(secs * SR)
+    v, turns = stroke_velocity(rng, N, period)
+    # 1) 粘连的细碎声：密度跟着速度走
+    lam = base + crackle * v ** 1.5
+    pos = np.nonzero(rng.random(N) < lam / SR)[0]
+    amp = rng.lognormal(0, 0.6, len(pos)).astype(np.float32) * (0.3 + 0.7 * v[pos])
+    ks = kernels(rng)
+    which = rng.integers(0, len(ks), len(pos))
+    y = np.zeros(N, np.float32)
+    for k_i, ker in enumerate(ks):
+        imp = np.zeros(N, np.float32)
+        sel = which == k_i
+        imp[pos[sel]] = amp[sel]
+        y += np.convolve(imp, ker)[:N]
+    y /= (np.max(np.abs(y)) + 1e-9)
+    # 2) 滑动的摩擦嘶声：速度越快越响
+    fr = band_noise(rng, N, 400, 3500)
+    fr = fr / (np.max(np.abs(fr)) + 1e-9) * (v ** 2) * friction
+    # 3) 换方向那一下的吸附/拍合：短、闷一点
+    sm = np.zeros(N, np.float32)
+    for t in turns[1:]:
+        if rng.random() > 0.85:
+            continue
+        n = int(rng.uniform(0.012, 0.03) * SR)
+        b = band_noise(rng, n, 250, rng.uniform(1800, 3200))
+        b = b / (np.max(np.abs(b)) + 1e-9) * np.exp(-np.arange(n) / SR / rng.uniform(0.004, 0.01))
+        e = min(N, t + n)
+        sm[t:e] += (b[: e - t] * smack * rng.uniform(0.5, 1.0)).astype(np.float32)
+    out = y * 0.8 + fr + sm
+    return _tame(out)
 
 
-@functools.lru_cache(maxsize=4)
-def get(kind: str = "wet") -> np.ndarray:
-    """kind="wet"：慢的湿声（20 秒）；kind="squish"：更黏的咕叽（8 秒）。同一进程里只算一次。"""
+def _tame(x: np.ndarray, crest_db: float = 13.0) -> np.ndarray:
+    """柔和限幅：把偶尔特别响的几下削圆。不然峰均比 25–31 dB，垫到人声下面时
+    为了峰不盖过人声，整体只能压得很低——她又会听成「没有水声」。"""
+    x = x.astype(np.float64)
+    for _ in range(3):
+        r = np.sqrt(np.mean(x ** 2)) + 1e-12
+        t = r * 10 ** (crest_db / 20)
+        x = t * np.tanh(x / t)
+    return (x / (np.max(np.abs(x)) + 1e-12) * 0.7).astype(np.float32)
+
+
+@functools.lru_cache(maxsize=12)
+def _make(kind: str, style: str) -> np.ndarray:
+    p = dict(STYLES[style])
     if kind == "squish":
-        return strokes(8, 11, period=(0.5, 0.9), dens=140, f_range=(250, 900), squish=0.8)
-    return strokes(20, 7)
+        p.update(crackle=int(p["crackle"] * 1.4), friction=p["friction"] * 0.7)
+        return wet(8, 11, **p)
+    return wet(20, 7, **p)
+
+
+def get(kind: str = "wet", style: str | None = None) -> np.ndarray:
+    """kind="wet"：20 秒；kind="squish"：更黏的 8 秒。style 不给就用她选的那款。同款只算一次。"""
+    style = style if style in STYLES else STYLE
+    return _make("squish" if kind == "squish" else "wet", style)

@@ -3355,3 +3355,21 @@ def test_water_louder_quieter_is_hers_and_persists(tmp_path, monkeypatch):
     assert cc.voice_mix.WATER_GAP_DB == 6.0
     cc.voice_mix.WATER_GAP_DB = 9.0; cc._load_state()
     assert cc.voice_mix.WATER_GAP_DB == 6.0, "重启后要记得"
+
+
+def test_water_style_switch_persists(tmp_path, monkeypatch):
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix.water_synth, "STYLE", "A")     # 跑完还原
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)
+    u, m = _upd()
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["款", "b"])))
+    assert cc.voice_mix.water_synth.STYLE == "B" and "B 款" in m.texts[-1]
+    assert "B 款" in cc._water_desc()
+    cc.voice_mix.water_synth.STYLE = "A"; cc._load_state()
+    assert cc.voice_mix.water_synth.STYLE == "B", "重启后要记得"
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["款", "Z"])))
+    assert "只有 A、B、C" in m.texts[-1] and cc.voice_mix.water_synth.STYLE == "B"
