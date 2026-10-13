@@ -1591,6 +1591,14 @@ async def speed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"越大越快（最快 {voice_mix.TEMPO_MAX:g}）。不想改了就随便说句别的。{_speed_note()}")
 
 
+# /water 听 用的试听台词：两句压低的话、中间一口亲吻、带双语。会花一点合成字数（不到一百）。
+WATER_DEMO = ("[low and close, wet] ...Easy. I've got you.\n"
+              "译：……别急。我在。\n"
+              "[kiss]\n"
+              "[soft, wet] Stay right here. Don't move.\n"
+              "译：就待在这儿。别动。")
+
+
 def _water_desc() -> str:
     n = len(voice_mix.water_files())
     if n:
@@ -1604,18 +1612,34 @@ async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _ok(cid):
         return
     args = [a.strip() for a in (context.args or []) if a.strip()]
-    if args and args[0] in ("听", "试听", "listen"):
+    if args and args[0] in ("听", "试听", "listen", "只听水", "水"):
         if not voice_mix.have_ffmpeg():
             await update.message.reply_text("❌ VPS 上没有 ffmpeg，水声用不了。")
             return
+        # 结合版：他的声音＋底下的水声＋中间一口亲吻——参考文第四、五节那样叠好的成品。
+        # 她要听的是这个（「我想要的是结合版的啊」），光放水声她听不出叠起来什么样。
+        combined = args[0] not in ("只听水", "水") and eleven_tts.configured()
         try:
-            audio = await asyncio.to_thread(voice_mix.water_preview)
+            if combined:
+                if not voice_mix.water_sources():
+                    await update.message.reply_text("现在没有水声：内置的关了，也没上传。发 /water 内置 开。")
+                    return
+                audio = await voice_mix.render(
+                    voice_mix.apply_tone(WATER_DEMO, voice_tone.get(cid, "")), singing=False)
+            else:
+                audio = await asyncio.to_thread(voice_mix.water_preview)
         except Exception as e:  # noqa: BLE001
+            logger.exception("水声试听失败")
             await update.message.reply_text(f"❌ 没放出来：{e}")
             return
-        await update.message.reply_voice(
-            audio, caption=f"现在会垫进去的水声：{_water_desc()}。不像的话发 /water 内置 关，"
-                           "或者发 /water 再传一段真录音，真录音优先。")
+        if combined:
+            kiss = ("中间那口亲吻来自亲盒。" if voice_mix.kiss_files()
+                    else "亲盒还没做，所以中间没有亲吻那一口。")
+            cap = (f"结合版试听：他的声音，底下垫着{_water_desc()}。{kiss}\n"
+                   "只想听水声发 /water 只听水；不喜欢发 /water 内置 关，或者 /water 再传一段真录音。")
+        else:
+            cap = (f"现在会垫进去的水声：{_water_desc()}。听他的声音叠上去的样子发 /water 听。")
+        await update.message.reply_voice(audio, caption=cap)
         return
     if args and args[0] == "内置":
         if len(args) > 1 and args[1] in ("关", "off", "开", "on"):

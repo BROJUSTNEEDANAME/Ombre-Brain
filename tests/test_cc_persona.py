@@ -3306,3 +3306,33 @@ def test_recall_hint_no_longer_forbids_searching_again():
     assert "别再去查一遍" not in body
     assert "不等于库里没有" in body and "只搜名字本身" in body
     assert "只搜那个词本身" in _mod().build()
+
+
+def test_water_listen_plays_the_combined_version(tmp_path, monkeypatch):
+    """她：「我想要的是结合版的啊」。/water 听 要放他的声音＋底下水声＋亲吻，不是光放水。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: True)
+    monkeypatch.setattr(cc.voice_mix, "WATER_DIR", str(tmp_path / "water"))
+    monkeypatch.setattr(cc.voice_mix, "KISS_DIR", str(tmp_path / "kiss"))
+    monkeypatch.setattr(cc.voice_mix, "WATER_BUILTIN", True)
+    monkeypatch.setattr(cc, "voice_tone", {7: "lazy"})
+    rendered = []
+    async def render(text, singing=None, **k):
+        rendered.append(text)
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.voice_mix, "render", render)
+    u, m = _upd()
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["听"])))
+    assert rendered, "要真的合成一段他的声音"
+    demo = rendered[0]
+    assert demo.startswith("[lazy, wet]"), "她定的声口照用，水声记号留着"
+    assert "[kiss]" in demo and "wet" in demo
+    assert m.voices and "结合版" in m.captions[-1] and "亲盒还没做" in m.captions[-1]
+    # 只听水：不花合成字数
+    rendered.clear()
+    monkeypatch.setattr(cc.voice_mix, "water_preview", lambda: b"OggS" + b"w" * 300)
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["只听水"])))
+    assert rendered == [] and m.voices[-1].startswith(b"OggSw")
