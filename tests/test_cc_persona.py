@@ -3336,3 +3336,22 @@ def test_water_listen_plays_the_combined_version(tmp_path, monkeypatch):
     monkeypatch.setattr(cc.voice_mix, "water_preview", lambda: b"OggS" + b"w" * 300)
     asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["只听水"])))
     assert rendered == [] and m.voices[-1].startswith(b"OggSw")
+
+
+def test_water_louder_quieter_is_hers_and_persists(tmp_path, monkeypatch):
+    """她：「语音没有水声」。我听不到，响不响让她自己调，3 dB 一档，落盘。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.voice_mix, "WATER_GAP_DB", 9.0)     # 跑完还原
+    u, m = _upd()
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["响一点"])))
+    assert cc.voice_mix.WATER_GAP_DB == 6.0 and "低 6 dB" in m.texts[-1]
+    for _ in range(5):
+        asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["响一点"])))
+    assert cc.voice_mix.WATER_GAP_DB == 3.0, "最响到 3，不盖过人声"
+    asyncio.run(cc.water_cmd(u, types.SimpleNamespace(args=["轻一点"])))
+    assert cc.voice_mix.WATER_GAP_DB == 6.0
+    cc.voice_mix.WATER_GAP_DB = 9.0; cc._load_state()
+    assert cc.voice_mix.WATER_GAP_DB == 6.0, "重启后要记得"

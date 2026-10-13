@@ -101,18 +101,31 @@ def test_kisses_come_from_the_box_and_speech_gets_context(assets, fake_synth):
 
 
 @needs_ffmpeg
-def test_water_sits_12db_under_the_voice_and_rings_on_one_second(assets, fake_synth, monkeypatch):
+def test_water_rings_on_after_the_voice(assets, fake_synth, monkeypatch):
     monkeypatch.setattr(V, "TEMPO", 1.0)
     out = asyncio.run(V.render("[low, close, wet] Easy.", rng=random.Random(2)))
     x = V.decode(out)
     voice_len = int(1.0 * V.SR)
     assert len(x) / V.SR > 1.9, "话说完水声要再留一秒，不能掐断"
-    tail = x[voice_len + int(0.1 * V.SR): voice_len + int(0.5 * V.SR)]
-    assert V.peak_db(tail) > -40, "尾巴上得有水声"
-    voice_peak = V.peak_db(V.decode(_voice(1.0)))
-    gap = voice_peak - V.peak_db(tail)
-    assert 9 < gap < 20, f"水声的峰要在人声峰下面 12 dB 左右，现在差 {gap:.1f} dB"
+    assert V.peak_db(x[voice_len + int(0.1 * V.SR): voice_len + int(0.5 * V.SR)]) > -45, "尾巴上得有水声"
     assert "wet" not in fake_synth[0]["text"]
+
+
+def test_water_layer_sits_under_the_voice_by_average_loudness():
+    """她：「语音没有水声」。按峰对齐时，内置气泡声的平均响度比人声低了 20 dB，听不见。
+    现在按平均响度对齐（低 WATER_GAP_DB），峰再兜底：永远比人声峰低至少 WATER_PEAK_ROOM_DB。"""
+    import water_synth as W
+    t = np.arange(int(3 * V.SR)) / V.SR
+    # 像说话的替身：有起伏、有停顿的低频音
+    voice = (0.4 * np.sin(2 * np.pi * 140 * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 1.3 * t)) ** 2).astype(np.float32)
+    for kind in ("wet", "squish"):
+        mix = V.lay_water(voice, W.get(kind), random.Random(1))
+        water = mix - np.concatenate([voice, np.zeros(len(mix) - len(voice), np.float32)])
+        body = water[int(0.5 * V.SR): len(voice) - int(0.4 * V.SR)]
+        gap = V.rms_db(voice) - V.rms_db(body)
+        assert V.peak_db(water) <= V.peak_db(voice) - V.WATER_PEAK_ROOM_DB + 0.01, "水声绝不盖过人声"
+        assert gap < 15, f"{kind}：水声比人声低了 {gap:.1f} dB，又会听不见"
+        assert gap > V.WATER_GAP_DB - 1.5, f"{kind}：水声太响了（只低 {gap:.1f} dB）"
 
 
 @needs_ffmpeg

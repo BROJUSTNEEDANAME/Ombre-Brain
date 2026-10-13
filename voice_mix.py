@@ -45,7 +45,11 @@ KISS_LINE_RE = re.compile(
 _TAG_RE = re.compile(r"\[([^\[\]\n]{1,60})\]")
 _WET_RE = re.compile(r"\b(wet|squish\w*)\b", re.I)   # squish＝更黏的咕叽（参考文：换个词）
 
-WATER_GAP_DB = 12.0       # 水声峰比人声峰低多少
+# 水声多响。参考文按「峰」对齐（水声峰＝人声峰 −12 dB），对他们那段真录音合适；
+# 可内置合成的气泡声峰很尖、整体很轻，按峰对齐以后平均响度比人声低了 20 dB，
+# 她听到的是「语音没有水声」。改成按平均响度（RMS）对齐，再用峰兜底：
+WATER_GAP_DB = 9.0        # 水声平均响度比人声低多少（她可以 /water 响一点｜轻一点 调）
+WATER_PEAK_ROOM_DB = 6.0  # 水声的峰至少比人声的峰低这么多——永远不盖过人声
 WATER_FADE_IN = 0.5
 WATER_TAIL = 1.0          # 话说完水声再留多久
 WATER_FADE_OUT = 1.4
@@ -307,12 +311,20 @@ def pick_water_window(water: np.ndarray, n: int, rng: random.Random) -> np.ndarr
     return best
 
 
+def rms_db(x: np.ndarray) -> float:
+    r = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if x.size else 0.0
+    return 20 * np.log10(r) if r > 1e-9 else -120.0
+
+
 def lay_water(voice: np.ndarray, water: np.ndarray, rng: random.Random) -> np.ndarray:
-    """人声不动，只动水声：峰对齐到人声峰 −12 dB，淡入淡出，话说完再留 1 秒。"""
+    """人声不动，只动水声：平均响度比人声低 WATER_GAP_DB，峰再比人声峰低至少
+    WATER_PEAK_ROOM_DB；0.5 秒淡入，话说完再留 1 秒、1.4 秒淡出（参考文）。"""
+    v_rms, v_peak = rms_db(voice), peak_db(voice)
     tail = int(WATER_TAIL * SR)
     voice = np.concatenate([voice, np.zeros(tail, dtype=np.float32)])
     w = pick_water_window(water, len(voice), rng)
-    gain_db = (peak_db(voice) - WATER_GAP_DB) - peak_db(w)
+    gain_db = min((v_rms - WATER_GAP_DB) - rms_db(w),
+                  (v_peak - WATER_PEAK_ROOM_DB) - peak_db(w))
     w = _fade(w * np.float32(10 ** (gain_db / 20)), WATER_FADE_IN, WATER_FADE_OUT)
     return voice + w
 

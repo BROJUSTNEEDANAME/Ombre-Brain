@@ -208,6 +208,8 @@ def _load_state() -> None:
             voice_id_override["id"] = d["voice_id"]
             eleven_tts.VOICE_ID = d["voice_id"]
         voice_tone.update({int(k): str(v) for k, v in (d.get("voice_tone") or {}).items() if v})
+        if isinstance(d.get("water_gap"), (int, float)) and 3 <= d["water_gap"] <= 18:
+            voice_mix.WATER_GAP_DB = float(d["water_gap"])
         if isinstance(d.get("water_builtin"), bool):
             voice_mix.WATER_BUILTIN = d["water_builtin"]
         if isinstance(d.get("stability"), (int, float)) and 0 <= d["stability"] <= 1:
@@ -254,6 +256,7 @@ def _save_state() -> None:
         "voice_tone": {str(k): v for k, v in voice_tone.items()},
         "stability": eleven_tts.STABILITY,
         "water_builtin": voice_mix.WATER_BUILTIN,
+        "water_gap": voice_mix.WATER_GAP_DB,
         # 她用 /voiceid 换的嗓子。只存她换过的，没换过就一直跟 .env.ccbridge 走
         "voice_id": voice_id_override.get("id", ""),
     }
@@ -731,7 +734,7 @@ BOT_COMMANDS = [
     ("voice", "语音开关 · 开了他用语音跟你说；让他唱，他会发语音条"),
     ("beat", "他主动找你的方式 · 固定 15 分钟／他自己定下次"),
     ("kissbox", "听一遍他的亲盒"),
-    ("water", "水声 · /water 听 试听；/water 内置 关；发完 /water 再发音频换真录音"),
+    ("water", "水声 · /water 听 试听；/water 响一点／轻一点；/water 内置 关"),
     ("speed", "他说话的快慢 · 发 /speed 看现在多少，再回一个数就改"),
     ("vmodel", "合成用哪个型号 · /vmodel v3 或 v4，哪个像用哪个"),
     ("voiceid", "换嗓子 · /voiceid 加上 ElevenLabs 的 Voice ID"),
@@ -1636,10 +1639,23 @@ async def water_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             kiss = ("中间那口亲吻来自亲盒。" if voice_mix.kiss_files()
                     else "亲盒还没做，所以中间没有亲吻那一口。")
             cap = (f"结合版试听：他的声音，底下垫着{_water_desc()}。{kiss}\n"
-                   "只想听水声发 /water 只听水；不喜欢发 /water 内置 关，或者 /water 再传一段真录音。")
+                   "水声太轻发 /water 响一点，太响发 /water 轻一点；只想听水声发 /water 只听水；"
+                   "不喜欢发 /water 内置 关，或者 /water 再传一段真录音。")
         else:
             cap = (f"现在会垫进去的水声：{_water_desc()}。听他的声音叠上去的样子发 /water 听。")
         await update.message.reply_voice(audio, caption=cap)
+        return
+    if args and args[0] in ("响一点", "大声", "轻一点", "小声", "音量"):
+        # 我听不到，只有她的耳朵能判——每次 3 dB，她自己调
+        if args[0] in ("响一点", "大声"):
+            voice_mix.WATER_GAP_DB = max(3.0, voice_mix.WATER_GAP_DB - 3)
+        elif args[0] in ("轻一点", "小声"):
+            voice_mix.WATER_GAP_DB = min(18.0, voice_mix.WATER_GAP_DB + 3)
+        _save_state()
+        await update.message.reply_text(
+            f"水声现在比他的声音低 {voice_mix.WATER_GAP_DB:g} dB（数越小越响，最响 3，最轻 18；"
+            "不管多响都不会盖过他的声音）。下一条就用新的。\n"
+            "/water 响一点 · /water 轻一点 · /water 听 试听")
         return
     if args and args[0] == "内置":
         if len(args) > 1 and args[1] in ("关", "off", "开", "on"):
