@@ -535,6 +535,38 @@ def _parse_stream(raw: str):
     return text, sid, usage, subtype, trace_out
 
 
+def _stream_failure(raw: str) -> dict:
+    """失败时从 stream-json 里认出原因：{"why": 人看得懂的那句, "api_error_status": 状态码}。
+
+    输出是一行一个事件，开头那行 init 又长又没用，原因在最后的 result 事件
+    （result / errors 字段），或者某条 assistant 消息带的 error。整段当一个 JSON
+    去解析永远失败——以前就是这样，于是把 init 那行甩给了她。"""
+    why, status, api_err = "", 0, ""
+    for line in (raw or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "assistant" and ev.get("error"):
+            words = [str(b.get("text") or "") for b in (ev.get("message") or {}).get("content") or []
+                     if isinstance(b, dict) and b.get("type") == "text"]
+            api_err = " ".join(w for w in words if w).strip() or str(ev["error"])
+        if ev.get("type") == "result" or (ev.get("type") is None and "result" in ev):
+            status = ev.get("api_error_status") or status
+            errs = [str(e) for e in (ev.get("errors") or []) if e]
+            why = str(ev.get("result") or "").strip() or "；".join(errs) or why
+    return {"why": why or api_err, "api_error_status": status}
+
+
+def _stream_tail(raw: str, limit: int = 1500) -> str:
+    """认不出原因时，给最后几行（init 那行跳过）。"""
+    lines = [x for x in (raw or "").splitlines()
+             if x.strip() and '"subtype":"init"' not in x.replace(" ", "")]
+    return "\n".join(lines)[-limit:] or "（cc 什么都没说就退出了）"
+
+
 async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
     """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。
     被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
@@ -685,19 +717,18 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
             logger.warning("这轮失败了，摘掉长上下文后缀重试一次看是不是它的锅")
             continue
         # 429 速率限制 → 一句人话，不甩 JSON
-        try:
-            data = json.loads(raw_out)
-            status = data.get("api_error_status", 0)
-            result_text = data.get("result", "")
-            if status == 429 or "session limit" in result_text.lower() or "rate limit" in result_text.lower():
-                logger.warning("API 速率限制（429）：%s", result_text[:200])
-                return "（额度用完了，要歇一会儿，等下再来找我。）", session_id
-            if data.get("is_error") and result_text:
-                logger.error("claude API 错误 %s: %s", status, result_text[:300])
-                return f"（出了点问题：{result_text[:200]}）", session_id
-        except (json.JSONDecodeError, AttributeError):
-            pass
-        detail = (raw_err or raw_out)[:1500]
+        data = _stream_failure(raw_out)
+        status = data.get("api_error_status") or 0
+        result_text = data.get("why", "")
+        if status == 429 or "session limit" in result_text.lower() or "rate limit" in result_text.lower():
+            logger.warning("API 速率限制（429）：%s", result_text[:200])
+            return "（额度用完了，要歇一会儿，等下再来找我。）", session_id
+        if result_text:
+            logger.error("claude 退出码 %s，API 状态 %s: %s", rc, status, result_text[:300])
+            return f"⚠️ cc 出错（退出码 {rc}）：{result_text[:300]}", session_id
+        # 认不出原因：给结尾不给开头。2026-10-14 她收到一大段 init 事件（工具清单、
+        # 斜杠命令……），真正的原因在最后一行，被 [:1500] 截在了外面。
+        detail = raw_err[-1500:] if raw_err else _stream_tail(raw_out)
         logger.error("claude 退出码 %s: %s", rc, detail)
         return f"⚠️ cc 出错（退出码 {rc}）：\n{detail}", session_id
 

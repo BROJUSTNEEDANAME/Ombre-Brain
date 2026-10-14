@@ -3165,3 +3165,50 @@ def test_recall_hint_no_longer_forbids_searching_again():
     assert "不等于库里没有" in body and "只搜名字本身" in body
     assert "只搜那个词本身" in _mod().build()
 
+
+
+def test_cc_failure_shows_the_real_reason_not_the_init_line(monkeypatch):
+    """2026-10-14 她收到「⚠️ cc 出错（退出码 1）」后面跟一大段 init 事件（工具清单、
+    斜杠命令），真正的原因在流的最后一行，被截掉了。现在要把原因摆出来。"""
+    import asyncio, json
+    cc = _cc()
+    monkeypatch.setattr(cc, "long_ctx", {})
+    init = json.dumps({"type": "system", "subtype": "init", "tools": ["Task"] * 200,
+                       "slash_commands": ["deep-research"] * 100})
+
+    def proc_with(*events):
+        out = "\n".join([init, *map(json.dumps, events)]).encode()
+
+        async def fake_exec(*a, **k):
+            class _P:
+                returncode = 1
+                async def communicate(self_inner):
+                    return (out, b"")
+            return _P()
+        return fake_exec
+
+    cases = [
+        ({"type": "result", "subtype": "success", "is_error": True,
+          "result": "Prompt is too long", "session_id": "s"}, "Prompt is too long"),
+        ({"type": "result", "subtype": "error_during_execution", "is_error": True,
+          "errors": ["No conversation found with session ID: abc"]}, "No conversation found"),
+        ({"type": "assistant", "error": "authentication_failed",
+          "message": {"content": [{"type": "text", "text": "Invalid API key · Please run /login"}]}},
+         "Please run /login"),
+    ]
+    for ev, why in cases:
+        monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", proc_with(ev))
+        reply, _ = asyncio.run(cc.run_cc("在吗", None))
+        assert why in reply, reply
+        assert "slash_commands" not in reply and "deep-research" not in reply, reply
+
+    # 认不出原因：给结尾，不给 init
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec",
+                        proc_with({"type": "system", "subtype": "api_retry", "attempt": 10}))
+    reply, _ = asyncio.run(cc.run_cc("在吗", None))
+    assert "api_retry" in reply and "deep-research" not in reply, reply
+
+    # 限流照旧是一句人话
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", proc_with(
+        {"type": "result", "is_error": True, "api_error_status": 429, "result": "rate limit"}))
+    assert "额度用完了" in asyncio.run(cc.run_cc("在吗", None))[0]
