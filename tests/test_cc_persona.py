@@ -3344,3 +3344,82 @@ def test_run_cc_records_the_1m_failure_reason_for_longctx(monkeypatch):
     assert reply == "嗯"
     assert [e["kind"] for e in cc.CTX_EVENTS] == ["1m_fail"]
     assert "1M context not available" in cc.CTX_EVENTS[0]["why"]
+
+
+def _roll_env(monkeypatch, tmp_path, stores=True, new_sid="new"):
+    """真的走一遍 _respond：这一轮装了 99 万 token，看桥会不会收记忆、换新对话、告诉她。"""
+    import types
+    from datetime import datetime, timedelta, timezone
+    cc = _cc()
+    calls, sent = [], []
+    monkeypatch.setattr(cc, "ARCHIVE_DIR", str(tmp_path))
+    monkeypatch.setattr(cc, "CTX_EVENTS", [])
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    monkeypatch.setattr(cc, "_save_state", lambda: None)
+    monkeypatch.setattr(cc, "sessions", {1: "old"})
+    day = (datetime.now(timezone.utc) + timedelta(hours=cc.TZ_OFFSET)).strftime("%Y-%m-%d")
+    (tmp_path / "telegram").mkdir()
+    (tmp_path / "telegram" / f"{day}.md").write_text("[09:45] 闪闪: 好想看lpl决赛\n", encoding="utf-8")
+
+    async def fake_run_cc(message, session_id):
+        calls.append((message, session_id))
+        cc.LAST_TRACE.clear()
+        if "收进记忆" in message:
+            if stores:
+                cc.LAST_TRACE.append("记下来")
+            return "[已收]", session_id
+        if session_id is None:
+            return "好", new_sid
+        cc.LAST_TRACE_META["ctx"] = 991_796
+        return "嗯，我在。", session_id
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append(text)
+        async def send_chat_action(self, **kw):
+            pass
+
+    class _Msg:
+        async def reply_text(self, text, **kw):
+            sent.append(text)
+    return cc, types.SimpleNamespace(bot=_Bot()), types.SimpleNamespace(message=_Msg()), calls, sent
+
+
+def test_near_full_session_saves_memory_then_rolls_to_a_fresh_one(monkeypatch, tmp_path):
+    """她：「不是之前搞了个什么快到了自动保存记忆+自动开启新对话吗？」——之前没有。
+    /longctx 量出那段装了 991,796 token，自动压缩一次都没发生，下一条就爆了。"""
+    import asyncio
+    cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path)
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert sent[0] == "嗯，我在。", "她这一轮照常先收到他的话"
+    kinds = [("save" if "收进记忆" in m else "handoff" if sid is None else "chat", sid) for m, sid in calls]
+    assert kinds == [("chat", "old"), ("save", "old"), ("handoff", None)], kinds
+    assert "好想看lpl决赛" in calls[2][0], "最近的聊天原文要递进新的那段"
+    assert cc.sessions[1] == "new"
+    assert "99 万 token" in sent[-1] and "收进记忆了" in sent[-1], sent
+    assert cc.CTX_EVENTS[-1]["kind"] == "rolled"
+
+
+def test_roll_never_claims_a_save_that_did_not_happen(monkeypatch, tmp_path):
+    import asyncio
+    cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path, stores=False)
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert "❓" in sent[-1] and "收进记忆了" not in sent[-1], sent[-1]
+    assert cc.sessions[1] == "new"
+
+
+def test_roll_stays_on_the_old_session_if_the_new_one_did_not_open(monkeypatch, tmp_path):
+    import asyncio
+    cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path, new_sid=None)
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert cc.sessions[1] == "old", "新的没开成就别把旧的丢了"
+    assert not any("换成一段新的" in x for x in sent), sent
+
+
+def test_small_session_is_left_alone(monkeypatch, tmp_path):
+    import asyncio
+    cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cc, "ROLL_AT", 2_000_000)
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert len(calls) == 1 and cc.sessions[1] == "old" and sent == ["嗯，我在。"], (calls, sent)

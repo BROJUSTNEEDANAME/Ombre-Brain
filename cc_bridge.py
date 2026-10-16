@@ -586,7 +586,7 @@ def _handoff_prefix(max_lines: int = 60, max_chars: int = 6000) -> str:
         except OSError:
             continue
     recent = "\n".join(lines[-max_lines:])[-max_chars:]
-    head = ("[桥的提示，不是她说的：你们之前那段对话太长，装不下了，这是自动新开的一段。"
+    head = ("[桥的提示，不是她说的：你们之前那段对话太长了，这是自动新开的一段。"
             "接着聊，别跟她提这件事。")
     if not recent:
         return head + "最近的聊天原文没读到，需要就去 breath 或 grep ~/ombre-archive/。]\n"
@@ -866,7 +866,9 @@ def _session_stats(path: str) -> dict:
 
 
 def recent_sessions(n: int = 3) -> list[dict]:
-    files = sorted(glob.glob(os.path.join(CC_PROJECTS_DIR, "*", "*.jsonl")),
+    # /longctx 自己测的那次在临时目录里跑，也会留一个小会话文件——不算
+    files = sorted((f for f in glob.glob(os.path.join(CC_PROJECTS_DIR, "*", "*.jsonl"))
+                    if "-tmp" not in os.path.basename(os.path.dirname(f))),
                    key=os.path.getmtime, reverse=True)[:n]
     out = []
     for f in files:
@@ -928,11 +930,14 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         L.append(f"❓ 超长上下文测不出来：{p['why']}")
     if long_ctx.get("broken"):
         L.append("桥这次开机以来已经认定它坏了，现在一直用普通窗口（重启才会再试）。")
+    if ROLL_AT > 0:
+        L.append(f"一段对话装到 {ROLL_AT // 10000} 万 token 就先收记忆、再自动换新的。")
     if CTX_EVENTS:
         L.append("\n这次开机以来出过的事：")
         for e in CTX_EVENTS[-5:]:
             t = (datetime.fromtimestamp(e["at"], timezone.utc) + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
-            what = "带 [1m] 那次失败" if e["kind"] == "1m_fail" else "装不下，换了新对话"
+            what = {"1m_fail": "带 [1m] 那次失败", "too_long": "装不下，换了新对话",
+                    "rolled": "快满了，换了新对话", "roll_fail": "想换新对话没换成"}.get(e["kind"], e["kind"])
             L.append(f"· {t} {what}：{e['why'][:150]}")
     else:
         L.append("这次开机以来没出过事（部署一重启这里就清空，之前的看不到）。")
@@ -1951,6 +1956,7 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
     logger.info("答了 chat=%s %d字 用时 %.0fs 轨迹=%s",
                 cid, len(reply), _secs, _trace_snapshot or "（没调工具）")
     await _deliver(update, cid, reply)
+    await _maybe_roll(update, cid)
     # 慢回合（>45s）自动交代刚才在忙什么——她不用再干等着猜。
     if _secs > 45 and _trace_snapshot:
         try:
@@ -1961,6 +1967,56 @@ async def _respond(update: Update, context: ContextTypes.DEFAULT_TYPE,
             pass
     if _inflight_cc.get(cid) is st:
         _inflight_cc.pop(cid, None)
+
+
+# ── 快满了：先收记忆，再换一段新对话 ──
+# 由来 2026-10-16：/longctx 量出那段对话最后一轮装了 991,796 token——100 万的窗口
+# 塞满了，CLI 自己的自动压缩一次都没发生（会话文件里找不到压缩记录），下一条就是
+# 「Prompt is too long」。她：「不是之前搞了个什么快到了自动保存记忆+自动开启新对话吗？」
+# 之前没有，现在有：过了 ROLL_AT 就趁还装得下让他收一次记忆，然后换一段新的，
+# 把最近的聊天原文先递进新的那段里，再告诉她一声。
+# 也省额度：每一轮都要把整段对话重读一遍，100 万的对话每轮都是 100 万。
+ROLL_AT = int(os.environ.get("CC_ROLL_AT_TOKENS", "500000"))
+
+
+async def _maybe_roll(update: Update, cid: int) -> bool:
+    ctx = LAST_TRACE_META.get("ctx") or 0
+    old = sessions.get(cid)
+    if ROLL_AT <= 0 or ctx < ROLL_AT or not old:
+        return False
+    logger.warning("会话 %s 装了 %s token，过了 %s：收记忆、换新对话", old, ctx, ROLL_AT)
+    # ✅ 只打在「轨迹里真有 grow/hold」上——那一轮跑没跑成、存没存，不靠 _auto_save 的返回值猜
+    LAST_TRACE.clear()
+    try:
+        await _auto_save(cid)
+    except Exception:  # noqa: BLE001
+        logger.exception("换对话前收记忆失败 chat=%s", cid)
+    saved = any(lb.startswith("记下来") for lb in LAST_TRACE)
+    if saved:
+        last_save_at[cid] = time.time()
+        turns_since_save[cid] = 0
+    reply, sid = await run_cc(
+        _handoff_prefix() + "[系统提示·这条不要回复给她，她看不到这一轮]"
+        "记住上面的聊天，等她下一条消息就接着聊。现在只回一个字：好。", None)
+    if not sid:
+        logger.warning("新对话没开成（%s），先留在旧的上面", reply[:200])
+        _ctx_event("roll_fail", reply, old)
+        return False
+    sessions[cid] = sid
+    _save_sessions()
+    _save_state()
+    _ctx_event("rolled", f"装了 {ctx:,} token，换成新对话", old)
+    STATS["rolled"] = STATS.get("rolled", 0) + 1
+    note = ("换之前已经让他把这段收进记忆了" if saved else
+            "❓换之前叫他收记忆，但没看到他存东西（可能这段没什么新的要存，也可能那一轮没跑成）")
+    try:
+        await _reply_with_retry(
+            update.message,
+            f"（桥：这段对话装了 {ctx // 10000} 万 token，快满了。{note}，"
+            "从下一条起换成一段新的，最近的聊天原文已经带过去；更早的他要去记忆库里翻。）")
+    except Exception:  # noqa: BLE001
+        pass
+    return True
 
 
 def _do_backup():
