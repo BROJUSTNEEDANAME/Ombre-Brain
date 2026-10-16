@@ -132,13 +132,19 @@ ARCHIVE_DIR = os.path.expanduser(os.environ.get("OMBRE_ARCHIVE_DIR", "~/ombre-ar
 _ARCHIVE_WARNED: dict = {}
 
 
+# 最近的话也在内存里留一份：换新对话时递给他。存档写不进盘（权限之类）也不至于两手空空。
+_RECENT: list[str] = []
+
+
 def _archive(who: str, text: str) -> None:
     """把一条话原样追加进当天的存档。失败只记日志——存档绝不能拖垮聊天。"""
     text = (text or "").strip()
     if not text:
         return
+    local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    _RECENT.append(f"[{local.strftime('%H:%M')}] {who}: {text}")
+    del _RECENT[:-80]
     try:
-        local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
         d = os.path.join(ARCHIVE_DIR, "telegram")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, local.strftime("%Y-%m-%d") + ".md"), "a", encoding="utf-8") as fh:
@@ -574,6 +580,17 @@ def _stream_tail(raw: str, limit: int = 1500) -> str:
     return "\n".join(lines)[-limit:] or "（cc 什么都没说就退出了）"
 
 
+LAST_HANDOFF: dict = {"lines": 0, "src": "", "at": 0.0}
+
+
+def _handoff_note() -> str:
+    """跟她说带过去了什么——只说真带过去的，没带上就打 ❓。"""
+    n = LAST_HANDOFF.get("lines") or 0
+    if n:
+        return f"最近 {n} 行聊天原文已经带过去"
+    return "❓最近的聊天原文没读到，没带过去，他可能接不上刚才的话"
+
+
 def _handoff_prefix(max_lines: int = 60, max_chars: int = 6000) -> str:
     """换新会话时带过去的：昨天和今天存档里最近的聊天原文。读不到就只说一声换了。"""
     lines: list[str] = []
@@ -585,7 +602,10 @@ def _handoff_prefix(max_lines: int = 60, max_chars: int = 6000) -> str:
                 lines += [x.rstrip("\n") for x in fh if x.strip()]
         except OSError:
             continue
+    src = "存档" if lines else ("这次开机以来的" if _RECENT else "")
+    lines = lines or list(_RECENT)
     recent = "\n".join(lines[-max_lines:])[-max_chars:]
+    LAST_HANDOFF.update(lines=recent.count("\n") + 1 if recent else 0, src=src, at=time.time())
     head = ("[桥的提示，不是她说的：你们之前那段对话太长了，这是自动新开的一段。"
             "接着聊，别跟她提这件事。")
     if not recent:
@@ -766,7 +786,7 @@ async def run_cc(message: str, session_id: str | None,
             STATS["fresh_sessions"] = STATS.get("fresh_sessions", 0) + 1
             if sid:
                 return ("（桥：之前那段对话太长，装不下了，我自动给他换了一段新的，"
-                        "最近的聊天带过去了；更早的细节他要去记忆库里翻。）\n" + reply), sid
+                        f"{_handoff_note()}；更早的细节他要去记忆库里翻。）\n" + reply), sid
             return reply, session_id
         if result_text:
             logger.error("claude 退出码 %s，API 状态 %s: %s", rc, status, result_text[:300])
@@ -932,6 +952,9 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         L.append("桥这次开机以来已经认定它坏了，现在一直用普通窗口（重启才会再试）。")
     if ROLL_AT > 0:
         L.append(f"一段对话装到 {ROLL_AT // 10000} 万 token 就先收记忆、再自动换新的。")
+    if LAST_HANDOFF.get("at"):
+        L.append(f"上次换新对话：{_handoff_note()}"
+                 + (f"（来自{LAST_HANDOFF['src']}）" if LAST_HANDOFF.get("src") else "") + "。")
     if CTX_EVENTS:
         L.append("\n这次开机以来出过的事：")
         for e in CTX_EVENTS[-5:]:
@@ -2013,7 +2036,7 @@ async def _maybe_roll(update: Update, cid: int) -> bool:
         await _reply_with_retry(
             update.message,
             f"（桥：这段对话装了 {ctx // 10000} 万 token，快满了。{note}，"
-            "从下一条起换成一段新的，最近的聊天原文已经带过去；更早的他要去记忆库里翻。）")
+            f"从下一条起换成一段新的，{_handoff_note()}；更早的他要去记忆库里翻。）")
     except Exception:  # noqa: BLE001
         pass
     return True

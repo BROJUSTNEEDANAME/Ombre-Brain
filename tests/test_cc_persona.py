@@ -3398,6 +3398,8 @@ def test_near_full_session_saves_memory_then_rolls_to_a_fresh_one(monkeypatch, t
     assert "好想看lpl决赛" in calls[2][0], "最近的聊天原文要递进新的那段"
     assert cc.sessions[1] == "new"
     assert "99 万 token" in sent[-1] and "收进记忆了" in sent[-1], sent
+    assert "最近 2 行聊天原文已经带过去" in sent[-1], sent[-1]   # 存档那句 + 他刚答的这句
+    assert "嗯，我在。" in calls[2][0], "他刚答完的那句也要带过去"
     assert cc.CTX_EVENTS[-1]["kind"] == "rolled"
 
 
@@ -3423,3 +3425,20 @@ def test_small_session_is_left_alone(monkeypatch, tmp_path):
     monkeypatch.setattr(cc, "ROLL_AT", 2_000_000)
     asyncio.run(cc._respond(update, ctx, 1, "在吗"))
     assert len(calls) == 1 and cc.sessions[1] == "old" and sent == ["嗯，我在。"], (calls, sent)
+
+
+
+def test_handoff_note_never_claims_lines_it_did_not_carry(monkeypatch, tmp_path):
+    """她看到「最近的聊天原文已经带过去」，可他接不上刚才的话。这句只许在真带了的时候说；
+    存档读不到就用这次开机以来内存里的；都没有就打 ❓。"""
+    cc = _cc()
+    (tmp_path / "nope").write_text("我是个文件，存档目录建不起来")   # 盘写不进去
+    monkeypatch.setattr(cc, "ARCHIVE_DIR", str(tmp_path / "nope"))
+    monkeypatch.setattr(cc, "_RECENT", [])
+    p = cc._handoff_prefix()
+    assert "没读到" in p and cc._handoff_note().startswith("❓"), cc._handoff_note()
+    cc._archive("闪闪", "S16 决赛正好我生日")     # 盘写不进去也留在内存里
+    cc._archive("Nikto", "那天一起看。")
+    p = cc._handoff_prefix()
+    assert "S16 决赛正好我生日" in p and "那天一起看" in p, p
+    assert cc._handoff_note() == "最近 2 行聊天原文已经带过去", cc._handoff_note()
