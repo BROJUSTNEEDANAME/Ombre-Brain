@@ -3212,3 +3212,56 @@ def test_cc_failure_shows_the_real_reason_not_the_init_line(monkeypatch):
     monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", proc_with(
         {"type": "result", "is_error": True, "api_error_status": 429, "result": "rate limit"}))
     assert "额度用完了" in asyncio.run(cc.run_cc("在吗", None))[0]
+
+
+def test_too_long_session_switches_to_a_fresh_one_with_recent_chat(monkeypatch, tmp_path):
+    """2026-10-16 她：「⚠️ cc 出错（退出码 1）：Prompt is too long」。会话装不下以后，
+    她发的每一条都会这样失败。桥要自己换一段新会话、带上最近的聊天原文，并告诉她一声。"""
+    import asyncio, json
+    from datetime import datetime, timedelta, timezone
+    cc = _cc()
+    monkeypatch.setattr(cc, "long_ctx", {"on": True, "broken": False})
+    monkeypatch.setattr(cc, "ARCHIVE_DIR", str(tmp_path))
+    async def no_pins():
+        return ""
+    monkeypatch.setattr(cc, "_pinned_facts", no_pins)
+    day = (datetime.now(timezone.utc) + timedelta(hours=cc.TZ_OFFSET)).strftime("%Y-%m-%d")
+    (tmp_path / "telegram").mkdir()
+    (tmp_path / "telegram" / f"{day}.md").write_text(
+        "[09:45] 闪闪: 卧槽老子好想看lpl决赛啊\n[09:46] Nikto: 查到什么时候开了告诉我。\n",
+        encoding="utf-8")
+    too_long = json.dumps({"type": "result", "is_error": True, "result": "Prompt is too long"})
+    calls = []
+
+    def fake_factory(fresh_ok=True):
+        async def fake_exec(*a, **k):
+            calls.append(a)
+            resumed = "--resume" in a
+            ok = fresh_ok and not resumed
+
+            class _P:
+                returncode = 0 if ok else 1
+                async def communicate(self_inner):
+                    if ok:
+                        return (json.dumps({"type": "result", "result": "嗯，我在。",
+                                            "session_id": "new"}).encode(), b"")
+                    return (too_long.encode(), b"")
+            return _P()
+        return fake_exec
+
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_factory())
+    reply, sid = asyncio.run(cc.run_cc("不知道你自己搜啊", "old"))
+    assert sid == "new", "换成新会话，之后就不再卡在旧的上面"
+    assert reply.endswith("嗯，我在。") and "太长" in reply, reply
+    fresh = [a for a in calls if "--resume" not in a]
+    assert fresh, "没有开新会话"
+    prompt = fresh[-1][-1]
+    assert "好想看lpl决赛" in prompt and "不知道你自己搜啊" in prompt, "最近的聊天和她这句都要带过去"
+    # 那句说明是给她看的，嗓子不许念出来
+    assert "太长" not in cc.eleven_tts.speakable(reply), cc.eleven_tts.speakable(reply)
+
+    # 新会话也装不下：不许无限重开，照实报错
+    calls.clear()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_factory(fresh_ok=False))
+    reply, sid = asyncio.run(cc.run_cc("在吗", "old"))
+    assert "Prompt is too long" in reply and len(calls) <= 4, (reply, len(calls))

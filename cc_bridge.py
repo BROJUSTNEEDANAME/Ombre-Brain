@@ -567,11 +567,34 @@ def _stream_tail(raw: str, limit: int = 1500) -> str:
     return "\n".join(lines)[-limit:] or "（cc 什么都没说就退出了）"
 
 
-async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]:
+def _handoff_prefix(max_lines: int = 60, max_chars: int = 6000) -> str:
+    """换新会话时带过去的：昨天和今天存档里最近的聊天原文。读不到就只说一声换了。"""
+    lines: list[str] = []
+    local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    for day in (local - timedelta(days=1), local):
+        try:
+            with open(os.path.join(ARCHIVE_DIR, "telegram", day.strftime("%Y-%m-%d") + ".md"),
+                      encoding="utf-8") as fh:
+                lines += [x.rstrip("\n") for x in fh if x.strip()]
+        except OSError:
+            continue
+    recent = "\n".join(lines[-max_lines:])[-max_chars:]
+    head = ("[桥的提示，不是她说的：你们之前那段对话太长，装不下了，这是自动新开的一段。"
+            "接着聊，别跟她提这件事。")
+    if not recent:
+        return head + "最近的聊天原文没读到，需要就去 breath 或 grep ~/ombre-archive/。]\n"
+    return (head + "下面是你们最近说的话原文，更早的去 breath 或 grep ~/ombre-archive/：\n"
+            + recent + "\n（以上是之前的聊天）]\n")
+
+
+async def run_cc(message: str, session_id: str | None,
+                 _fresh: bool = False) -> tuple[str, str | None]:
     """跑一次 headless Claude Code，返回 (回话文本, 新的 session_id)。
     被信号掐断（重启/系统抖动，退出码 143/137）时自动悄悄重试一次，
     再不行就回一句人话——不把冰冷的退出码甩给用户、不破坏气氛。
-    真正的错误（如 token 失效）才保留可见诊断，方便排查。"""
+    真正的错误（如 token 失效）才保留可见诊断，方便排查。
+    对话长到装不下（Prompt is too long）→ 自动换一段新的，带上最近的聊天原文。"""
+    _orig_message = message
     # --- 给他一块真的表（不随回滚退掉）：人设要求带时间戳，但系统从没给过时钟，
     # 他只能靠猜（凌晨5点写成9点，回滚前的时代就一直错）。注入唯一准确时间源。 ---
     _local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
@@ -714,7 +737,8 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         if (long_ctx.get("on") and not long_ctx.get("broken")
                 and attempt == 0 and not _retry_without_1m):
             _retry_without_1m = True
-            logger.warning("这轮失败了，摘掉长上下文后缀重试一次看是不是它的锅")
+            logger.warning("这轮失败了（%s），摘掉长上下文后缀重试一次看是不是它的锅",
+                           _stream_failure(raw_out).get("why") or raw_err[-300:] or "认不出原因")
             continue
         # 429 速率限制 → 一句人话，不甩 JSON
         data = _stream_failure(raw_out)
@@ -723,6 +747,18 @@ async def run_cc(message: str, session_id: str | None) -> tuple[str, str | None]
         if status == 429 or "session limit" in result_text.lower() or "rate limit" in result_text.lower():
             logger.warning("API 速率限制（429）：%s", result_text[:200])
             return "（额度用完了，要歇一会儿，等下再来找我。）", session_id
+        if "prompt is too long" in result_text.lower() and session_id and not _fresh:
+            # 2026-10-16 她：「⚠️ cc 出错（退出码 1）：Prompt is too long」。这段会话已经
+            # 装不下了，之后她发的**每一条**都会这样失败——不能让她自己去发 /reset。
+            # 换一段新的，把最近的聊天原文带过去，再跟她说一声（括号里的嗓子不念）。
+            logger.warning("会话 %s 太长装不下了，自动换一段新的", session_id)
+            _LAST_SENT.pop(("pinned", None), None)     # 新会话里钉选要重发
+            reply, sid = await run_cc(_handoff_prefix() + _orig_message, None, _fresh=True)
+            STATS["fresh_sessions"] = STATS.get("fresh_sessions", 0) + 1
+            if sid:
+                return ("（桥：之前那段对话太长，装不下了，我自动给他换了一段新的，"
+                        "最近的聊天带过去了；更早的细节他要去记忆库里翻。）\n" + reply), sid
+            return reply, session_id
         if result_text:
             logger.error("claude 退出码 %s，API 状态 %s: %s", rc, status, result_text[:300])
             return f"⚠️ cc 出错（退出码 {rc}）：{result_text[:300]}", session_id
