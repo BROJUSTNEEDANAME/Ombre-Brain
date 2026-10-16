@@ -183,6 +183,13 @@ effort_override: dict[str, str] = {}
 # 她的原话就是「上下文太少」。窗口本身不花钱（按 token 计费照旧），
 # 所以默认开着；万一她那边不支持，跑失败会自动回退一次并记住，不再用。
 long_ctx: dict[str, bool] = {"on": True, "broken": False}
+# 长上下文出过的事（/longctx 给她看）。只在内存里，重启清空。
+CTX_EVENTS: list[dict] = []
+
+
+def _ctx_event(kind: str, why: str, sid: str | None = None) -> None:
+    CTX_EVENTS.append({"at": time.time(), "kind": kind, "why": (why or "")[:300], "sid": sid or ""})
+    del CTX_EVENTS[:-8]
 # 额度账本：只记 token 数和花费，不存任何正文。
 USAGE: dict = {"since": time.time(), "turns": 0, "input": 0, "output": 0,
                "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "limit_hits": []}
@@ -737,8 +744,9 @@ async def run_cc(message: str, session_id: str | None,
         if (long_ctx.get("on") and not long_ctx.get("broken")
                 and attempt == 0 and not _retry_without_1m):
             _retry_without_1m = True
-            logger.warning("这轮失败了（%s），摘掉长上下文后缀重试一次看是不是它的锅",
-                           _stream_failure(raw_out).get("why") or raw_err[-300:] or "认不出原因")
+            _why1m = _stream_failure(raw_out).get("why") or raw_err[-300:] or "认不出原因"
+            _ctx_event("1m_fail", _why1m, session_id)
+            logger.warning("这轮失败了（%s），摘掉长上下文后缀重试一次看是不是它的锅", _why1m)
             continue
         # 429 速率限制 → 一句人话，不甩 JSON
         data = _stream_failure(raw_out)
@@ -752,6 +760,7 @@ async def run_cc(message: str, session_id: str | None,
             # 装不下了，之后她发的**每一条**都会这样失败——不能让她自己去发 /reset。
             # 换一段新的，把最近的聊天原文带过去，再跟她说一声（括号里的嗓子不念）。
             logger.warning("会话 %s 太长装不下了，自动换一段新的", session_id)
+            _ctx_event("too_long", result_text, session_id)
             _LAST_SENT.pop(("pinned", None), None)     # 新会话里钉选要重发
             reply, sid = await run_cc(_handoff_prefix() + _orig_message, None, _fresh=True)
             STATS["fresh_sessions"] = STATS.get("fresh_sessions", 0) + 1
@@ -802,6 +811,7 @@ BOT_COMMANDS = [
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
+    ("longctx", "查他的超长上下文 · 出「Prompt is too long」时发这个"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
     ("backup", "把记忆打包备份"),
     ("help", "看所有指令"),
@@ -824,6 +834,126 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "能用的指令都在这，打一个 / 也会自动弹出来\n\n"
         + "\n".join(f"/{n} — {d}" for n, d in BOT_COMMANDS))
+
+
+# ── /longctx：超长上下文到底能不能用、那段对话撑到了多大 ──
+# 由来 2026-10-16：他报「Prompt is too long」，我只能猜是 [1m] 那次失败、退回普通窗口
+# 才爆的。她：「那你能去查吗」——我上不了 VPS，所以让桥在 VPS 上自己量，量完发给她。
+CC_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+
+
+def _session_stats(path: str) -> dict:
+    """读一个会话文件：最后一轮装了多少 token、用的模型、压缩记录有几处。"""
+    ctx, model, compacts = 0, "", 0
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if '"compact_boundary"' in line or '"isCompactSummary":true' in line.replace(" ", ""):
+                compacts += 1
+            if '"assistant"' not in line or '"usage"' not in line:
+                continue
+            try:
+                msg = (json.loads(line).get("message") or {})
+            except ValueError:
+                continue
+            u = msg.get("usage") or {}
+            total = sum(int(u.get(k) or 0) for k in
+                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            if total:
+                ctx, model = total, str(msg.get("model") or model)
+    return {"ctx": ctx, "model": model, "compacts": compacts,
+            "mb": os.path.getsize(path) / 1e6, "mtime": os.path.getmtime(path),
+            "sid": os.path.basename(path)[:-6]}
+
+
+def recent_sessions(n: int = 3) -> list[dict]:
+    files = sorted(glob.glob(os.path.join(CC_PROJECTS_DIR, "*", "*.jsonl")),
+                   key=os.path.getmtime, reverse=True)[:n]
+    out = []
+    for f in files:
+        try:
+            out.append(_session_stats(f))
+        except OSError:
+            continue
+    return out
+
+
+async def probe_long_ctx(timeout: float = 120.0) -> dict:
+    """真跑一次带 [1m] 的极小请求（空目录，不读人设、不连记忆）。返回 ok / why / window。"""
+    import tempfile
+    model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip() or "claude-opus-4-6"
+    env = os.environ.copy()
+    _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    if _tok:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = "".join(_tok.split())
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "-p", "--output-format", "json", "--model", model + "[1m]",
+                "只回一个字：好", cwd=d, env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"ok": None, "why": f"{int(timeout)} 秒没回，测不出来"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": None, "why": f"启动 claude 失败：{type(e).__name__}: {e}"}
+    raw, raw_err = out.decode(errors="replace").strip(), err.decode(errors="replace").strip()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = {}
+    window = 0
+    for mu in (data.get("modelUsage") or {}).values():
+        if isinstance(mu, dict) and mu.get("contextWindow"):
+            window = max(window, int(mu["contextWindow"]))
+    if proc.returncode == 0 and not data.get("is_error"):
+        return {"ok": True, "why": "", "window": window}
+    why = (str(data.get("result") or "").strip() or _stream_failure(raw).get("why")
+           or raw_err[-300:] or raw[-300:] or f"退出码 {proc.returncode}，什么都没说")
+    return {"ok": False, "why": why, "window": window}
+
+
+async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    await update.message.reply_text("在 VPS 上测一下，等我半分钟……")
+    p = await probe_long_ctx()
+    L = []
+    if p["ok"] is True:
+        w = f"，窗口 {p['window']:,} token" if p.get("window") else "（窗口多大它没说❓）"
+        L.append(f"✅ 超长上下文现在能用：刚才真跑了一次带 [1m] 的请求，成功了{w}。")
+    elif p["ok"] is False:
+        L.append(f"❌ 超长上下文现在用不了。刚才真跑了一次带 [1m] 的请求，它说：\n{p['why']}")
+    else:
+        L.append(f"❓ 超长上下文测不出来：{p['why']}")
+    if long_ctx.get("broken"):
+        L.append("桥这次开机以来已经认定它坏了，现在一直用普通窗口（重启才会再试）。")
+    if CTX_EVENTS:
+        L.append("\n这次开机以来出过的事：")
+        for e in CTX_EVENTS[-5:]:
+            t = (datetime.fromtimestamp(e["at"], timezone.utc) + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            what = "带 [1m] 那次失败" if e["kind"] == "1m_fail" else "装不下，换了新对话"
+            L.append(f"· {t} {what}：{e['why'][:150]}")
+    else:
+        L.append("这次开机以来没出过事（部署一重启这里就清空，之前的看不到）。")
+    try:
+        ss = await asyncio.to_thread(recent_sessions)
+    except Exception as e:  # noqa: BLE001
+        ss = []
+        L.append(f"读会话文件出错❓：{e}")
+    if ss:
+        L.append("\n最近几段对话有多大（看最后一次成功那轮）：")
+        cur = sessions.get(cid, "")
+        for x in ss:
+            t = (datetime.fromtimestamp(x["mtime"], timezone.utc) + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            tag = "（现在这段）" if x["sid"] == cur else ""
+            size = f"{x['ctx']:,} token" if x["ctx"] else "读不出 token 数❓"
+            comp = f"压缩记录 {x['compacts']} 处" if x["compacts"] else "没找到压缩记录"
+            big = "，普通窗口（18 万）装不下" if x["ctx"] > 180000 else ""
+            L.append(f"· {x['sid'][:8]}{tag} {t} 改过：{size}{big}｜{comp}｜{x['mb']:.1f} MB")
+    elif not CTX_EVENTS:
+        L.append(f"在 {CC_PROJECTS_DIR} 下没找到会话文件❓")
+    await update.message.reply_text("\n".join(L))
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2227,6 +2357,7 @@ def main() -> None:
     app.add_handler(CommandHandler("effort", effort_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
+    app.add_handler(CommandHandler("longctx", longctx_cmd))
     app.add_handler(CommandHandler("backup", backup_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))

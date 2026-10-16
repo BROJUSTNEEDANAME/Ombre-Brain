@@ -3265,3 +3265,82 @@ def test_too_long_session_switches_to_a_fresh_one_with_recent_chat(monkeypatch, 
     monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_factory(fresh_ok=False))
     reply, sid = asyncio.run(cc.run_cc("在吗", "old"))
     assert "Prompt is too long" in reply and len(calls) <= 4, (reply, len(calls))
+
+
+def test_longctx_probes_1m_on_the_vps_and_measures_the_sessions(monkeypatch, tmp_path):
+    """她：「那你能去查吗」。我上不了 VPS，/longctx 让桥自己量：带 [1m] 真跑一次、
+    最近几段对话最后撑到多大、有没有压缩过、这次开机出过什么事。"""
+    import asyncio, json
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "long_ctx", {"on": True, "broken": False})
+    monkeypatch.setattr(cc, "CTX_EVENTS", [])
+    monkeypatch.setattr(cc, "CC_PROJECTS_DIR", str(tmp_path / "projects"))
+    proj = tmp_path / "projects" / "-home-ombre-nikto-cc"
+    proj.mkdir(parents=True)
+    big = [{"type": "assistant", "message": {"model": "claude-opus-4-6", "usage": {
+        "input_tokens": 5, "cache_read_input_tokens": 240000, "cache_creation_input_tokens": 10000}}}]
+    (proj / "bfaeca49-df32.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in [{"type": "user"}, *big]) + "\n", encoding="utf-8")
+    small = [{"type": "system", "subtype": "compact_boundary"},
+             {"type": "assistant", "message": {"usage": {"input_tokens": 30000}}}]
+    (proj / "aaaa1111-new.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in small) + "\n", encoding="utf-8")
+
+    seen = {}
+    def fake(rc, payload):
+        async def fake_exec(*a, **k):
+            seen["cmd"], seen["cwd"] = a, k.get("cwd")
+            class _P:
+                returncode = rc
+                async def communicate(self_inner):
+                    return (json.dumps(payload).encode(), b"")
+            return _P()
+        return fake_exec
+
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake(0, {
+        "type": "result", "result": "好", "modelUsage": {"claude-opus-4-6": {"contextWindow": 1000000}}}))
+    u, m = _upd()
+    asyncio.run(cc.longctx_cmd(u, None))
+    out = m.texts[-1]
+    assert any(x.endswith("[1m]") for x in seen["cmd"]), seen["cmd"]
+    assert seen["cwd"] != cc.CC_WORKDIR, "测的时候不读人设、不连记忆，省额度"
+    assert "✅ 超长上下文现在能用" in out and "1,000,000" in out, out
+    assert "250,005 token，普通窗口（18 万）装不下" in out and "没找到压缩记录" in out, out
+    assert "30,000 token" in out and "压缩记录 1 处" in out, out
+
+    # 带 [1m] 失败：原话摆出来；run_cc 里记下的事也列出来
+    cc._ctx_event("1m_fail", "Extra usage is required for 1M context", "bfaeca49")
+    cc._ctx_event("too_long", "Prompt is too long", "bfaeca49")
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake(1, {
+        "type": "result", "is_error": True, "result": "Extra usage is required for 1M context"}))
+    asyncio.run(cc.longctx_cmd(u, None))
+    out = m.texts[-1]
+    assert out.startswith("❌ 超长上下文现在用不了") and "Extra usage is required" in out, out
+    assert "带 [1m] 那次失败" in out and "装不下，换了新对话" in out, out
+
+
+def test_run_cc_records_the_1m_failure_reason_for_longctx(monkeypatch):
+    import asyncio, json
+    cc = _cc()
+    monkeypatch.setattr(cc, "long_ctx", {"on": True, "broken": False})
+    monkeypatch.setattr(cc, "CTX_EVENTS", [])
+    async def no_pins():
+        return ""
+    monkeypatch.setattr(cc, "_pinned_facts", no_pins)
+
+    async def fake_exec(*a, **k):
+        is_1m = any(str(x).endswith("[1m]") for x in a)
+        class _P:
+            returncode = 1 if is_1m else 0
+            async def communicate(self_inner):
+                if is_1m:
+                    return (json.dumps({"type": "result", "is_error": True,
+                                        "result": "1M context not available"}).encode(), b"")
+                return (json.dumps({"type": "result", "result": "嗯", "session_id": "s"}).encode(), b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+    reply, _ = asyncio.run(cc.run_cc("在吗", "s"))
+    assert reply == "嗯"
+    assert [e["kind"] for e in cc.CTX_EVENTS] == ["1m_fail"]
+    assert "1M context not available" in cc.CTX_EVENTS[0]["why"]
