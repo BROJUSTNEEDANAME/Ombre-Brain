@@ -429,6 +429,12 @@ LAST_TRACE_META: dict = {"secs": 0, "at": 0.0, "thinking": None,
                          "ctx": None, "ctx_limit": None}
 
 
+# 这一轮**最后一次**调模型时的用量。result 里的 usage 是这一轮所有调用加起来的——
+# 他中间调一次工具，就是两次调用，整段对话被算两遍。10/17 换对话时报「装了
+# 610,471 token」，会话文件里那段实际是 304,513：正好两倍。装了多少要看最后一次。
+LAST_CALL_USAGE: dict = {}
+
+
 def _record_context(usage: dict) -> None:
     """这一轮他脑子里装了多少 token。
 
@@ -440,7 +446,7 @@ def _record_context(usage: dict) -> None:
     我们以前从没量过这个数——先让它可见，再谈怎么治。
     """
     try:
-        u = usage or {}
+        u = LAST_CALL_USAGE or usage or {}
         total = (int(u.get("input_tokens") or 0)
                  + int(u.get("cache_creation_input_tokens") or 0)
                  + int(u.get("cache_read_input_tokens") or 0))
@@ -505,6 +511,7 @@ def _parse_stream(raw: str):
     ⚠️ 兼容旧格式：万一某次输出的还是单个 JSON（非流式），也能读出 result。
     """
     text, sid, usage, subtype, trace = "", None, {}, "", []
+    LAST_CALL_USAGE.clear()
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -522,6 +529,10 @@ def _parse_stream(raw: str):
             except Exception:  # noqa: BLE001
                 pass
         elif t == "assistant":
+            _u = (ev.get("message") or {}).get("usage")
+            if isinstance(_u, dict) and _u:
+                LAST_CALL_USAGE.clear()
+                LAST_CALL_USAGE.update(_u)
             for blk in (ev.get("message") or {}).get("content") or []:
                 if isinstance(blk, dict) and blk.get("type") == "tool_use":
                     _lb = _tool_label(str(blk.get("name") or ""))
@@ -1318,6 +1329,10 @@ def _in_quiet_hours(now: datetime) -> bool:
     return a <= h or h < b if a > b else a <= h < b
 
 
+# 上一次叫他收记忆那一轮他回了什么（换对话时跟她说清楚，不只打一个 ❓）
+LAST_SAVE: dict = {"reply": "", "ran": False}
+
+
 async def _auto_save(cid: int) -> bool:
     """聊完一段，系统叫他把值得留下的收进记忆。返回是否真的跑了一轮。
 
@@ -1343,11 +1358,13 @@ async def _auto_save(cid: int) -> bool:
         "只有这一轮她看不见，做完回「[已收]」就行。"
     )
     before = sessions.get(cid)
+    LAST_SAVE.update(reply="", ran=False)
     try:
         reply, sid = await run_cc(prompt, before)
     except Exception:  # noqa: BLE001
         logger.exception("叫他收记忆失败 chat=%s", cid)
         return False
+    LAST_SAVE.update(reply=(reply or "").strip()[:200], ran=True)
     # ⚠️ 连聊满 N 轮就收，意味着她可能正好在这一轮跑的时候又发了话——她那轮也是从
     # before 接着跑的。要是这里无脑把会话换成收记忆那轮的，她那轮就从历史里消失了。
     # 记忆已经写进大脑（grow/hold 走的是 MCP），这一轮本身留不留在对话历史里不要紧，
@@ -2015,6 +2032,7 @@ async def _maybe_roll(update: Update, cid: int) -> bool:
     except Exception:  # noqa: BLE001
         logger.exception("换对话前收记忆失败 chat=%s", cid)
     saved = any(lb.startswith("记下来") for lb in LAST_TRACE)
+    prev_save = last_save_at.get(cid, 0)
     if saved:
         last_save_at[cid] = time.time()
         turns_since_save[cid] = 0
@@ -2030,8 +2048,16 @@ async def _maybe_roll(update: Update, cid: int) -> bool:
     _save_state()
     _ctx_event("rolled", f"装了 {ctx:,} token，换成新对话", old)
     STATS["rolled"] = STATS.get("rolled", 0) + 1
-    note = ("换之前已经让他把这段收进记忆了" if saved else
-            "❓换之前叫他收记忆，但没看到他存东西（可能这段没什么新的要存，也可能那一轮没跑成）")
+    said = LAST_SAVE.get("reply", "")
+    if saved:
+        note = "换之前已经让他把这段收进记忆了"
+    elif LAST_SAVE.get("ran") and said.startswith("["):
+        # 他跑完了、回了「[已收]」，但一样都没存——他判断没有新的要存
+        ago = f"（上一次自动收记忆是 {_age(time.time() - prev_save)}前）" if prev_save else ""
+        note = f"换之前叫他收了一次记忆，他看过说这段没有新的要存{ago}"
+    else:
+        note = ("❓换之前叫他收记忆，那一轮没跑成"
+                + (f"：{said[:80]}" if said else "") + "；这段没进记忆库的，他新对话里可能不记得")
     try:
         await _reply_with_retry(
             update.message,

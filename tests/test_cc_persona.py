@@ -3346,7 +3346,7 @@ def test_run_cc_records_the_1m_failure_reason_for_longctx(monkeypatch):
     assert "1M context not available" in cc.CTX_EVENTS[0]["why"]
 
 
-def _roll_env(monkeypatch, tmp_path, stores=True, new_sid="new"):
+def _roll_env(monkeypatch, tmp_path, stores=True, new_sid="new", save_reply="[已收]"):
     """真的走一遍 _respond：这一轮装了 99 万 token，看桥会不会收记忆、换新对话、告诉她。"""
     import types
     from datetime import datetime, timedelta, timezone
@@ -3367,7 +3367,7 @@ def _roll_env(monkeypatch, tmp_path, stores=True, new_sid="new"):
         if "收进记忆" in message:
             if stores:
                 cc.LAST_TRACE.append("记下来")
-            return "[已收]", session_id
+            return save_reply, session_id
         if session_id is None:
             return "好", new_sid
         cc.LAST_TRACE_META["ctx"] = 991_796
@@ -3404,11 +3404,41 @@ def test_near_full_session_saves_memory_then_rolls_to_a_fresh_one(monkeypatch, t
 
 
 def test_roll_never_claims_a_save_that_did_not_happen(monkeypatch, tmp_path):
+    """10/17 她看到「❓ 没看到他存东西（可能没什么新的要存，也可能那一轮没跑成）」问「这正常吗」。
+    两种情况分开说：他跑完了、回了 [已收] 却没存＝他说没有新的；那一轮出错＝❓ 带原因。"""
     import asyncio
     cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path, stores=False)
     asyncio.run(cc._respond(update, ctx, 1, "在吗"))
-    assert "❓" in sent[-1] and "收进记忆了" not in sent[-1], sent[-1]
+    assert "没有新的要存" in sent[-1] and "收进记忆了" not in sent[-1] and "❓" not in sent[-1], sent[-1]
     assert cc.sessions[1] == "new"
+
+    (tmp_path / "b").mkdir()
+    cc, ctx, update, calls, sent = _roll_env(monkeypatch, tmp_path / "b", stores=False,
+                                             save_reply="⚠️ cc 出错（退出码 1）：Prompt is too long")
+    asyncio.run(cc._respond(update, ctx, 1, "在吗"))
+    assert "❓" in sent[-1] and "Prompt is too long" in sent[-1] and "没有新的要存" not in sent[-1], sent[-1]
+
+
+def test_context_size_is_the_last_call_not_the_whole_turn_added_up():
+    """10/17 换对话时报「装了 610,471 token」，会话文件里那段实际是 304,513——
+    他那一轮调了一次工具，result 里的 usage 把两次调用加在了一起。"""
+    import json
+    cc = _cc()
+    one_call = {"cache_read_input_tokens": 300000, "input_tokens": 4513}
+    raw = "\n".join(json.dumps(x) for x in [
+        {"type": "assistant", "message": {"usage": {"cache_read_input_tokens": 300000, "input_tokens": 10},
+                                          "content": [{"type": "tool_use", "name": "WebSearch"}]}},
+        {"type": "assistant", "message": {"usage": one_call, "content": [{"type": "text", "text": "好"}]}},
+        {"type": "result", "result": "好", "session_id": "s",
+         "usage": {"cache_read_input_tokens": 600000, "input_tokens": 4523}},
+    ])
+    _, _, usage, _, _ = cc._parse_stream(raw)
+    cc._record_context(usage)
+    assert cc.LAST_TRACE_META["ctx"] == 304513, cc.LAST_TRACE_META["ctx"]
+    # 老格式（没有逐次用量）照旧用 result 里的
+    _, _, usage, _, _ = cc._parse_stream(json.dumps({"result": "hi", "usage": {"input_tokens": 1234}}))
+    cc._record_context(usage)
+    assert cc.LAST_TRACE_META["ctx"] == 1234
 
 
 def test_roll_stays_on_the_old_session_if_the_new_one_did_not_open(monkeypatch, tmp_path):
