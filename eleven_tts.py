@@ -197,3 +197,56 @@ async def _post(text: str, model: str, singing: bool, timeout: float,
         # 0 字节的语音条比没有更坏：发出去她那边是个放不出来的空条
         raise _Rejected("ElevenLabs 返回了空音频")
     return r.content
+
+
+# ── 出了问题，用人话说是哪一种 ──
+# 由来 2026-10-18 她：「现在没有 voice 了，帮我看看是 api 没有了还是连接问题」。
+# 合成失败以前只记进 VPS 日志、然后悄悄退回文字——她只看到「没声音了」，分不出是哪种。
+
+def explain(why: str) -> str:
+    """把 ElevenLabs 的报错翻成她看得懂的一句。认不出就原样给，不硬猜。"""
+    w = (why or "").lower()
+    if "没配" in w:
+        return "嗓子没配（缺 ELEVEN_API_KEY 或 ELEVEN_VOICE_ID）"
+    if "quota_exceeded" in w or "quota" in w and "exceed" in w:
+        return "ElevenLabs 这个月的额度用完了"
+    if "invalid_api_key" in w or "http 401" in w and "permission" not in w:
+        return "API key 不对，或者在 ElevenLabs 里被删了／换了"
+    if "missing_permissions" in w or "permission" in w:
+        return "这把 API key 缺权限（ElevenLabs → 开发者 → API Keys，给它勾上 Text to Speech）"
+    if "voice_not_found" in w or "http 404" in w:
+        return "Voice ID 找不到了（嗓子在 ElevenLabs 里被删了？）"
+    if "http 402" in w or "paid" in w or "subscription" in w:
+        return "这个功能要付费套餐（ElevenLabs 账号的套餐可能到期了）"
+    if "http 429" in w or "too_many" in w or "concurrent" in w:
+        return "ElevenLabs 那边请求太多，被限流了（一般过一会儿就好）"
+    if any(k in w for k in ("connecterror", "connecttimeout", "readtimeout", "timeout",
+                            "name or service", "network", "connection")):
+        return "连不上 ElevenLabs（网络问题）"
+    if "http 5" in w:
+        return "ElevenLabs 那边服务器出错了（不是你这边的问题）"
+    return (why or "原因没说").strip()[:160]
+
+
+async def check(timeout: float = 15.0) -> dict:
+    """真的去问一次 ElevenLabs：key 还认不认、这个月用了多少。不花合成字数。
+    返回 {"ok": True/False/None, "why": 人话, "used": int, "limit": int}；None＝测不出来。"""
+    if not configured():
+        return {"ok": False, "why": explain("没配")}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{BASE_URL}/v1/user/subscription", headers={"xi-api-key": API_KEY})
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "why": explain(f"{type(e).__name__}: {e}")}
+    if r.status_code == 200:
+        try:
+            d = r.json()
+            return {"ok": True, "why": "", "used": int(d.get("character_count") or 0),
+                    "limit": int(d.get("character_limit") or 0), "tier": str(d.get("tier") or "")}
+        except Exception:  # noqa: BLE001
+            return {"ok": True, "why": "", "used": 0, "limit": 0}
+    body = f"HTTP {r.status_code}: {r.text[:200]}"
+    if "missing_permissions" in body:
+        # key 是认的（不然会说 invalid），只是不让读额度——测不出用量，不算坏
+        return {"ok": None, "why": "key 能用，但它没有读额度的权限，用了多少测不出来"}
+    return {"ok": False, "why": explain(body), "raw": body}

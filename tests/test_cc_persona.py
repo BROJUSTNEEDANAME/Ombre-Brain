@@ -1757,10 +1757,12 @@ def test_voice_failure_falls_back_to_text_without_tags(monkeypatch):
         got.append(text)
     cc._reply_with_retry = fake_retry
     cc.voice_mode[7] = True
+    monkeypatch.setattr(cc, "LAST_VOICE_ERR", {})
     u, m = _upd()
     asyncio.run(cc._deliver(u, 7, "[sings] la la la‖过来。"))
     assert m.voices == []
-    assert got == ["la la la", "过来。"], got   # 标签去掉、‖ 照样分条
+    assert got[:2] == ["la la la", "过来。"], got   # 标签去掉、‖ 照样分条
+    assert "没合成出来" in got[-1] and "key 不对" in got[-1], got   # 原因说给她
     assert cc.STATS.get("voice_fail", 0) == 1
 
 
@@ -2928,6 +2930,9 @@ def test_status_says_plainly_when_ffmpeg_is_missing(monkeypatch):
     cc = _cc()
     monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
     monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def ok_check():
+        return {"ok": True, "why": "", "used": 1, "limit": 10}
+    monkeypatch.setattr(cc.eleven_tts, "check", ok_check)
     monkeypatch.setattr(cc.voice_mix, "have_ffmpeg", lambda: False)
     u, m = _upd()
     asyncio.run(cc.status_cmd(u, None))
@@ -3472,3 +3477,45 @@ def test_handoff_note_never_claims_lines_it_did_not_carry(monkeypatch, tmp_path)
     p = cc._handoff_prefix()
     assert "S16 决赛正好我生日" in p and "那天一起看" in p, p
     assert cc._handoff_note() == "最近 2 行聊天原文已经带过去", cc._handoff_note()
+
+
+
+def test_voice_failure_reason_reaches_her_once_and_status_checks_elevenlabs(monkeypatch):
+    """2026-10-18 她：「现在没有 voice 了，帮我看看是 api 没有了还是连接问题」。
+    合成失败以前只进 VPS 日志、悄悄退回文字——她分不出是哪种。现在：
+    第一次失败就在文字后面说一句原因（同一个原因不重复刷），/status 真去问一次 ElevenLabs。"""
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    monkeypatch.setattr(cc, "voice_mode", {7: True})
+    monkeypatch.setattr(cc, "LAST_VOICE_ERR", {})
+    state = {"fail": 'ElevenLabs HTTP 401: {"detail":{"status":"quota_exceeded","message":"..."}}'}
+
+    async def render(reply, singing=None):
+        if state["fail"]:
+            raise RuntimeError(state["fail"])
+        return b"OggS" + b"x" * 300
+    monkeypatch.setattr(cc.voice_mix, "render", render)
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "Come here.\n译：过来。"))
+    assert "这条语音没合成出来" in m.texts[-1] and "额度用完了" in m.texts[-1], m.texts
+    n = len(m.texts)
+    asyncio.run(cc._deliver(u, 7, "Stay."))
+    assert not any("没合成出来" in t for t in m.texts[n:]), "同一个原因不许每条都刷"
+    state["fail"] = "ConnectError: [Errno -3] Temporary failure in name resolution"
+    asyncio.run(cc._deliver(u, 7, "Still here."))
+    assert "连不上 ElevenLabs" in m.texts[-1], m.texts[-1]
+
+    async def bad_key():
+        return {"ok": False, "why": cc.eleven_tts.explain('HTTP 401: {"detail":{"status":"invalid_api_key"}}')}
+    monkeypatch.setattr(cc.eleven_tts, "check", bad_key)
+    asyncio.run(cc.status_cmd(u, None))
+    st = m.texts[-1]
+    assert "❌ ElevenLabs：API key 不对" in st, st
+    assert "上次语音没合成出来" in st and "连不上 ElevenLabs" in st, st
+
+    # 合成成功一次，旧的失败记录就清掉
+    state["fail"] = ""
+    asyncio.run(cc._deliver(u, 7, "Back."))
+    assert cc.LAST_VOICE_ERR == {}

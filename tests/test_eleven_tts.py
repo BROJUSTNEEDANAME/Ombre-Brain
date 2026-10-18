@@ -182,3 +182,52 @@ def test_pinned_to_v3_does_not_retry(wired, monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(E.synth("Come here."))
     assert len(wired.calls) == 1
+
+
+
+def test_explain_tells_key_quota_and_network_apart():
+    assert "额度用完了" in E.explain('ElevenLabs HTTP 401: {"detail":{"status":"quota_exceeded"}}')
+    assert "key 不对" in E.explain('ElevenLabs HTTP 401: {"detail":{"status":"invalid_api_key"}}')
+    assert "缺权限" in E.explain('HTTP 401: {"detail":{"status":"missing_permissions"}}')
+    assert "Voice ID 找不到" in E.explain('ElevenLabs HTTP 404: {"detail":{"status":"voice_not_found"}}')
+    assert "连不上" in E.explain("ConnectError: [Errno -3] Temporary failure in name resolution")
+    assert "连不上" in E.explain("ReadTimeout: ")
+    assert "限流" in E.explain("ElevenLabs HTTP 429: too_many_concurrent_requests")
+    assert E.explain("什么怪错") == "什么怪错", "认不出就原样给，不硬猜"
+
+
+def test_check_asks_elevenlabs_without_spending_characters(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(E, "API_KEY", "k")
+    monkeypatch.setattr(E, "VOICE_ID", "v")
+    seen = {}
+
+    def client_with(status, body, boom=None):
+        class _C:
+            def __init__(self, *a, **k):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            async def get(self, url, headers=None):
+                seen["url"] = url
+                if boom:
+                    raise boom
+                return types.SimpleNamespace(status_code=status, text=body,
+                                             json=lambda: __import__("json").loads(body))
+        return _C
+
+    import types, httpx
+    monkeypatch.setattr(E.httpx, "AsyncClient", client_with(200, '{"character_count": 1200, "character_limit": 30000}'))
+    r = asyncio.run(E.check())
+    assert r["ok"] is True and r["used"] == 1200 and r["limit"] == 30000
+    assert seen["url"].endswith("/v1/user/subscription"), "只读额度，不去合成"
+    monkeypatch.setattr(E.httpx, "AsyncClient", client_with(401, '{"detail":{"status":"invalid_api_key"}}'))
+    assert asyncio.run(E.check()) ["ok"] is False
+    monkeypatch.setattr(E.httpx, "AsyncClient", client_with(401, '{"detail":{"status":"missing_permissions"}}'))
+    r = asyncio.run(E.check())
+    assert r["ok"] is None and "测不出来" in r["why"], "key 是认的，只是不让读额度——不许判成坏了"
+    monkeypatch.setattr(E.httpx, "AsyncClient", client_with(0, "", boom=httpx.ConnectError("dns")))
+    r = asyncio.run(E.check())
+    assert r["ok"] is False and "连不上" in r["why"]

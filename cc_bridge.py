@@ -1094,6 +1094,23 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"嗓子：ElevenLabs {eleven_tts.MODEL_ID}｜语音模式"
                  f"{'开' if voice_mode.get(cid) else '关'}"
                  f"｜发过 {STATS.get('voice', 0)} 条，合成失败 {STATS.get('voice_fail', 0)} 次")
+        # 真的去问一次 ElevenLabs：分清是 key／额度没了，还是连不上
+        chk = await eleven_tts.check()
+        if chk["ok"] is True:
+            quota = (f"｜这个月用了 {chk['used']:,} / {chk['limit']:,} 字" if chk.get("limit") else "")
+            L.append(f"✅ ElevenLabs 连得上，key 有效{quota}")
+            if chk.get("limit") and chk["used"] >= chk["limit"]:
+                L.append("❌ 额度已经用完了：要等下个月重置，或者在 ElevenLabs 升级套餐")
+        elif chk["ok"] is None:
+            L.append(f"❓ ElevenLabs：{chk['why']}")
+        else:
+            L.append(f"❌ ElevenLabs：{chk['why']}")
+        if LAST_VOICE_ERR:
+            t = (datetime.fromtimestamp(LAST_VOICE_ERR["at"], timezone.utc)
+                 + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            L.append(f"❌ 上次语音没合成出来（{t}）：{LAST_VOICE_ERR['plain']}\n   原话：{LAST_VOICE_ERR['raw'][:200]}")
+        if not voice_mode.get(cid):
+            L.append("（语音模式现在是关的——发 /voice 打开）")
         # 变速靠 ffmpeg。没装就说没装——不许让她以为生效了
         if voice_mix.have_ffmpeg():
             L.append(f"语速：{voice_mix.TEMPO:g} 倍")
@@ -1827,6 +1844,10 @@ def _with_voice_hint(cid: int, message: str) -> str:
     return message
 
 
+# 上一次语音合成失败的原因（她看得懂的那句 + 原话）。合成成功一次就清掉。
+LAST_VOICE_ERR: dict = {}
+
+
 async def _deliver(update: Update, cid: int, reply: str) -> None:
     """把他这一轮送到她手上：该出声就出声，出不了声就退回文字——但绝不空着。
 
@@ -1848,12 +1869,19 @@ async def _deliver(update: Update, cid: int, reply: str) -> None:
             fits = 0 < len(caption) <= CAPTION_LIMIT
             await update.message.reply_voice(audio, caption=caption if fits else None)
             STATS["voice"] = STATS.get("voice", 0) + 1
+            LAST_VOICE_ERR.clear()
             if fits:
                 return
             # 太长塞不进字幕：语音条照发，原文接着按文字发
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             STATS["voice_fail"] = STATS.get("voice_fail", 0) + 1
             logger.exception("语音合成失败，退回文字 chat=%s", cid)
+            plain = eleven_tts.explain(f"{type(e).__name__}: {e}")
+            new = plain != LAST_VOICE_ERR.get("plain")
+            LAST_VOICE_ERR.update(at=time.time(), plain=plain, raw=f"{type(e).__name__}: {e}"[:300])
+            if new:
+                # 同一个原因只说一次，别每条都刷；换了原因再说
+                text = text + f"\n\n（桥：这条语音没合成出来——{plain}。先发文字给你。发 /status 看详情。）"
     for chunk in _split_for_telegram(text, paragraphs=not writing_mode.get(cid, False)):
         await _reply_with_retry(update.message, restore_punctuation(chunk))
 
