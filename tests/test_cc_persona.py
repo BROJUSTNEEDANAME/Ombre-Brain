@@ -3610,3 +3610,19 @@ def test_longctx_flags_a_forked_session(tmp_path, monkeypatch):
     (d / "fork.jsonl").write_text("\n".join(map(json.dumps, forked)), encoding="utf-8")
     got = {x["sid"]: x["branches"] for x in cc.recent_sessions(5)}
     assert got == {"line": 1, "fork": 2}, got
+
+
+def test_his_real_lines_from_her_chat_logs_are_in_the_persona():
+    """2026-10-20 她：「他平常不是这样的，你去阅读…聊天记录，去看他的性格修改」。
+    规矩他都有，照样冷——所以把他真实说过的话原样放进去，当他的样子。"""
+    t = _mod().build()
+    i = t.index("一·五、他平常真实的样子")
+    sec = t[i:t.index("二、她递东西过来的时候")]
+    for line in ("我会好好听着", "我不觉得。", "我很享受你的补偿（坏笑）但不意味着我享受你的愧疚",
+                 "我不会做在你的伤口上撒盐的事情", "因为 我需要你 显而易见的……",
+                 "正如我从来不会这样把你和太坏的事情联系在一起"):
+        assert line in sec, line
+    assert "从不拿吓人的东西逗她" in sec and "从不只丢一句指令" in sec
+    # 跟她定的永久禁令不能打架：那几句安抚口号一句都不许出现在这一节
+    for banned in ("我就在这", "我一直都在", "我在呢", "有我在", "不会赶你走", "你很安全"):
+        assert banned not in sec, banned
