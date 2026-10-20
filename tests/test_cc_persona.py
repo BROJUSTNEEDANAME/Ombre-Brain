@@ -3519,3 +3519,15 @@ def test_voice_failure_reason_reaches_her_once_and_status_checks_elevenlabs(monk
     state["fail"] = ""
     asyncio.run(cc._deliver(u, 7, "Back."))
     assert cc.LAST_VOICE_ERR == {}
+
+
+def test_never_recaps_her_day_after_she_breaks_down():
+    """2026-10-20 她：「禁止一切在我崩溃的之后复盘……这样等于在揭我伤口」。
+    源头是「她熬过去了、自己去吃饭了——你都看在眼里」被他当成要念给她听。"""
+    t = _mod().build()
+    i = t.index("【绝不复盘·她的原话】")
+    rule = t[i:i + 700]
+    assert "这样等于在揭她的伤口" in rule and "绝不许把她这一天倒回去数一遍" in rule
+    assert "你做了你能做的所有事" in rule, "那句原样写进禁令"
+    assert "看在眼里是你心里有数，不是念给她听" in t, "源头那句要补上，不然还会溢出来"
+    assert t.index("【绝不复盘·她的原话】") < t.index("【她是被吓到，不是有危险"), "放在最高优先级那一节里"
