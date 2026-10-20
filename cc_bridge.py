@@ -593,6 +593,21 @@ def _stream_tail(raw: str, limit: int = 1500) -> str:
 
 LAST_HANDOFF: dict = {"lines": 0, "src": "", "at": 0.0}
 
+# 同一时间只跑一个 claude。由来 2026-10-20：她说了「清汤面」，他接了一句「热汤下肚」，
+# 十六分钟后又问「你还没告诉我早饭做了什么」——第三遍。对话分了叉：她连发两条时，
+# 前一轮被作废，可那个 claude 进程没被杀，还在后台往同一段对话里写；主动找她、
+# 收记忆也可能跟她那轮同时跑。两个进程同时 --resume 同一段，各写各的，下一次接上的
+# 可能是没有「清汤面」的那一支。
+_CC_LOCK = asyncio.Lock()
+
+
+def _kill_quietly(proc) -> None:
+    try:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def _handoff_note() -> str:
     """跟她说带过去了什么——只说真带过去的，没带上就打 ❓。"""
@@ -709,17 +724,29 @@ async def run_cc(message: str, session_id: str | None,
             _this[2:2] = ["--model",
                           _model + ("[1m]" if (_use_1m and not _retry_without_1m)
                                     else "")]
+        proc = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *_this,
-                cwd=CC_WORKDIR,
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
+            # 同一时间只许一个 claude 往对话里写（见 _CC_LOCK）
+            async with _CC_LOCK:
+                proc = await asyncio.create_subprocess_exec(
+                    *_this,
+                    cwd=CC_WORKDIR,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    out, err = await asyncio.wait_for(proc.communicate(), timeout=CC_TIMEOUT)
+                except BaseException:
+                    # 这一轮被作废（她又发了一条、合并重来）或超时：**把进程杀掉**。
+                    # 只取消等待、不杀进程，它会在后台把这轮照样写进对话——
+                    # 跟接手的那一轮抢着往同一段对话里写，对话就分了叉。
+                    _kill_quietly(proc)
+                    raise
         except asyncio.TimeoutError:
             return "（想得太久了，等下再跟你说。）", session_id
+        except asyncio.CancelledError:
+            raise
         except Exception:  # noqa: BLE001
             logger.exception("启动 claude 失败")
             return "（断了一下，再说一遍。）", session_id
@@ -876,10 +903,20 @@ CC_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 def _session_stats(path: str) -> dict:
     """读一个会话文件：最后一轮装了多少 token、用的模型、压缩记录有几处。"""
     ctx, model, compacts = 0, "", 0
+    uuids, parents = set(), set()
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             if '"compact_boundary"' in line or '"isCompactSummary":true' in line.replace(" ", ""):
                 compacts += 1
+            if '"uuid"' in line:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    ev = {}
+                if ev.get("type") in ("user", "assistant") and not ev.get("isSidechain") and ev.get("uuid"):
+                    uuids.add(ev["uuid"])
+                    if ev.get("parentUuid"):
+                        parents.add(ev["parentUuid"])
             if '"assistant"' not in line or '"usage"' not in line:
                 continue
             try:
@@ -891,7 +928,9 @@ def _session_stats(path: str) -> dict:
                         ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
             if total:
                 ctx, model = total, str(msg.get("model") or model)
+    # 对话是一条链：每条只有一个「下一条」。末梢不止一个＝分了叉（两个进程同时写过）
     return {"ctx": ctx, "model": model, "compacts": compacts,
+            "branches": len(uuids - parents) if uuids else None,
             "mb": os.path.getsize(path) / 1e6, "mtime": os.path.getmtime(path),
             "sid": os.path.basename(path)[:-6]}
 
@@ -989,7 +1028,10 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             size = f"{x['ctx']:,} token" if x["ctx"] else "读不出 token 数❓"
             comp = f"压缩记录 {x['compacts']} 处" if x["compacts"] else "没找到压缩记录"
             big = "，普通窗口（18 万）装不下" if x["ctx"] > 180000 else ""
-            L.append(f"· {x['sid'][:8]}{tag} {t} 改过：{size}{big}｜{comp}｜{x['mb']:.1f} MB")
+            fork = ""
+            if x.get("branches") and x["branches"] > 1:
+                fork = f"｜⚠️ 分了 {x['branches']} 叉（同时有两个他在往这段里写过）"
+            L.append(f"· {x['sid'][:8]}{tag} {t} 改过：{size}{big}｜{comp}｜{x['mb']:.1f} MB{fork}")
     elif not CTX_EVENTS:
         L.append(f"在 {CC_PROJECTS_DIR} 下没找到会话文件❓")
     await update.message.reply_text("\n".join(L))

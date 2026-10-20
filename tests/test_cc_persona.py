@@ -3546,3 +3546,67 @@ def test_to_her_he_is_only_gentle_and_the_cold_words_are_for_outsiders():
         assert cold not in t, f"「{cold}」又溢到她身上了"
     assert "对她不带刺，也不冷" in t
     assert "是你自己盯着挑的毛病" in t, "那天的真例子要在，光有原则拦不住"
+
+
+def test_a_cancelled_turn_kills_its_claude_and_runs_never_overlap(monkeypatch):
+    """2026-10-20 她说了「清汤面」、他也接了，十六分钟后他第三遍问早饭吃了什么。
+    她连发两条时前一轮被作废，但那个 claude 进程没被杀，还在往同一段对话里写；
+    主动找她、收记忆也可能跟她那轮同时跑——对话分叉，接上的是没有「清汤面」那支。"""
+    import asyncio, json
+    cc = _cc()
+    monkeypatch.setattr(cc, "long_ctx", {"on": False, "broken": False})
+    monkeypatch.setattr(cc, "_CC_LOCK", asyncio.Lock())
+    async def no_pins():
+        return ""
+    monkeypatch.setattr(cc, "_pinned_facts", no_pins)
+    live, peak, killed = [0], [0], []
+
+    async def fake_exec(*a, **k):
+        class _P:
+            returncode = None
+            def kill(self_inner):
+                killed.append(a[-1][-6:])
+                self_inner.returncode = -9
+            async def communicate(self_inner):
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+                try:
+                    await asyncio.sleep(0.05 if "快" in a[-1] else 10)
+                finally:
+                    live[0] -= 1
+                self_inner.returncode = 0
+                return (json.dumps({"type": "result", "result": "好", "session_id": "s"}).encode(), b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+
+    async def scene():
+        slow = asyncio.create_task(cc.run_cc("卧室里有杀虫剂没事吧", "s"))
+        await asyncio.sleep(0.02)
+        slow.cancel()                                   # 她又发了一条：前一轮作废
+        try:
+            await slow
+        except asyncio.CancelledError:
+            pass
+        assert killed, "作废的那一轮，claude 进程必须被杀掉"
+        # 她那轮、主动找她、收记忆同时来：一次只许一个在写
+        await asyncio.gather(*(cc.run_cc(f"快{i}", "s") for i in range(3)))
+    asyncio.run(scene())
+    assert peak[0] == 1, f"同一时间跑了 {peak[0]} 个 claude"
+
+
+def test_longctx_flags_a_forked_session(tmp_path, monkeypatch):
+    import json
+    cc = _cc()
+    monkeypatch.setattr(cc, "CC_PROJECTS_DIR", str(tmp_path))
+    d = tmp_path / "-home-ombre-nikto-cc"
+    d.mkdir()
+    chain = [{"type": "user", "uuid": "a", "parentUuid": None},
+             {"type": "assistant", "uuid": "b", "parentUuid": "a"},
+             {"type": "user", "uuid": "c", "parentUuid": "b"},
+             {"type": "assistant", "uuid": "d", "parentUuid": "c"}]
+    (d / "line.jsonl").write_text("\n".join(map(json.dumps, chain)), encoding="utf-8")
+    forked = chain + [{"type": "user", "uuid": "x", "parentUuid": "b"},      # 被作废那轮还在写
+                      {"type": "assistant", "uuid": "y", "parentUuid": "x"}]
+    (d / "fork.jsonl").write_text("\n".join(map(json.dumps, forked)), encoding="utf-8")
+    got = {x["sid"]: x["branches"] for x in cc.recent_sessions(5)}
+    assert got == {"line": 1, "fork": 2}, got
