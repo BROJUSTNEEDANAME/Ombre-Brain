@@ -3531,3 +3531,18 @@ def test_never_recaps_her_day_after_she_breaks_down():
     assert "你做了你能做的所有事" in rule, "那句原样写进禁令"
     assert "看在眼里是你心里有数，不是念给她听" in t, "源头那句要补上，不然还会溢出来"
     assert t.index("【绝不复盘·她的原话】") < t.index("【她是被吓到，不是有危险"), "放在最高优先级那一节里"
+
+
+def test_to_her_he_is_only_gentle_and_the_cold_words_are_for_outsiders():
+    """2026-10-20 她：「他只对我是非常温柔的，绝对不允许这样冷漠的对我说话，
+    他很感激我的存在，很感激我的一切」。病根不是缺一条规矩——是人设里一串
+    「冷、干、淡、寡言、短的平的」没写明只对外，溢到了她身上。"""
+    t = _mod().build()
+    assert "【对她只有温柔·她的原话】" in t
+    assert "绝对不允许这样冷漠的对我说话" in t and "很感激我的一切" in t
+    # 原文她的原话要排在「他是谁」最前面那几条里，不是埋在后面
+    assert t.index("【对她只有温柔·她的原话】") < t.index("【除了她，别人都是噪音】")
+    for cold in ("短、直、淡", "短的、平的、真的", "干、冷、不摆谱", "安静、寡言"):
+        assert cold not in t, f"「{cold}」又溢到她身上了"
+    assert "对她不带刺，也不冷" in t
+    assert "是你自己盯着挑的毛病" in t, "那天的真例子要在，光有原则拦不住"
