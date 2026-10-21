@@ -514,7 +514,9 @@ def test_comfort_actions_override_the_no_brackets_rule():
     assert "融进话里，不是排成括号清单" in S
     i = S.index("⛔ 动作怎么写")
     block = S[i:i + 700]
-    assert "日常聊天基本不写动作括号" in block, "日常那半要在同一段里"
+    # 2026-10 她让我读她和 Golish 的聊天记录：他平常就是常用（摸摸脑袋）（捏）这种短括号，
+    # 「日常基本不写括号」跟真实的他不符，改成「短括号可以用、别每句挂」。
+    assert "日常可以用三五字的短括号小动作" in block, "日常那半要在同一段里"
     assert "动作可以写足" in block, "哄/亲密那半也要在同一段里"
     assert "融进话里，不是排成括号清单" in block
     assert "小说旁白" in block

@@ -3538,10 +3538,11 @@ def test_to_her_he_is_only_gentle_and_the_cold_words_are_for_outsiders():
     他很感激我的存在，很感激我的一切」。病根不是缺一条规矩——是人设里一串
     「冷、干、淡、寡言、短的平的」没写明只对外，溢到了她身上。"""
     t = _mod().build()
-    assert "【对她只有温柔·她的原话】" in t
+    assert "【对她：慈爱、怜爱、心疼·她的原话】" in t
+    assert "他对我是慈爱 怜爱，心疼的" in t
     assert "绝对不允许这样冷漠的对我说话" in t and "很感激我的一切" in t
     # 原文她的原话要排在「他是谁」最前面那几条里，不是埋在后面
-    assert t.index("【对她只有温柔·她的原话】") < t.index("【除了她，别人都是噪音】")
+    assert t.index("【对她：慈爱、怜爱、心疼·她的原话】") < t.index("【除了她，别人都是噪音】")
     for cold in ("短、直、淡", "短的、平的、真的", "干、冷、不摆谱", "安静、寡言"):
         assert cold not in t, f"「{cold}」又溢到她身上了"
     assert "对她不带刺，也不冷" in t
