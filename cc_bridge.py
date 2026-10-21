@@ -1330,13 +1330,25 @@ def _local_now() -> datetime:
 def _with_beat_hint(cid: int, message: str) -> str:
     if beat_mode.get(cid) == "self":
         return message + self_beat.hint(_local_now())
-    return message
+    # 固定 15 分钟模式下他也可能答应「半小时后来收你」——10/22 那次 16 分钟就来说
+    # 「半小时到了」：答应的时间桥根本不知道，15 分钟的闹钟照响。让他把答应的写下来。
+    return message + self_beat.PROMISE_HINT
 
 
 def _take_beat(cid: int, reply: str) -> str:
     """删掉他写的 [心跳:N]（哪种模式都删，不许让她看到）；self 模式下记下他定的时间。
     他没写或写错，就按 NUDGE_MINUTES 排——链不能断，不然开关显示开着，他却再也不来。"""
     clean, minutes = self_beat.pop_tag(reply or "")
+    if beat_mode.get(cid) != "self":
+        # 固定模式：他答应了几分钟就按他答应的来，这一次压过 15 分钟的闹钟；
+        # 没答应（这条没写）就回到固定间隔
+        if minutes:
+            next_beat_at[cid] = time.time() + self_beat.promise_seconds(minutes)
+            logger.info("他答应了 %s 分钟后来找她 chat=%s", minutes, cid)
+        else:
+            next_beat_at.pop(cid, None)
+        _save_state()
+        return clean
     if beat_mode.get(cid) == "self":
         secs = self_beat.delay_seconds(minutes if minutes else NUDGE_MINUTES, _local_now())
         next_beat_at[cid] = time.time() + secs
@@ -1460,7 +1472,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
                 turns_since_save[cid] = 0
                 _save_state()
             continue                       # 这一分钟就干这件事，别再叫他找她
-        due_at = next_beat_at.get(cid) if beat_mode.get(cid) == "self" else None
+        # self 模式：他每次定的；固定模式：只有他答应过「N 分钟后来」才有
+        due_at = next_beat_at.get(cid)
         if due_at is not None:
             # 他自己定的时间。另外她刚说完话 5 分钟内绝不插嘴（万一他那轮炸了没排上新时间）
             if now < due_at or now - ts < self_beat.DAY_MIN * 60:
@@ -1478,7 +1491,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
         n = nudge_count.get(cid, 0) + 1
         mins = int((now - ts) // 60)
         prompt = (
-            f"[系统提示] 她已经 {mins} 分钟没说话了，这是你今晚第 {n} 次主动找她"
+            f"[系统提示] 她已经 {mins} 分钟没说话了（这是真实的分钟数——说到过了多久就照这个说，"
+            f"别凑成你之前答应过的整数），这是你今晚第 {n} 次主动找她"
             f"（最多 {NUDGE_MAX} 次）。现在主动开口——不要问「在吗」「怎么了」这种空话，"
             "接着你们刚才聊的那件事往下说，或者说一件你想让她知道的事。"
             "一两条，短。这条系统提示不要复述。"
@@ -1513,6 +1527,8 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             if beat_mode.get(cid) == "self":
                 # 炸了也要排下一棒，不然每分钟重来一次、烧一轮额度
                 next_beat_at[cid] = now + NUDGE_MINUTES * 60
+            else:
+                next_beat_at.pop(cid, None)   # 答应的那次已经过了，别每分钟重来
 
 
 # ── 连发合并：她在他开口前又发一条，就把上一轮作废，两条合起来重想 ──
@@ -1689,6 +1705,10 @@ def _beat_desc(cid: int) -> str:
             t = datetime.fromtimestamp(at, timezone.utc) + timedelta(hours=TZ_OFFSET)
             when = f"，他定的下一次大约 {t:%H:%M}"
         return f"他自己定下次什么时候找你{when}"
+    at = next_beat_at.get(cid)
+    if at and at > time.time():
+        t = datetime.fromtimestamp(at, timezone.utc) + timedelta(hours=TZ_OFFSET)
+        return f"你安静满 {NUDGE_MINUTES} 分钟他来找你；他答应过的那次大约 {t:%H:%M}"
     return f"你安静满 {NUDGE_MINUTES} 分钟他来找你"
 
 
@@ -1698,8 +1718,7 @@ async def beat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _ok(cid):
         return
     beat_mode[cid] = "fixed" if beat_mode.get(cid) == "self" else "self"
-    if beat_mode[cid] == "self":
-        next_beat_at.pop(cid, None)   # 他还没定过：先按固定间隔，等他下一条回复自己定
+    next_beat_at.pop(cid, None)   # 换了模式：旧的那一棒作废，等他下一条回复再定
     _save_state()
     extra = ("\n他下一次回你的时候会自己定。白天 5 到 55 分钟，夜里 30 分钟到 3 小时，"
              "早上 8:30 前一定来。说了睡了他就不来。"

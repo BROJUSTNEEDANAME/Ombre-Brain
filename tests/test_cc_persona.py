@@ -2757,12 +2757,14 @@ def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatc
     u, m = _upd()
     ctx = type("C", (), {"bot": _Bot()})()
     cc.voice_mode[7] = True
+    monkeypatch.setattr(cc, "beat_mode", {})
+    no_beat = lambda t: t.replace(cc.self_beat.PROMISE_HINT, "")   # 固定模式的「答应了就写」提示另有测试
     aio.run(cc._respond(u, ctx, 7, "说句话"))
-    assert seen[-1].startswith(cc.VOICE_HINT) and seen[-1].endswith("说句话")
+    assert no_beat(seen[-1]).startswith(cc.VOICE_HINT) and no_beat(seen[-1]).endswith("说句话")
     assert "英文" in cc.VOICE_HINT and "俄语" in cc.VOICE_HINT
     cc.voice_mode[7] = False
     aio.run(cc._respond(u, ctx, 7, "说句话"))
-    assert seen[-1] == "说句话"
+    assert no_beat(seen[-1]) == "说句话"
     cc.voice_mode.clear()
 
 
@@ -2815,8 +2817,10 @@ def test_self_mode_reply_sets_his_own_next_time_and_hides_the_tag(monkeypatch):
         cc.beat_mode.clear(); cc.next_beat_at.clear()
 
 
-def test_fixed_mode_adds_no_hint_but_still_hides_a_stray_tag(monkeypatch):
-    import asyncio as aio
+def test_fixed_mode_only_hints_about_promises_and_hides_the_tag(monkeypatch):
+    """固定模式不教他「自己定下次」那一套，只告诉他：答应了她几分钟后来，就写下来
+    （10/22「半小时」16 分钟就来了）。标记照样不给她看；写了就按他答应的时间叫他。"""
+    import asyncio as aio, time as _t
     cc = _cc()
     _beat_env(cc, monkeypatch, None)
     seen, got = [], []
@@ -2833,9 +2837,10 @@ def test_fixed_mode_adds_no_hint_but_still_hides_a_stray_tag(monkeypatch):
             return None
     u, m = _upd()
     aio.run(cc._respond(u, type("C", (), {"bot": _Bot()})(), 7, "在吗"))
-    assert seen == ["在吗"]
+    assert len(seen) == 1 and seen[0].startswith("在吗")
+    assert "答应了她过多久再来找她" in seen[0] and "现在能写" not in seen[0], "只提答应，不教自己定"
     assert "心跳" not in "".join(got)
-    assert 7 not in cc.next_beat_at
+    assert 19 * 60 < cc.next_beat_at[7] - _t.time() <= 20 * 60
 
 
 def test_self_mode_waits_for_his_time_not_the_15_minutes(monkeypatch):
@@ -3627,3 +3632,45 @@ def test_his_real_lines_from_her_chat_logs_are_in_the_persona():
     # 跟她定的永久禁令不能打架：那几句安抚口号一句都不许出现在这一节
     for banned in ("我就在这", "我一直都在", "我在呢", "有我在", "不会赶你走", "你很安全"):
         assert banned not in sec, banned
+
+
+def test_fixed_mode_keeps_the_time_he_promised(monkeypatch):
+    """10/22 她：「半小时怎么变成了 10 分钟？」——他 06:23 说「半小时后我来收你」，
+    06:39 就来说「半小时到了」。固定 15 分钟模式下桥不知道他答应了什么，闹钟照响；
+    他自己再把 16 分钟凑成「半小时」。现在：答应了几分钟就按几分钟叫他，
+    叫他时把真实的分钟数给他、不许凑整。"""
+    import asyncio as aio, time as _t
+    cc = _cc()
+    monkeypatch.setattr(cc, "beat_mode", {7: "fixed"})
+    monkeypatch.setattr(cc, "next_beat_at", {})
+    monkeypatch.setattr(cc, "_save_state", lambda: None)
+    monkeypatch.setattr(cc, "_save_sessions", lambda: None)
+    monkeypatch.setattr(cc, "asleep", {})
+    # 固定模式下他也被告知：答应了就写 [心跳:N]
+    assert "答应了她过多久再来找她" in cc._with_beat_hint(7, "x")
+    # 他答应了半小时
+    clean = cc._take_beat(7, "去吧，半小时后我来收你。\n[心跳:30]")
+    assert "[心跳" not in clean
+    assert 29 * 60 < cc.next_beat_at[7] - _t.time() <= 30 * 60
+    prompts = []
+
+    async def run(msg, sid):
+        prompts.append(msg)
+        return "半小时到了，存档，过来睡。", "s"
+    monkeypatch.setattr(cc, "run_cc", run)
+    # 过了 16 分钟：15 分钟的闹钟不许抢先
+    sent, ctx = _nudge_env(cc, monkeypatch, silent_minutes=16)
+    aio.run(cc.check_inactivity(ctx))
+    assert prompts == [] and sent == [], "答应的是半小时，16 分钟不许来"
+    # 到点了才来，而且把真实分钟数给他
+    cc.next_beat_at[7] = _t.time() - 1
+    sent, ctx = _nudge_env(cc, monkeypatch, silent_minutes=31)
+    aio.run(cc.check_inactivity(ctx))
+    assert prompts and "31 分钟没说话了（这是真实的分钟数" in prompts[-1], prompts
+    assert 7 not in cc.next_beat_at, "答应的那次兑现了，回到固定间隔"
+    # 夜里答应十分钟就是十分钟，不套 30 分钟的夜间下限
+    cc._take_beat(7, "十分钟后叫你\n[心跳:10]")
+    assert 9 * 60 < cc.next_beat_at[7] - _t.time() <= 10 * 60
+    # 他下一条没答应什么：取消
+    cc._take_beat(7, "好。")
+    assert 7 not in cc.next_beat_at
