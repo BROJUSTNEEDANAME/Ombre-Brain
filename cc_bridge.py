@@ -169,11 +169,13 @@ _WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
 # /model 能选的。cc 走的是 Claude Code CLI，不是 z.ai，所以这份跟 API bot 那份无关。
 # ⚠️ 不在这儿校验模型是否可用——CLI 自己会报错，cc 会把错误原样回给她，
 #    她再 /model 默认 退回来就行。硬校验要多跑一次 CLI，不值。
-CC_MODEL_DEFAULT = os.environ.get("CC_MODEL", "claude-opus-4-6").strip() or "claude-opus-4-6"
+# 2026-10-22 她：「我想给 opus4.6 换成 5.5」——默认改成 Opus 5.5；想退回发 /model opus46。
+CC_MODEL_DEFAULT = os.environ.get("CC_MODEL", "claude-opus-5-5").strip() or "claude-opus-5-5"
 CC_MODEL_CHOICES = [
     ("默认", CC_MODEL_DEFAULT, "退回环境变量里配的那个"),
-    ("opus5", "claude-opus-5", "Opus 5，最新最聪明"),
-    ("opus46", "claude-opus-4-6", "Opus 4.6，一直在用的这个"),
+    ("opus55", "claude-opus-5-5", "Opus 5.5，最新"),
+    ("opus5", "claude-opus-5", "Opus 5"),
+    ("opus46", "claude-opus-4-6", "Opus 4.6，之前一直在用的这个"),
     ("sonnet5", "claude-sonnet-5", "Sonnet 5，快一些"),
     ("haiku", "claude-haiku-4-5-20251001", "Haiku 4.5，最快最省"),
 ]
@@ -701,7 +703,7 @@ async def run_cc(message: str, session_id: str | None,
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose",
            "--dangerously-skip-permissions"]
     # 模型：默认 Opus 4.6，想换在环境变量 CC_MODEL 里改（如 sonnet 更快、opus 跟随订阅默认）
-    _model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip()
+    _model = cc_model()
     _use_1m = bool(_model) and long_ctx.get("on") and not long_ctx.get("broken")
     _effort = cc_effort()
     if _effort:
@@ -867,6 +869,7 @@ BOT_COMMANDS = [
     ("tone", "定他语音的情绪 · /tone 慵懒 低沉；/tone 关 交给他自己"),
     ("vstab", "嗓子放得开还是稳 · /vstab 自由／自然／稳"),
     ("memo", "他多久收一次记忆 · /memo 看现在；/memo 10 每聊 10 轮收一次"),
+    ("model", "他用哪个模型 · /model 看现在；/model opus55 换成 Opus 5.5"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
     ("longctx", "查他的超长上下文 · 出「Prompt is too long」时发这个"),
@@ -952,7 +955,7 @@ def recent_sessions(n: int = 3) -> list[dict]:
 async def probe_long_ctx(timeout: float = 120.0) -> dict:
     """真跑一次带 [1m] 的极小请求（空目录，不读人设、不连记忆）。返回 ok / why / window。"""
     import tempfile
-    model = os.environ.get("CC_MODEL", "claude-opus-4-6").strip() or "claude-opus-4-6"
+    model = cc_model()
     env = os.environ.copy()
     _tok = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if _tok:
@@ -1037,6 +1040,34 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("\n".join(L))
 
 
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/model：看现在用哪个模型；/model opus55 换；/model 默认 退回环境变量那个。
+    ⚠️ 不在这儿校验能不能用——不能用的话他下一条会报出 CLI 的原话，再 /model 换回来就行。"""
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    args = [a.strip() for a in (getattr(context, "args", None) or []) if a.strip()]
+    menu = "\n".join(f"· /model {k} —— {desc}（{mid}）" for k, mid, desc in CC_MODEL_CHOICES)
+    if not args:
+        await update.message.reply_text(f"现在用的是：{cc_model()}\n换的话发：\n{menu}")
+        return
+    pick = {k.lower(): mid for k, mid, _ in CC_MODEL_CHOICES}
+    mid = pick.get(args[0].lower()) or (args[0] if args[0].startswith("claude-") else "")
+    if not mid:
+        await update.message.reply_text(f"没有「{args[0]}」这个选项。能选的：\n{menu}")
+        return
+    if args[0] == "默认":
+        model_override.pop("model", None)
+    else:
+        model_override["model"] = mid
+    long_ctx["broken"] = False      # 换了模型，长上下文重新试一次
+    _save_state()
+    await update.message.reply_text(
+        f"好，下一条起用 {cc_model()}。\n"
+        "这只说明换上了——能不能用、他像不像，要你发一条看他回不回、怎么回。"
+        "要是报错，发 /model opus46 换回来。")
+
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/status：他现在什么情况——一眼看完，不用 ssh 上去翻日志。
 
@@ -1049,8 +1080,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cid = update.effective_chat.id
     if not _ok(cid):
         return
-    L = [f"跑了 {_age(time.time() - STARTED_AT)}｜模型 "
-         f"{os.environ.get('CC_MODEL', 'claude-opus-4-6')}"]
+    L = [f"跑了 {_age(time.time() - STARTED_AT)}｜模型 {cc_model()}"
+         + ("（你用 /model 选的）" if model_override.get("model") else "")]
     # 缓存档位：锁死设的是多少 / 上一轮实际命中的是哪档。
     _t = LAST_CACHE_TIER["tier"]
     if _t == "1h":
@@ -2549,6 +2580,7 @@ def main() -> None:
     app.add_handler(CommandHandler("tone", tone_cmd))
     app.add_handler(CommandHandler("vstab", vstab_cmd))
     app.add_handler(CommandHandler("effort", effort_cmd))
+    app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("memo", memo_cmd))
     app.add_handler(CommandHandler("trace", trace_cmd))
     app.add_handler(CommandHandler("longctx", longctx_cmd))

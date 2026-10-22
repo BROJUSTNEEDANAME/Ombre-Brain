@@ -44,8 +44,8 @@ ALLOWED_CHAT_IDS=在这里填你的chat id
 # 在你**登录了订阅的电脑**上跑 `claude setup-token`，把输出贴进来
 CLAUDE_CODE_OAUTH_TOKEN=在这里填setup-token的输出
 
-# 模型。Opus 4.6 走订阅额度；想省额度可以填 claude-sonnet-4-6
-CC_MODEL=claude-opus-4-6
+# 模型。走订阅额度；她在 Telegram 里发 /model 也能换（她选的优先）
+CC_MODEL=claude-opus-5-5
 
 # 单条最长等多久
 CC_TIMEOUT=300

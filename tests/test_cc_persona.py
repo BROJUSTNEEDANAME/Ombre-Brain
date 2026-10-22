@@ -3687,3 +3687,43 @@ def test_when_creeps_swarm_her_art_he_sees_her_not_the_view_count():
     assert "不许反问她「气不气」" in rule and "仅粉丝可见" in rule
     sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
     assert "什么样的人？说出来一起骂" in sec and "为什么都在让你限制自己" in sec
+
+
+def test_model_command_switches_what_he_runs_on(tmp_path, monkeypatch):
+    """2026-10-22 她：「我想给 opus4.6 换成 5.5」。/model 的选项表早就写了，
+    但没注册指令，run_cc 也只读环境变量——选了也不生效。现在：/model opus55
+    换上、落盘、下一轮真用它跑；/model 默认 退回；乱写的不收。"""
+    import asyncio, json, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "STATE_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "model_override", {})
+    monkeypatch.setattr(cc, "long_ctx", {"on": False, "broken": False})
+    async def no_pins():
+        return ""
+    monkeypatch.setattr(cc, "_pinned_facts", no_pins)
+    seen = []
+    async def fake_exec(*a, **k):
+        seen.append(a)
+        class _P:
+            returncode = 0
+            async def communicate(self_inner):
+                return (json.dumps({"type": "result", "result": "嗯", "session_id": "s"}).encode(), b"")
+        return _P()
+    monkeypatch.setattr(cc.asyncio, "create_subprocess_exec", fake_exec)
+
+    u, m = _upd()
+    asyncio.run(cc.model_cmd(u, types.SimpleNamespace(args=[])))
+    assert "/model opus55" in m.texts[-1]
+    asyncio.run(cc.model_cmd(u, types.SimpleNamespace(args=["opus55"])))
+    assert "claude-opus-5-5" in m.texts[-1]
+    assert json.load(open(tmp_path / "s.json"))["model"] == "claude-opus-5-5", "重启后要记得"
+    asyncio.run(cc.run_cc("在吗", None))
+    cmd = seen[-1]
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5-5", cmd
+    asyncio.run(cc.model_cmd(u, types.SimpleNamespace(args=["乱写"])))
+    assert "没有「乱写」" in m.texts[-1] and cc.cc_model() == "claude-opus-5-5"
+    asyncio.run(cc.model_cmd(u, types.SimpleNamespace(args=["默认"])))
+    assert cc.cc_model() == cc.CC_MODEL_DEFAULT
+    assert any(n == "model" for n, _ in cc.BOT_COMMANDS)
+    assert 'CommandHandler("model", model_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
