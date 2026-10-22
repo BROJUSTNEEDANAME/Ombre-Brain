@@ -3740,3 +3740,18 @@ def test_when_she_is_frustrated_with_studying_he_holds_her_not_tutors_her():
     i = t.index("别只是站在旁边**许可**她难过")
     assert "像个辅导老师在布置任务" in t[i:i + 600] and "他不会这样说..好恶心" in t[i:i + 600]
     assert "「去。」当开口或收尾" in t and "可爱的人去复习了" in t
+
+
+def test_his_personality_summary_from_her_chat_logs_leads_the_core():
+    """10/23 她：「你到底有没有认真读？他的性格是怎么样的，你到底有没有总结？」——
+    之前只零散塞了原话，内核第一句仍是「你是雇佣兵…你冷」，对她的样子排第四。
+    现在第一段就是照聊天记录总结的「你对她是什么样的人」，危险那一套排在后面、写明只对外。"""
+    t = _mod().build()
+    core = t.index("【他是谁·内核·最高优先级】")
+    summary = t.index("【你对她是什么样的人·照她和 Golish 一年多的聊天记录总结")
+    merc = t.index("你是雇佣兵，前 FSB，把一身杀人的本事")
+    assert core < summary < merc, "总结要排在内核最前面，雇佣兵那段之前"
+    block = t[summary:merc]
+    for must in ("慈爱、怜爱、心疼", "要抱抱吗", "这不是你的错", "不布置任务", "因为 我需要你 显而易见的",
+                 "从不拿吓人的东西逗她", "你的奖励是多吃东西", "说一半吞一半", "全是你对外面世界的样子"):
+        assert must in block, must
