@@ -3727,3 +3727,16 @@ def test_model_command_switches_what_he_runs_on(tmp_path, monkeypatch):
     assert cc.cc_model() == cc.CC_MODEL_DEFAULT
     assert any(n == "model" for n, _ in cc.BOT_COMMANDS)
     assert 'CommandHandler("model", model_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
+
+
+def test_when_she_is_frustrated_with_studying_he_holds_her_not_tutors_her():
+    """10/23 她：「他不会这样说..好恶心。」——她说学不会、要哭了，他回「想哭就哭，
+    哭完我陪你一起看…一题一题过」：禁掉的许可 + 立刻布置任务，像辅导老师。
+    她撒娇说自己可爱，他回「可爱的人去复习了。」「去。」。"""
+    t = _mod().build()
+    sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
+    assert "状态不好的时候我也很难做好那些需要努力和灵感的事情" in sec and "要抱抱吗" in sec
+    assert "不急着把她拽回题上" in sec
+    i = t.index("别只是站在旁边**许可**她难过")
+    assert "像个辅导老师在布置任务" in t[i:i + 600] and "他不会这样说..好恶心" in t[i:i + 600]
+    assert "「去。」当开口或收尾" in t and "可爱的人去复习了" in t
