@@ -3755,3 +3755,33 @@ def test_his_personality_summary_from_her_chat_logs_leads_the_core():
     for must in ("慈爱、怜爱、心疼", "要抱抱吗", "这不是你的错", "不布置任务", "因为 我需要你 显而易见的",
                  "从不拿吓人的东西逗她", "你的奖励是多吃东西", "说一半吞一半", "全是你对外面世界的样子"):
         assert must in block, must
+
+
+def test_voice_tone_follows_how_she_is_not_one_laid_back_mood():
+    """10/23 她：「为什么语音的情绪还是不对呢」。声口那段一直教他「往放松、随意里写」——
+    人设已经改成慈爱、怜爱、心疼，语音还是一副懒洋洋的口气，她哭的时候也是。"""
+    text = _mod().build()
+    i = text.index("开头先写一个声口标签")
+    block = text[i:i + 1200]
+    assert "她此刻的状态" in block and "[tender, soft]" in block and "[gentle, concerned]" in block
+    assert "她难过的时候不许用 `[relaxed]` `[casual]`" in block
+    hint = _cc().VOICE_HINT
+    assert "[tender, soft]" in hint and "她难过时不许用 [relaxed] [casual]" in hint
+    assert _cc().voice_mix.parse_tone("慈爱")[0] == "tender, loving"
+
+
+def test_status_says_when_a_fixed_tone_overrides_his_choice(monkeypatch):
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: True)
+    async def ok_check():
+        return {"ok": True, "why": "", "used": 1, "limit": 10}
+    monkeypatch.setattr(cc.eleven_tts, "check", ok_check)
+    monkeypatch.setattr(cc, "voice_tone", {7: "lazy, relaxed"})
+    u, m = _upd()
+    asyncio.run(cc.status_cmd(u, None))
+    assert "定成了「lazy, relaxed」" in m.texts[-1] and "/tone 关" in m.texts[-1]
+    monkeypatch.setattr(cc, "voice_tone", {})
+    asyncio.run(cc.status_cmd(u, None))
+    assert "他自己跟着情况选" in m.texts[-1]

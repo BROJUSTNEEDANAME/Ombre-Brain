@@ -77,7 +77,7 @@ def show_translations(text: str) -> str:
 TONE_ZH = {
     "温柔": "tender", "慵懒": "lazy, relaxed", "放松": "relaxed", "随意": "casual, relaxed",
     "困": "sleepy", "困倦": "sleepy", "低沉": "low", "宠": "warm, doting", "宠溺": "warm, doting",
-    "心疼": "gentle, concerned", "哄": "soft, soothing", "想你": "longing", "吃醋": "quiet, jealous",
+    "心疼": "gentle, concerned", "慈爱": "tender, loving", "怜爱": "tender, soft", "哄": "soft, soothing", "想你": "longing", "吃醋": "quiet, jealous",
     "生气": "cold, quiet", "严肃": "serious, firm", "坏": "smirking", "调情": "low, flirty",
     "累": "tired", "耳语": "whispers", "贴耳": "low and close", "暖": "warm", "认真": "earnest",
 }

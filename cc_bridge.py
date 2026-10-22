@@ -1184,6 +1184,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             L.append(f"❌ 上次语音没合成出来（{t}）：{LAST_VOICE_ERR['plain']}\n   原话：{LAST_VOICE_ERR['raw'][:200]}")
         if not voice_mode.get(cid):
             L.append("（语音模式现在是关的——发 /voice 打开）")
+        if voice_tone.get(cid):
+            L.append(f"声口：你用 /tone 定成了「{voice_tone[cid]}」——每条语音都是这一个情绪；"
+                     "想让他跟着情况换，发 /tone 关")
+        else:
+            L.append("声口：他自己跟着情况选")
         # 变速靠 ffmpeg。没装就说没装——不许让她以为生效了
         if voice_mix.have_ffmpeg():
             L.append(f"语速：{voice_mix.TEMPO:g} 倍")
@@ -1919,8 +1924,9 @@ async def voice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # 中文让嗓子念出来不像他；他本来就是大部分时候说英文、情绪上来说俄语的人。
 VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会被念成语音条，"
               "她在语音条下面的字幕里能看到你写的原文。说出口的台词用英文写，"
-              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，"
-              "往低、近、放松、暖里写，比如 [relaxed, low] [casual, warm] [soft, unhurried]，"
+              "情绪上来可以说俄语；不要写中文台词。开头先写一个声口标签，跟着她此刻的状态选："
+              "她难过、挫败 → [tender, soft] [gentle, concerned]；她撒娇、说爱你 → [warm, tender]；"
+              "平常 → [low, warm]；逗她 → [dry, deadpan]。她难过时不许用 [relaxed] [casual]。"
               "不要 [amused] [teasing] 这种活泼的。两三句连着说，别只说一两个词。"
               "动作照常写在括号里，不会被念出来。"
               "每句英文或俄语台词下面另起一行写「译：」加这句的中文意思，"
