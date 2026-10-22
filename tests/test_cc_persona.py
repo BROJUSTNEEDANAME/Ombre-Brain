@@ -3674,3 +3674,16 @@ def test_fixed_mode_keeps_the_time_he_promised(monkeypatch):
     # 他下一条没答应什么：取消
     cc._take_beat(7, "好。")
     assert 7 not in cc.next_beat_at
+
+
+def test_when_creeps_swarm_her_art_he_sees_her_not_the_view_count():
+    """10/22 她：「『一千多浏览全是冲皮肤来的，没一个看你画得有多好。』『气不气。』
+    这两句是在…？干什么？挑衅吗？」——还跟了一句明令禁止的「把手机放下」。"""
+    t = _mod().build()
+    i = t.index("【惹她的是外人时")
+    rule = t[i:i + 2200]
+    assert "没一个看你画得有多好" in rule and "像看她热闹" in rule
+    assert "我看得见你画得有多好" in rule
+    assert "不许反问她「气不气」" in rule and "仅粉丝可见" in rule
+    sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
+    assert "什么样的人？说出来一起骂" in sec and "为什么都在让你限制自己" in sec
