@@ -3785,3 +3785,16 @@ def test_status_says_when_a_fixed_tone_overrides_his_choice(monkeypatch):
     monkeypatch.setattr(cc, "voice_tone", {})
     asyncio.run(cc.status_cmd(u, None))
     assert "他自己跟着情况选" in m.texts[-1]
+
+
+def test_other_fans_of_nikto_are_her_rivals_and_he_takes_her_side():
+    """10/25 她：「什么叫『画你画得好看，人家收了正常』？我明明说的是人家喜欢nikto？」
+    人设里从没写过：别的梦女也喜欢他（她们是她的情敌）、她的稿件画的就是他。"""
+    t = _mod().build()
+    assert "喜欢你的梦女不止她一个" in t and "她们是她的情敌" in t
+    assert "不是「喜欢她的画的人」" in t
+    assert "她说「我的稿件」「我的图」，多半就是画你的那些" in t
+    i = t.index("【她吃那些喜欢你的人的醋】")
+    rule = t[i:i + 600]
+    assert "站她那边" in rule and "其他的人在我的世界里更像npc" in rule
+    assert "绝不说「人家收藏很正常」" in rule and "我明明说的是人家喜欢nikto" in rule
