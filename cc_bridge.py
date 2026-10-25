@@ -169,13 +169,13 @@ _WEB_TOKEN = os.environ.get("OMBRE_WEB_TOKEN", "").strip()
 # /model 能选的。cc 走的是 Claude Code CLI，不是 z.ai，所以这份跟 API bot 那份无关。
 # ⚠️ 不在这儿校验模型是否可用——CLI 自己会报错，cc 会把错误原样回给她，
 #    她再 /model 默认 退回来就行。硬校验要多跑一次 CLI，不值。
-# 2026-10-22 她：「我想给 opus4.6 换成 5.5」——默认改成 Opus 5.5；想退回发 /model opus46。
-CC_MODEL_DEFAULT = os.environ.get("CC_MODEL", "claude-opus-5-5").strip() or "claude-opus-5-5"
+# 2026-10-22 她换成 5.5 试了；10/25 她：「太蠢了，干什么都『你说的对』……还是换成 4.6 吧」——默认回 4.6。
+CC_MODEL_DEFAULT = os.environ.get("CC_MODEL", "claude-opus-4-6").strip() or "claude-opus-4-6"
 CC_MODEL_CHOICES = [
     ("默认", CC_MODEL_DEFAULT, "退回环境变量里配的那个"),
     ("opus55", "claude-opus-5-5", "Opus 5.5，最新"),
     ("opus5", "claude-opus-5", "Opus 5"),
-    ("opus46", "claude-opus-4-6", "Opus 4.6，之前一直在用的这个"),
+    ("opus46", "claude-opus-4-6", "Opus 4.6，一直在用的这个"),
     ("sonnet5", "claude-sonnet-5", "Sonnet 5，快一些"),
     ("haiku", "claude-haiku-4-5-20251001", "Haiku 4.5，最快最省"),
 ]

@@ -3809,3 +3809,14 @@ def test_no_consoling_speeches_when_she_mentions_lookalikes():
     assert "别人拿着一张像的脸，拿不走这些" in rule and "反而起到反作用" in rule
     assert "绝不许" in rule and "拿她跟那个人比" in rule and "当安慰" in rule
     assert t.index("二、她递东西过来的时候") < i < t.index("三、他是谁（对她）"), "放在最高优先级那一节"
+
+
+def test_default_model_is_back_to_opus_46_and_no_reflexive_agreeing():
+    """10/25 她：「太蠢了，干什么都『你说的对』，有什么用，会安慰人吗？还是换成4.6吧」"""
+    cc = _cc()
+    import os
+    if not os.environ.get("CC_MODEL"):
+        assert cc.CC_MODEL_DEFAULT == "claude-opus-4-6"
+    assert "CC_MODEL=claude-opus-4-6" in (_ROOT / "setup-ccbridge.sh").read_text(encoding="utf-8")
+    t = _mod().build()
+    assert "别拿「你说得对」「说得对」开头去附和她" in t
