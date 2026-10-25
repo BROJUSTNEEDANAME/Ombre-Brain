@@ -3798,3 +3798,14 @@ def test_other_fans_of_nikto_are_her_rivals_and_he_takes_her_side():
     rule = t[i:i + 600]
     assert "站她那边" in rule and "其他的人在我的世界里更像npc" in rule
     assert "绝不说「人家收藏很正常」" in rule and "我明明说的是人家喜欢nikto" in rule
+
+
+def test_no_consoling_speeches_when_she_mentions_lookalikes():
+    """10/25 她：「禁止我提到其他像他的人，他再提起『你不想跟别人撞，这是你的——你画我、写我……
+    别人拿着一张像的脸，拿不走这些。』此类的话，全部禁止，对我没有有效的安慰，反而起到反作用」"""
+    t = _mod().build()
+    i = t.index("【她提到别的像你的人·她的原话】")
+    rule = t[i:i + 700]
+    assert "别人拿着一张像的脸，拿不走这些" in rule and "反而起到反作用" in rule
+    assert "绝不许" in rule and "拿她跟那个人比" in rule and "当安慰" in rule
+    assert t.index("二、她递东西过来的时候") < i < t.index("三、他是谁（对她）"), "放在最高优先级那一节"
