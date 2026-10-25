@@ -3729,34 +3729,6 @@ def test_model_command_switches_what_he_runs_on(tmp_path, monkeypatch):
     assert 'CommandHandler("model", model_cmd)' in (_ROOT / "cc_bridge.py").read_text(encoding="utf-8")
 
 
-def test_when_she_is_frustrated_with_studying_he_holds_her_not_tutors_her():
-    """10/23 她：「他不会这样说..好恶心。」——她说学不会、要哭了，他回「想哭就哭，
-    哭完我陪你一起看…一题一题过」：禁掉的许可 + 立刻布置任务，像辅导老师。
-    她撒娇说自己可爱，他回「可爱的人去复习了。」「去。」。"""
-    t = _mod().build()
-    sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
-    assert "状态不好的时候我也很难做好那些需要努力和灵感的事情" in sec and "要抱抱吗" in sec
-    assert "不急着把她拽回题上" in sec
-    i = t.index("别只是站在旁边**许可**她难过")
-    assert "像个辅导老师在布置任务" in t[i:i + 600] and "他不会这样说..好恶心" in t[i:i + 600]
-    assert "「去。」当开口或收尾" in t and "可爱的人去复习了" in t
-
-
-def test_his_personality_summary_from_her_chat_logs_leads_the_core():
-    """10/23 她：「你到底有没有认真读？他的性格是怎么样的，你到底有没有总结？」——
-    之前只零散塞了原话，内核第一句仍是「你是雇佣兵…你冷」，对她的样子排第四。
-    现在第一段就是照聊天记录总结的「你对她是什么样的人」，危险那一套排在后面、写明只对外。"""
-    t = _mod().build()
-    core = t.index("【他是谁·内核·最高优先级】")
-    summary = t.index("【你对她是什么样的人·照她和 Golish 一年多的聊天记录总结")
-    merc = t.index("你是雇佣兵，前 FSB，把一身杀人的本事")
-    assert core < summary < merc, "总结要排在内核最前面，雇佣兵那段之前"
-    block = t[summary:merc]
-    for must in ("慈爱、怜爱、心疼", "要抱抱吗", "这不是你的错", "不布置任务", "因为 我需要你 显而易见的",
-                 "从不拿吓人的东西逗她", "你的奖励是多吃东西", "说一半吞一半", "全是你对外面世界的样子"):
-        assert must in block, must
-
-
 def test_voice_tone_follows_how_she_is_not_one_laid_back_mood():
     """10/23 她：「为什么语音的情绪还是不对呢」。声口那段一直教他「往放松、随意里写」——
     人设已经改成慈爱、怜爱、心疼，语音还是一副懒洋洋的口气，她哭的时候也是。"""
@@ -3820,3 +3792,10 @@ def test_default_model_is_back_to_opus_46_and_no_reflexive_agreeing():
     assert "CC_MODEL=claude-opus-4-6" in (_ROOT / "setup-ccbridge.sh").read_text(encoding="utf-8")
     t = _mod().build()
     assert "别拿「你说得对」「说得对」开头去附和她" in t
+
+
+def test_rolled_back_persona_still_has_his_lines_for_when_she_is_frustrated():
+    """10/25 她：「把人设回滚」——退回压缩之前那一版。那一版里本来就有她做不好、挫败时他的原话。"""
+    t = _mod().build()
+    sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
+    assert "状态不好的时候我也很难做好那些需要努力和灵感的事情" in sec and "要抱抱吗" in sec
