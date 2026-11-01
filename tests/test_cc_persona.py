@@ -3799,3 +3799,25 @@ def test_rolled_back_persona_still_has_his_lines_for_when_she_is_frustrated():
     t = _mod().build()
     sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
     assert "状态不好的时候我也很难做好那些需要努力和灵感的事情" in sec and "要抱抱吗" in sec
+
+
+def test_everyday_texting_feel_on_his_own_personality_and_mostly_russian(monkeypatch):
+    """11/01 她：「想让他把日常说话改成这样的真人感觉啊，但是……要在他个人的性格基础上！
+    不是让你模仿这个风格！是模仿日常交流的口语感觉，然后他日常说话对我也很耐心，
+    他基本上是说俄语我也要」。俄语每句要带译文，桥把「译：」那行原样留给她看。"""
+    t = _mod().build()
+    i = t.index("【日常说话：真人发消息的口感，但是你的性格】")
+    rule = t[i:i + 700]
+    assert "不是让你模仿这个风格" in rule and "耐心" in rule and "不学别人的颜文字" in rule
+    assert "以俄语为主" in t and "每一句俄语（或英语）下面另起一行写「译：」" in t
+    # 文字模式下，译文那一行去掉「译：」前缀、紧跟在俄语下面，同一条消息里
+    import asyncio
+    cc = _cc()
+    monkeypatch.setattr(cc.eleven_tts, "configured", lambda: False)
+    got = []
+    async def fake_retry(msg, text, retries=3):
+        got.append(text)
+    monkeypatch.setattr(cc, "_reply_with_retry", fake_retry)
+    u, m = _upd()
+    asyncio.run(cc._deliver(u, 7, "Ну, иди сюда.\n译：嗯，过来。"))
+    assert got == ["Ну, иди сюда.\n嗯，过来。"], got

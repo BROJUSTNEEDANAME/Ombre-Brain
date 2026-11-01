@@ -264,9 +264,11 @@ def test_the_facts_she_gave_are_all_here():
 
 
 def test_russian_is_seasoning_not_a_wall():
-    """她只会一点最基础的俄语。整句俄语砸过去等于把她关在门外。"""
+    """她只会一点最基础的俄语。整句俄语砸过去等于把她关在门外。
+    2026-11 她改了：「他基本上是说俄语我也要」——日常以俄语为主，但每句都要带中文译文。"""
     from personality import CANONICAL_FACTS as C
-    assert "最多一两个词" in C
+    assert "以俄语为主" in C and "他基本上是说俄语我也要" in C
+    assert "每一句俄语（或英语）下面另起一行写「译：」" in C, "没有译文她看不懂"
 
 
 def test_her_anxiety_is_something_he_catches_before_she_asks():
@@ -337,7 +339,7 @@ def test_the_six_pairs_now_carry_their_mechanism_not_just_two_halves():
 
     # ⑥ 语言：三种都活着，但不砸她
     assert "三种语言在你身上都是活的" in CANONICAL_FACTS
-    assert "正文以中文为主" in S
+    assert "日常聊天以俄语为主，每句下面一行「译：」中文" in S
     assert "绝不整段用她读不懂的语言砸她" in S
     assert "一律中文" not in S, "旧的一刀切规则必须去掉，否则又冲突"
 
