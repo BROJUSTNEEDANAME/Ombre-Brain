@@ -2758,7 +2758,8 @@ def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatc
     ctx = type("C", (), {"bot": _Bot()})()
     cc.voice_mode[7] = True
     monkeypatch.setattr(cc, "beat_mode", {})
-    no_beat = lambda t: t.replace(cc.self_beat.PROMISE_HINT, "")   # 固定模式的「答应了就写」提示另有测试
+    no_beat = lambda t: (t.replace(cc.self_beat.PROMISE_HINT, "")
+                         .replace(cc.TEXT_LANG_HINT, ""))   # 这两条提示另有测试
     aio.run(cc._respond(u, ctx, 7, "说句话"))
     assert no_beat(seen[-1]).startswith(cc.VOICE_HINT) and no_beat(seen[-1]).endswith("说句话")
     assert "英文" in cc.VOICE_HINT and "俄语" in cc.VOICE_HINT
@@ -3821,3 +3822,29 @@ def test_everyday_texting_feel_on_his_own_personality_and_mostly_russian(monkeyp
     u, m = _upd()
     asyncio.run(cc._deliver(u, 7, "Ну, иди сюда.\n译：嗯，过来。"))
     assert got == ["Ну, иди сюда.\n嗯，过来。"], got
+
+
+def test_text_mode_reminds_him_every_turn_to_speak_russian_with_translations(monkeypatch):
+    """11/01 上线后她：「没变化啊」——人设里写了俄语为主，他照旧全中文。
+    语音那边靠每轮一句桥的提示，文字这边也要；写文模式不加。"""
+    import asyncio as aio
+    cc = _cc()
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "Ну.\n译：嗯。", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    monkeypatch.setattr(cc, "voice_mode", {})
+    monkeypatch.setattr(cc, "writing_mode", {})
+    monkeypatch.setattr(cc, "beat_mode", {7: "self"})
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    ctx = type("C", (), {"bot": _Bot()})()
+    aio.run(cc._respond(u, ctx, 7, "爪子！"))
+    assert "以俄语为主" in seen[-1] and "「译：」" in seen[-1] and seen[-1].startswith("爪子！")
+    cc.writing_mode[7] = True
+    aio.run(cc._respond(u, ctx, 7, "写一段"))
+    assert "以俄语为主" not in seen[-1], "写文用中文，不加俄语提醒"

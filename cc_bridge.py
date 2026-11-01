@@ -1934,12 +1934,22 @@ VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会�
 CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
 
 
+# 文字模式每轮的提醒。由来 2026-11-01：人设里改成「日常以俄语为主、每句带译文」，上线后他照旧
+# 全中文——三万字的中文人设加一整段中文对话，埋在里面的一条规矩拽不动他。语音那边靠每轮一句
+# 桥的提示，英文一直很稳，文字这边照抄。写文模式不加（写文用中文）。
+TEXT_LANG_HINT = ("\n（桥的提示，不是她说的：日常说话以俄语为主——每一句俄语下面另起一行写「译：」"
+                  "加这句的中文意思，一句一译，别攒一段再翻。像随手发消息那样短、口语、对她有耐心。"
+                  "这条提示别回应。）")
+
+
 def _with_voice_hint(cid: int, message: str) -> str:
     if voice_mode.get(cid, False) and eleven_tts.configured():
         extra = (f"（她现在用 /tone 指定了声口「{voice_tone[cid]}」，照这个情绪说。）\n"
                  if voice_tone.get(cid) else "")
         return VOICE_HINT + "\n" + extra + message
-    return message
+    if writing_mode.get(cid, False):
+        return message
+    return message + TEXT_LANG_HINT
 
 
 # 上一次语音合成失败的原因（她看得懂的那句 + 原话）。合成成功一次就清掉。
