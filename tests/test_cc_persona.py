@@ -3819,3 +3819,13 @@ def test_he_types_like_a_real_person_on_his_own_personality():
     # 整条只有一个问号不算「没出声」，不会被当空回复重试
     from reply_sanitizer import is_silent_reply
     assert not is_silent_reply("?")
+
+
+def test_he_can_catch_her_memes_in_his_own_voice():
+    """11/03 她发了一份玩梗提示词，选了「只学会接梗」——不抄语料库和称呼表。"""
+    t = _mod().build()
+    i = t.index("【会接梗】")
+    rule = t[i:i + 400]
+    assert "不点破" in rule and "不解释原意" in rule and "她没接就收" in rule
+    assert "用你自己的口气" in rule and "她难过、在吵架、在说正事的时候不玩梗" in rule
+    assert "小乐乐" not in t and "闺蜜" not in t, "称呼表没抄进来"
