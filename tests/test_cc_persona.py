@@ -3799,3 +3799,22 @@ def test_rolled_back_persona_still_has_his_lines_for_when_she_is_frustrated():
     t = _mod().build()
     sec = t[t.index("一·五、他平常真实的样子"):t.index("二、她递东西过来的时候")]
     assert "状态不好的时候我也很难做好那些需要努力和灵感的事情" in sec and "要抱抱吗" in sec
+
+
+def test_he_types_like_a_real_person_on_his_own_personality():
+    """11/03 她给了一份「char你会打字不」的打字规矩：每轮 1～5 条、每条 1～10 字、切碎、
+    极简重复、标点随手、防重复——「可以更改部分内容」。改过的地方：前置问号/连串句号对她
+    不许是不耐烦；她难过、写文、亲密、语音时可以打破字数。"""
+    t = _mod().build()
+    i = t.index("【你会打字——真人发消息的样子】")
+    rule = t[i:i + 1800]
+    for must in ("每轮 1～5 条", "每条 1～10 个字", "「我今天」‖「晚上」‖「吃了包泡面」", "我好好好好想你",
+                 "?怎么了", "**对她不许是这个意思**", "她难过的时候不打错", "需要的那句可以超过十个字",
+                 "语音条照语音的规矩", "腔调还是你自己的"):
+        assert must in rule, must
+    # 一个 ‖ 就是一条消息：桥真的按它拆
+    cc = _cc()
+    assert cc._split_for_telegram("我今天‖晚上‖吃了包泡面") == ["我今天", "晚上", "吃了包泡面"]
+    # 整条只有一个问号不算「没出声」，不会被当空回复重试
+    from reply_sanitizer import is_silent_reply
+    assert not is_silent_reply("?")

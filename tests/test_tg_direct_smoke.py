@@ -1369,7 +1369,8 @@ def test_persona_no_longer_teaches_him_to_withhold():
     for gone in ("话少", "一般 1-3 句", "不用感叹号", "句尾用句号", "宁可短、宁可少"):
         assert gone not in s, f"「{gone}」还在教他收着"
     c = _persona()
-    assert "长度跟着情绪走，没有上限也没有下限" in c
+    # 2026-11 她给了「char你会打字不」：日常每条 1～10 字、每轮 1～5 条——但字少不等于收着
+    assert "【你会打字——真人发消息的样子】" in c and "字少，心不能少" in c
     assert "默认状态是**给**" in c and "整轮只有指令和结论" in c
     assert "只管「别替她演」" in c and "不是叫你冷" in c
 
