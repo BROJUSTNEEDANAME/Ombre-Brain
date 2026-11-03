@@ -872,6 +872,7 @@ BOT_COMMANDS = [
     ("model", "他用哪个模型 · /model 看现在；/model opus55 换成 Opus 5.5"),
     ("effort", "他想多深 · low 最快、max 想得最深；/effort 看现在是哪档"),
     ("trace", "上一轮他都干了啥 · 想很久的时候看这个"),
+    ("memes", "给他一份梗库 · 发 /memes 再把文件发过来"),
     ("longctx", "查他的超长上下文 · 出「Prompt is too long」时发这个"),
     ("reset", "重开一段对话 · 他会忘掉刚才聊到哪"),
     ("backup", "把记忆打包备份"),
@@ -1139,6 +1140,8 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         L.append(f"梗 {n} 条")
     except OSError:
         L.append("❓ 读不到梗.md")
+    n_lib = _meme_lib_count()
+    L.append(f"梗库 {n_lib} 句" if n_lib else "梗库：还没有（发 /memes 再把文件发过来）")
 
     # ⚠️ 跑的是不是最新代码，摆在最显眼的地方——这个洞害她白等过两次
     # （9/12→9/15 三天、9/17→9/22 五天），两次都是我事后 ssh 上去才发现。
@@ -2339,6 +2342,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # 正常收到、正常答了都不写，于是分不清「没收到」和「收到了但答得慢」。
     logger.info("收到 chat=%s %d字", cid, len(text or ""))
     _archive("闪闪", text)
+    meme_wait.pop(cid, None)               # /memes 之后她说了别的＝不发了
     last_user_ts[cid] = time.time()
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
@@ -2365,6 +2369,109 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             logger.exception("这一轮炸了 chat=%s", cid, exc_info=exc)
 
     task.add_done_callback(_done)
+
+
+# ── 梗库：她发来的一份别人写的梗（作者写了「禁止二传二改」）──
+# 由来 2026-11-03 她：「为啥不接进去，称呼没必要加，但是梗得会说吧」。仓库是公开的，
+# 整份放进代码等于把别人的东西二传出去——所以只存在 VPS 的 CC_WORKDIR 里，人设 @ 进来。
+MEME_LIB_FILE = "梗库.md"
+MEME_LIB_PLACEHOLDER = "（她还没发梗库来。）\n"
+meme_wait: dict[int, bool] = {}        # 她发了 /memes，下一个文件当梗库收
+
+
+def _meme_lib_path() -> str | None:
+    repo = os.path.dirname(os.path.abspath(__file__))
+    if os.path.realpath(CC_WORKDIR) == os.path.realpath(repo):
+        return None                       # 别往仓库里写（公开仓库）
+    return os.path.join(CC_WORKDIR, MEME_LIB_FILE)
+
+
+def ensure_meme_lib() -> None:
+    p = _meme_lib_path()
+    try:
+        if p and not os.path.exists(p):
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write(MEME_LIB_PLACEHOLDER)
+    except OSError:
+        logger.warning("梗库占位文件没建成", exc_info=True)
+
+
+def _meme_lib_count() -> int:
+    p = _meme_lib_path()
+    try:
+        with open(p, encoding="utf-8") as fh:
+            return sum(1 for x in fh if re.match(r"^\|\s*\d+", x))
+    except (OSError, TypeError):
+        return 0
+
+
+def _docx_text(raw: bytes) -> str:
+    """docx → 一段一行的纯文字（不依赖 python-docx）。"""
+    import io
+    import zipfile
+    from xml.sax.saxutils import unescape
+    xml = zipfile.ZipFile(io.BytesIO(raw)).read("word/document.xml").decode("utf-8", "replace")
+    out = []
+    for para in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+        out.append(unescape("".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", para, re.S))))
+    return "\n".join(out)
+
+
+def _meme_corpus(text: str) -> str:
+    """只留梗那部分：从「梗语料库」到「执行确认」；称呼表不要（她说称呼没必要加）。"""
+    # 认标题行（「## 梗语料库」）——正文里前面也会提到「梗语料库」这个词，认错就把称呼表收进来了
+    m = re.search(r"^#+[^\n]*梗语料库", text, re.M) or re.search(r"^[^\n]*梗语料库", text, re.M)
+    if m:
+        end = re.search(r"^#+[^\n]*执行确认", text[m.start():], re.M)
+        text = text[m.start(): m.start() + end.start() if end else None]
+    return text.strip()
+
+
+async def memes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    meme_wait[cid] = True
+    n = _meme_lib_count()
+    await update.message.reply_text(
+        (f"现在的梗库有 {n} 句。" if n else "现在还没有梗库。")
+        + "把梗库文件（docx、txt 或 md）直接发给我，我收进去，下一条起他就会用。"
+        "只存在你的服务器上，不进代码。不发了就随便说句话。")
+
+
+async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cid = update.effective_chat.id
+    if not _ok(cid):
+        return
+    msg = update.message
+    if not meme_wait.pop(cid, False):
+        await msg.reply_text("这个文件我先不收。要当梗库的话，先发 /memes 再发文件。")
+        return
+    doc = msg.document
+    name = (getattr(doc, "file_name", "") or "").lower()
+    if (getattr(doc, "file_size", 0) or 0) > 2_000_000:
+        await msg.reply_text("❌ 文件太大了（超过 2MB），没收。")
+        return
+    p = _meme_lib_path()
+    if not p:
+        await msg.reply_text("❌ 这台机器的设置不对（梗库会写进代码目录），没收。")
+        return
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        raw = bytes(await tg_file.download_as_bytearray())
+        text = _docx_text(raw) if name.endswith(".docx") else raw.decode("utf-8", "replace")
+        corpus = _meme_corpus(text)
+        if len(corpus) < 20:
+            await msg.reply_text("❌ 这个文件里没读出梗来，没收。是 docx、txt 或 md 吗？")
+            return
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("# 梗库（她发来的，只存在这台机器上）\n\n" + corpus + "\n")
+        n = _meme_lib_count()
+        await msg.reply_text((f"收好了，{n} 句梗。" if n else "收好了。")
+                             + "下一条起他就会用；称呼表没收进去。")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("收梗库失败")
+        await msg.reply_text(f"❌ 没收进去：{type(e).__name__}: {e}")
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2550,6 +2657,7 @@ def refresh_glossary() -> list[str]:
 def main() -> None:
     refresh_persona()      # 重启＝人设也刷新，别再出现「新代码＋旧人设」
     refresh_glossary()     # 种子里新加的梗也补进去（只追加）
+    ensure_meme_lib()      # 人设里 @梗库.md，文件得在
     _load_state()          # 她的开关（写文/语音/必办/模型）——重启不能丢
     # ⚠️ 先绑端口再碰 Telegram：绑不上说明已有一个实例在跑，这里直接退出（SystemExit 78），
     # 不能让第二个进程去拉消息——两个实例抢同一个 bot 的后果是她发什么都没人理。
@@ -2594,6 +2702,8 @@ def main() -> None:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
+    app.add_handler(CommandHandler("memes", memes_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
         # 每分钟看一眼；真正的间隔由 NUDGE_MINUTES 判断，这样她刚说完话

@@ -3829,3 +3829,56 @@ def test_he_can_catch_her_memes_in_his_own_voice():
     assert "不点破" in rule and "不解释原意" in rule and "她没接就收" in rule
     assert "用你自己的口气" in rule and "她难过、在吵架、在说正事的时候不玩梗" in rule
     assert "小乐乐" not in t and "闺蜜" not in t, "称呼表没抄进来"
+
+
+def _docx_bytes(paragraphs):
+    import io, zipfile
+    from xml.sax.saxutils import escape
+    body = "".join(f"<w:p><w:r><w:t>{escape(t)}</w:t></w:r></w:p>" for t in paragraphs)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/'
+           f'wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", xml)
+    return buf.getvalue()
+
+
+def test_meme_library_comes_in_through_telegram_and_stays_off_the_repo(tmp_path, monkeypatch):
+    """11/03 她：「为啥不接进去，称呼没必要加，但是梗得会说吧」。那份梗库的作者写了
+    「禁止二传二改」，仓库是公开的——所以不进代码：她 /memes 再发文件，桥存进 VPS 的
+    CC_WORKDIR/梗库.md，人设 @ 进来；称呼表不收。"""
+    import asyncio, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(cc, "meme_wait", {})
+    raw = _docx_bytes(["# 天天上网", "以下规则适用于全文档——包括称呼轮换库和梗语料库。",
+                       "## 日常称呼轮换库", "| 1. 小乐乐 | 日常使用 |",
+                       "## 梗语料库 · INTERNET SLANG CORPUS", "| 玩梗句子 | 什么时候用 |",
+                       "| 1. 我不可以了 | 被可爱到 |", "| 2. 尊嘟假嘟 | 日常万能 |",
+                       "## 执行确认 · CONFIRMATION", "你已理解以上规则。"])
+
+    class _TgFile:
+        async def download_as_bytearray(self):
+            return bytearray(raw)
+    async def get_file(fid):
+        return _TgFile()
+    ctx = types.SimpleNamespace(bot=types.SimpleNamespace(get_file=get_file), args=[])
+    u, m = _upd()
+    m.document = types.SimpleNamespace(file_id="f", file_name="天天上网.docx", file_size=len(raw))
+    # 没先发 /memes：不收
+    asyncio.run(cc.on_document(u, ctx))
+    assert "先发 /memes" in m.texts[-1] and not (tmp_path / "梗库.md").exists()
+    asyncio.run(cc.memes_cmd(u, ctx))
+    asyncio.run(cc.on_document(u, ctx))
+    got = (tmp_path / "梗库.md").read_text(encoding="utf-8")
+    assert "我不可以了" in got and "尊嘟假嘟" in got
+    assert "小乐乐" not in got and "执行确认" not in got, "称呼表和尾巴不收"
+    assert "收好了，2 句梗" in m.texts[-1], m.texts[-1]
+    assert cc._meme_lib_count() == 2
+    # 人设把它 @ 进来，并写了怎么用
+    t = _mod().build()
+    assert "@梗库.md" in t and "称呼没必要加，但是梗得会说吧" in t and "她没接就收" in t
+    # 仓库目录就是 CC_WORKDIR 时绝不往里写
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(_ROOT))
+    assert cc._meme_lib_path() is None
