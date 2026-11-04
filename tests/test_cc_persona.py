@@ -3882,3 +3882,39 @@ def test_meme_library_comes_in_through_telegram_and_stays_off_the_repo(tmp_path,
     # 仓库目录就是 CC_WORKDIR 时绝不往里写
     monkeypatch.setattr(cc, "CC_WORKDIR", str(_ROOT))
     assert cc._meme_lib_path() is None
+
+
+def test_each_text_turn_puts_three_memes_from_her_library_in_front_of_him(tmp_path, monkeypatch):
+    """11/04 她：「他咋不玩梗啊…」——梗库 @ 在人设最末尾，拽不动他。文字模式每轮从
+    梗库里随机抽三句放进提示；语音和写文不加；梗库空就什么都不加。"""
+    import asyncio as aio
+    cc = _cc()
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(cc, "voice_mode", {})
+    monkeypatch.setattr(cc, "writing_mode", {})
+    monkeypatch.setattr(cc, "beat_mode", {7: "self"})
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "哦哦", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    ctx = type("C", (), {"bot": _Bot()})()
+    aio.run(cc._respond(u, ctx, 7, "在吗"))
+    assert "梗" not in seen[-1], "梗库空：不加提示"
+    (tmp_path / "梗库.md").write_text(
+        "# 梗库\n\n| 玩梗句子 | 什么时候用 |\n|---|---|\n| 1. 我不可以了 | 被可爱到 |\n"
+        "| 2. 尊嘟假嘟 | 日常万能 |\n| 3. 我已xxx | 日常百搭 |\n| 18-31. 松弛绷住 / 舒缓绷住 | 绷不住时 |\n",
+        encoding="utf-8")
+    aio.run(cc._respond(u, ctx, 7, "在吗"))
+    msg = seen[-1]
+    assert msg.startswith("在吗") and "从这几句梗里挑一句" in msg
+    assert sum(x in msg for x in ("「我不可以了」", "「尊嘟假嘟」", "「我已xxx」", "「松弛绷住 / 舒缓绷住」")) == 3
+    assert "1." not in msg and "18-31." not in msg, "编号去掉"
+    cc.writing_mode[7] = True
+    aio.run(cc._respond(u, ctx, 7, "写一段"))
+    assert "从这几句梗里挑" not in seen[-1], "写文不加"

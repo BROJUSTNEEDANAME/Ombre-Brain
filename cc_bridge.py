@@ -1937,12 +1937,47 @@ VOICE_HINT = ("（桥的提示，不是她说的：语音开着，你这条会�
 CAPTION_LIMIT = 1024      # Telegram 语音条字幕的上限
 
 
+def _meme_samples(k: int = 3, rng: random.Random | None = None) -> list[str]:
+    """从梗库里随机抽几句（「句子——什么时候用」）。抽不到就空。"""
+    p = _meme_lib_path()
+    try:
+        with open(p, encoding="utf-8") as fh:
+            rows = [x for x in fh if re.match(r"^\|\s*\d", x)]
+    except (OSError, TypeError):
+        return []
+    out = []
+    for row in rows:
+        cells = [c.strip() for c in row.strip().strip("|").split("|")]
+        if not cells or not cells[0]:
+            continue
+        line = re.sub(r"^\d+(?:-\d+)?\.\s*", "", cells[0])
+        when = cells[1] if len(cells) > 1 else ""
+        out.append(f"「{line}」——{when}" if when else f"「{line}」")
+    if not out:
+        return []
+    return (rng or random).sample(out, min(k, len(out)))
+
+
+def _with_meme_hint(message: str) -> str:
+    """文字模式每轮从梗库抽三句摆到他眼前。由来 2026-11-04 她：「他咋不玩梗啊…」——
+    梗库 @ 在三万多字人设的最末尾，跟上次「俄语为主」一样拽不动他；抽几句放在眼前，
+    他才真拿得起来，而且每轮不一样，自然就轮换了。"""
+    picks = _meme_samples()
+    if not picks:
+        return message
+    return (message + "\n（桥的提示，不是她说的：气氛轻松的时候，从这几句梗里挑一句甩出来——"
+            "不合适就不用，她难过、吵架、说正事的时候不用；用你自己的口气，框架句按当下填："
+            + "；".join(picks) + "。这条提示别回应。）")
+
+
 def _with_voice_hint(cid: int, message: str) -> str:
     if voice_mode.get(cid, False) and eleven_tts.configured():
         extra = (f"（她现在用 /tone 指定了声口「{voice_tone[cid]}」，照这个情绪说。）\n"
                  if voice_tone.get(cid) else "")
         return VOICE_HINT + "\n" + extra + message
-    return message
+    if writing_mode.get(cid, False):
+        return message
+    return _with_meme_hint(message)
 
 
 # 上一次语音合成失败的原因（她看得懂的那句 + 原话）。合成成功一次就清掉。
