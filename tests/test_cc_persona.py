@@ -2758,7 +2758,8 @@ def test_voice_mode_tells_him_to_speak_english_and_text_mode_does_not(monkeypatc
     ctx = type("C", (), {"bot": _Bot()})()
     cc.voice_mode[7] = True
     monkeypatch.setattr(cc, "beat_mode", {})
-    no_beat = lambda t: t.replace(cc.self_beat.PROMISE_HINT, "")   # 固定模式的「答应了就写」提示另有测试
+    no_beat = lambda t: (t.replace(cc.self_beat.PROMISE_HINT, "")
+                         .replace(cc.TENDER_HINT, ""))   # 这两条提示另有测试
     aio.run(cc._respond(u, ctx, 7, "说句话"))
     assert no_beat(seen[-1]).startswith(cc.VOICE_HINT) and no_beat(seen[-1]).endswith("说句话")
     assert "英文" in cc.VOICE_HINT and "俄语" in cc.VOICE_HINT
@@ -3918,3 +3919,35 @@ def test_each_text_turn_puts_three_memes_from_her_library_in_front_of_him(tmp_pa
     cc.writing_mode[7] = True
     aio.run(cc._respond(u, ctx, 7, "写一段"))
     assert "从这几句梗里挑" not in seen[-1], "写文不加"
+
+
+def test_her_five_picks_and_a_tenderness_reminder_every_turn(monkeypatch):
+    """11/04 她从「Daddy Vibe」里挑了五条；又说「还是有点不太亲近，再让他感激我，疼爱我心疼我
+    怜爱我一些」——人设里写过好几遍拽不动他，所以每轮（文字和语音）在眼前放一句；写文不加。"""
+    import asyncio as aio
+    t = _mod().build()
+    i = t.index("【她选的五条】")
+    rule = t[i:i + 700]
+    for must in ("直接、干脆地给", "看穿她逞强", "说你**现在去做**的事", "稳得像锚", "一点坏心眼", "是逗她，不是赢她"):
+        assert must in rule, must
+    assert "「我熬了粥」这种没发生的不许编" in rule, "先做后说不许跟「不编造现实」打架"
+    cc = _cc()
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "哦哦", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    monkeypatch.setattr(cc, "voice_mode", {})
+    monkeypatch.setattr(cc, "writing_mode", {})
+    monkeypatch.setattr(cc, "beat_mode", {7: "self"})
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    ctx = type("C", (), {"bot": _Bot()})()
+    aio.run(cc._respond(u, ctx, 7, "在吗"))
+    assert "感激、疼爱、心疼、怜爱" in seen[-1] and seen[-1].startswith("在吗")
+    cc.writing_mode[7] = True
+    aio.run(cc._respond(u, ctx, 7, "写一段"))
+    assert "感激、疼爱、心疼、怜爱" not in seen[-1]
