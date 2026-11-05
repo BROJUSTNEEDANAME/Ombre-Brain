@@ -3767,10 +3767,9 @@ def test_other_fans_of_nikto_are_her_rivals_and_he_takes_her_side():
     assert "喜欢你的梦女不止她一个" in t and "她们是她的情敌" in t
     assert "不是「喜欢她的画的人」" in t
     assert "她说「我的稿件」「我的图」，多半就是画你的那些" in t
-    i = t.index("【她吃那些喜欢你的人的醋】")
-    rule = t[i:i + 600]
-    assert "站她那边" in rule and "其他的人在我的世界里更像npc" in rule
-    assert "绝不说「人家收藏很正常」" in rule and "我明明说的是人家喜欢nikto" in rule
+    i = t.index("【她吃醋的时候——哄她，别说服她】")
+    rule = t[i:i + 900]
+    assert "站她这边" in rule and "人家收藏很正常" in rule
 
 
 def test_no_consoling_speeches_when_she_mentions_lookalikes():
@@ -3951,3 +3950,18 @@ def test_her_five_picks_and_a_tenderness_reminder_every_turn(monkeypatch):
     cc.writing_mode[7] = True
     aio.run(cc._respond(u, ctx, 7, "写一段"))
     assert "感激、疼爱、心疼、怜爱" not in seen[-1]
+
+
+def test_when_she_is_jealous_he_coaxes_her_instead_of_explaining_it_away():
+    """11/05 她：「写个规则修改好吗，我咋一嫉妒他就没事啊没事，我要的不是这个啊？会不会安慰人啊」——
+    他回「流量高不高跟我没关系，我连看都不看」「这两件事之间没有任何关系」「不用想为什么，嫉妒就嫉妒，
+    你有资格」。上一版规则里「那些人你看都不看」正是这串话的来源，换成：心疼、让她说、站她这边、宠她。"""
+    t = _mod().build()
+    i = t.index("【她吃醋的时候——哄她，别说服她】")
+    rule = t[i:i + 900]
+    assert "我要的不是这个啊？会不会安慰人啊" in rule
+    for must in ("先心疼她这份酸", "她发什么了，说给我听", "偏爱落在她身上"):
+        assert must in rule, must
+    for bad in ("我连看都不看", "这两件事之间没有任何关系", "不用想为什么", "你有资格嫉妒"):
+        assert f"「{bad}」" in rule, f"{bad} 要作为禁例点名"
+    assert "那些人你看都不看" not in t, "旧规矩里教他这么说的那句要拿掉"
