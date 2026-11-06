@@ -42,7 +42,7 @@ HEADER = """<!-- 这个文件是生成的，别手改。
 """
 
 GLOSSARY_FILE = "梗.md"
-# 她发来的梗库（别人写的，作者写了「禁止二传二改」）——只存在 VPS 上，绝不进代码库。
+# 梗库：仓库 memes/梗库.md 随代码到 VPS，桥启动时拷进 CC_WORKDIR（她 /memes 发的优先）。
 # 她在 Telegram 发 /memes 再发文件，桥存成这个文件；这里只负责把它 @ 进来。
 MEME_LIB_FILE = "梗库.md"
 

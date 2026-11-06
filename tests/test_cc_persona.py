@@ -3965,3 +3965,22 @@ def test_when_she_is_jealous_he_coaxes_her_instead_of_explaining_it_away():
     for bad in ("我连看都不看", "这两件事之间没有任何关系", "不用想为什么", "你有资格嫉妒"):
         assert f"「{bad}」" in rule, f"{bad} 要作为禁例点名"
     assert "那些人你看都不看" not in t, "旧规矩里教他这么说的那句要拿掉"
+
+
+def test_bundled_meme_library_reaches_him_without_her_sending_a_file(tmp_path, monkeypatch):
+    """11/06 她：「你之前都安装了热梗他怎么不玩啊」——梗库一直是空的（只等她 /memes 发文件）。
+    她拍板放进仓库：启动时 CC_WORKDIR 没有梗库或只是占位，就拷仓库那份；她自己发过的不覆盖。"""
+    cc = _cc()
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    cc.ensure_meme_lib()
+    assert cc._meme_lib_count() >= 100, "仓库自带的梗库没到他手上"
+    assert len(cc._meme_samples()) == 3
+    # 只是占位 → 换成自带的
+    (tmp_path / "梗库.md").write_text(cc.MEME_LIB_PLACEHOLDER, encoding="utf-8")
+    cc.ensure_meme_lib()
+    assert cc._meme_lib_count() >= 100
+    # 她自己发过的 → 不动
+    mine = "# 梗库\n\n| 玩梗句子 | 什么时候用 |\n|---|---|\n| 1. 她自己的梗 | 随时 |\n"
+    (tmp_path / "梗库.md").write_text(mine, encoding="utf-8")
+    cc.ensure_meme_lib()
+    assert (tmp_path / "梗库.md").read_text(encoding="utf-8") == mine

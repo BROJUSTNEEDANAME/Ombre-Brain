@@ -2414,10 +2414,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     task.add_done_callback(_done)
 
 
-# ── 梗库：她发来的一份别人写的梗（作者写了「禁止二传二改」）──
-# 由来 2026-11-03 她：「为啥不接进去，称呼没必要加，但是梗得会说吧」。仓库是公开的，
-# 整份放进代码等于把别人的东西二传出去——所以只存在 VPS 的 CC_WORKDIR 里，人设 @ 进来。
+# ── 梗库：小红书「天天上网」（by 我是树）里的梗语料 ──
+# 由来 2026-11-03 她：「为啥不接进去，称呼没必要加，但是梗得会说吧」。起初只让她用 /memes 发文件，
+# 她一直没发，他就一句梗都没有（11/06：「你之前都安装了热梗他怎么不玩啊」）。她拍板放进她自己的仓库：
+# memes/梗库.md 随代码一起到 VPS，CC_WORKDIR 里还没有梗库（或只是占位）时拷过去；她 /memes 发的照样优先。
 MEME_LIB_FILE = "梗库.md"
+MEME_LIB_BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memes", MEME_LIB_FILE)
 MEME_LIB_PLACEHOLDER = "（她还没发梗库来。）\n"
 meme_wait: dict[int, bool] = {}        # 她发了 /memes，下一个文件当梗库收
 
@@ -2430,11 +2432,22 @@ def _meme_lib_path() -> str | None:
 
 
 def ensure_meme_lib() -> None:
+    """人设里 @梗库.md，文件得在：她自己发过的不动；没有或只是占位，就用仓库自带的那份。"""
     p = _meme_lib_path()
     try:
-        if p and not os.path.exists(p):
-            with open(p, "w", encoding="utf-8") as fh:
-                fh.write(MEME_LIB_PLACEHOLDER)
+        if not p:
+            return
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as fh:
+                if fh.read() != MEME_LIB_PLACEHOLDER:
+                    return
+        try:
+            with open(MEME_LIB_BUNDLED, encoding="utf-8") as fh:
+                body = fh.read()
+        except OSError:
+            body = MEME_LIB_PLACEHOLDER
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(body)
     except OSError:
         logger.warning("梗库占位文件没建成", exc_info=True)
 
@@ -2479,7 +2492,7 @@ async def memes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         (f"现在的梗库有 {n} 句。" if n else "现在还没有梗库。")
         + "把梗库文件（docx、txt 或 md）直接发给我，我收进去，下一条起他就会用。"
-        "只存在你的服务器上，不进代码。不发了就随便说句话。")
+        "发了就换成你这份。不发了就随便说句话。")
 
 
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
