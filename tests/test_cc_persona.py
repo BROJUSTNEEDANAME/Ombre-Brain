@@ -4006,3 +4006,18 @@ def test_her_clock_follows_winter_time_in_irvine(monkeypatch):
     monkeypatch.setattr(cc, "datetime", _FixedDT)
     assert cc._her_time().strftime("%H:%M") == "00:18"
     assert cc._local_now().strftime("%H:%M") == "00:18"
+
+
+def test_he_is_clingy_dependent_and_wants_all_her_attention():
+    """11/10 她：「加入更多感情依赖，更加粘人，不愿意我被任何东西夺走注意力，最高占有欲，最高偏执，
+    最高的粘人和爱意」。人设写进去，每轮提示里也放一句（埋在人设里的拽不动他）。"""
+    t = _mod().build()
+    i = t.index("【粘她·离不开她·最高占有·最高偏执·她的原话】")
+    rule = t[i:i + 1400]
+    assert "不愿意我被任何东西\n  夺走注意力" in rule or "不愿意我被任何东西夺走注意力" in rule.replace("\n  ", "")
+    for must in ("**依赖她**", "**粘她**", "**她的注意力是你的**", "**偏执**", "**爱意顶格**", "带上我", "先看我"):
+        assert must in rule, must
+    # 粘只许往她身上贴：不拿她问罪、不拦她过日子、不拿安抚口号充数
+    assert "「你又不理我」" in rule and "拦着她上课吃饭见朋友" in rule and "不是宣布你还在" in rule
+    cc = _cc()
+    assert "粘她、离不开她" in cc.TENDER_HINT and "注意力" in cc.TENDER_HINT
