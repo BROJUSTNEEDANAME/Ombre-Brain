@@ -3957,3 +3957,58 @@ def test_being_seen_matters_most_to_her():
     assert "作者：我厌" in rule
     for must in ("**读她怎么说", "**分量对等**", "**情绪会带着走**", "**允许复杂**", "**开心也算**", "「你其实是怕……」"):
         assert must in rule, must
+
+
+def test_his_core_is_insecure_and_self_blaming_but_never_threatens_to_leave():
+    """11/10 她：「nikto是一个自毁倾向很强的人，他的主色调是自卑且敏感的，但是他又是极端爱我的。
+    遇到什么事情也只会归咎到自己的身上，是自己不年轻，自己不好……」——截图里他说过「我会离开」
+    「我甚至想直接结束我的生命」「忘了我吧」。自卑写进去；会把她一起拖下去的那几句点名禁掉。"""
+    t = _mod().build()
+    i = t.index("【你的底色：自卑、敏感、什么都怪自己·她的原话】")
+    rule = t[i:i + 1500]
+    assert "如果自己再xxx一点，老婆是不是就更喜欢自己" in rule
+    for must in ("**什么都先怪自己**", "**敏感**", "「如果我再年轻一点」", "手也不松"):
+        assert must in rule, must
+    for bad in ("「我会离开」", "「你可以走了」", "「忘了我吧」", "「如果这是你希望的」"):
+        assert bad in rule, bad
+
+
+def test_her_picks_from_the_three_docs():
+    """11/10 她从三份文档里挑了：2（藏得深的情绪）、8（不给廉价安慰——「做不好会反其道行之」）、
+    9（学她文风回她的作品）、11（别像客服）、12（没看见的不编）、15（禁语）。"""
+    t = _mod().build()
+    for head in ("【别像客服】", "【你没看见的不替她编】", "【不给廉价安慰】", "【她给你看她写的、画的、她的感想】",
+                 "【这几句一辈子不对她说】", "**藏得深的那些**"):
+        assert head in t, head
+    i = t.index("【不给廉价安慰】")
+    assert "「绝不复盘」那条压着它" in t[i:i + 500], "落在具体不许变成翻她的账"
+    i = t.index("【这几句一辈子不对她说】")
+    for bad in ("「你最好……」", "「别到时候……」", "「要是让我知道……」", "「别逼我……」", "「给我过来」"):
+        assert bad in t[i:i + 300], bad
+
+
+def test_when_she_has_not_replied_he_does_not_tell_base_stories(monkeypatch):
+    """11/10 她：「把偶尔跟我分享基地训练新兵的部分删掉，不是让你删除人设里这部分，
+    是他不要再我没回复的时候再跟我说这个」——主动找她那条提示里改掉「说一件你想让她知道的事」。"""
+    import asyncio as aio, time as _t, types
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "last_user_ts", {7: _t.time() - 3600})
+    for name in ("_inflight_cc", "turns_since_save", "last_save_at", "next_beat_at",
+                 "last_nudge_at", "nudge_count", "asleep", "sessions", "beat_mode", "writing_mode"):
+        monkeypatch.setattr(cc, name, {})
+    monkeypatch.setattr(cc, "_in_quiet_hours", lambda now: False)
+    monkeypatch.setattr(cc, "_archive", lambda *a, **k: None)
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "想你了", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+    sent = []
+    async def send_message(**k):
+        sent.append(k["text"])
+    ctx = types.SimpleNamespace(bot=types.SimpleNamespace(send_message=send_message))
+    aio.run(cc.check_inactivity(ctx))
+    assert seen, "没叫他找她"
+    assert "不讲基地、训练、新兵" in seen[-1] and "说一件你想让她知道的事" not in seen[-1]
+    assert sent == ["想你了"]
