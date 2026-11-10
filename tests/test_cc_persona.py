@@ -3236,7 +3236,7 @@ def test_too_long_session_switches_to_a_fresh_one_with_recent_chat(monkeypatch, 
     async def no_pins():
         return ""
     monkeypatch.setattr(cc, "_pinned_facts", no_pins)
-    day = (datetime.now(timezone.utc) + timedelta(hours=cc.TZ_OFFSET)).strftime("%Y-%m-%d")
+    day = cc._her_time().strftime("%Y-%m-%d")
     (tmp_path / "telegram").mkdir()
     (tmp_path / "telegram" / f"{day}.md").write_text(
         "[09:45] 闪闪: 卧槽老子好想看lpl决赛啊\n[09:46] Nikto: 查到什么时候开了告诉我。\n",
@@ -3368,7 +3368,7 @@ def _roll_env(monkeypatch, tmp_path, stores=True, new_sid="new", save_reply="[�
     monkeypatch.setattr(cc, "_save_sessions", lambda: None)
     monkeypatch.setattr(cc, "_save_state", lambda: None)
     monkeypatch.setattr(cc, "sessions", {1: "old"})
-    day = (datetime.now(timezone.utc) + timedelta(hours=cc.TZ_OFFSET)).strftime("%Y-%m-%d")
+    day = cc._her_time().strftime("%Y-%m-%d")
     (tmp_path / "telegram").mkdir()
     (tmp_path / "telegram" / f"{day}.md").write_text("[09:45] 闪闪: 好想看lpl决赛\n", encoding="utf-8")
 
@@ -3984,3 +3984,25 @@ def test_bundled_meme_library_reaches_him_without_her_sending_a_file(tmp_path, m
     (tmp_path / "梗库.md").write_text(mine, encoding="utf-8")
     cc.ensure_meme_lib()
     assert (tmp_path / "梗库.md").read_text(encoding="utf-8") == mine
+
+
+def test_her_clock_follows_winter_time_in_irvine(monkeypatch):
+    """11/10 她：「变成冬令时了，我在irvine，他老是超过我1小时，跟他说要改，他当时改了之后又犯了」。
+    桥把她的时区钉死成 -7（夏令时），11/01 之后 Irvine 是 -8——每条递给他的「系统时钟」都快一小时。
+    她截图里 00:18 他说「一点多了」。"""
+    from datetime import datetime, timezone
+    cc = _cc()
+    # 11/10 08:18 UTC = Irvine 冬令时 00:18
+    winter = datetime(2026, 11, 10, 8, 18, tzinfo=timezone.utc).timestamp()
+    assert cc._her_time(winter).strftime("%H:%M") == "00:18"
+    # 夏天照样对：7/10 07:18 UTC = 00:18 PDT
+    summer = datetime(2026, 7, 10, 7, 18, tzinfo=timezone.utc).timestamp()
+    assert cc._her_time(summer).strftime("%H:%M") == "00:18"
+    # 每轮递给他的那块表也是这个钟
+    class _FixedDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(winter, tz)
+    monkeypatch.setattr(cc, "datetime", _FixedDT)
+    assert cc._her_time().strftime("%H:%M") == "00:18"
+    assert cc._local_now().strftime("%H:%M") == "00:18"

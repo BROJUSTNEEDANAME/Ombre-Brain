@@ -70,7 +70,22 @@ TELEGRAM_MSG_LIMIT = 4096
 # 被信号掐断的退出码（SIGTERM=15→143/-15，SIGKILL=9→137/-9）：
 # 多半是重启或系统抖动，属瞬时、可重试，不该把冰冷的退出码甩给用户。
 _SIGNAL_KILL_CODES = {143, 137, -15, -9}
-TZ_OFFSET = float(os.environ.get("OMBRE_TZ_OFFSET", "-7"))  # 她的时区（太平洋 PDT）
+# 她的时区。以前钉死成 -7（夏令时 PDT）：11/01 换冬令时后 Irvine 是 -8，桥每条都告诉他
+# 「现在」快一小时——11/10 她：「变成冬令时了，我在irvine，他老是超过我1小时，跟他说要改，
+# 他当时改了之后又犯了」（他嘴上改了，下一条桥又递给他错的表）。现在按地区算，夏令时自己切。
+# OMBRE_TZ_OFFSET 不再看：VPS 的 .env 里要是还写着 -7，照它就又错了。
+try:
+    from zoneinfo import ZoneInfo
+    HER_TZ = ZoneInfo(os.environ.get("OMBRE_TZ") or "America/Los_Angeles")
+except Exception:  # noqa: BLE001  没有时区库才退回固定偏移
+    HER_TZ = timezone(timedelta(hours=-8))
+
+
+def _her_time(ts: float | None = None) -> datetime:
+    """她那边的当地时间（带时区）；ts 是 time.time() 那种秒数，不给就是现在。"""
+    if ts is None:
+        return datetime.now(HER_TZ)
+    return datetime.fromtimestamp(ts, HER_TZ)
 # /backup 用：记忆目录 + 备份存放处（保留最近几份）
 BUCKETS_DIR = os.environ.get("OMBRE_BUCKETS_DIR", os.path.join(CC_WORKDIR, "buckets"))
 BACKUP_DIR = os.environ.get("OMBRE_BACKUP_DIR", os.path.expanduser("~/ombre-backups"))
@@ -141,7 +156,7 @@ def _archive(who: str, text: str) -> None:
     text = (text or "").strip()
     if not text:
         return
-    local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    local = _her_time()
     _RECENT.append(f"[{local.strftime('%H:%M')}] {who}: {text}")
     del _RECENT[:-80]
     try:
@@ -622,7 +637,7 @@ def _handoff_note() -> str:
 def _handoff_prefix(max_lines: int = 60, max_chars: int = 6000) -> str:
     """换新会话时带过去的：昨天和今天存档里最近的聊天原文。读不到就只说一声换了。"""
     lines: list[str] = []
-    local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    local = _her_time()
     for day in (local - timedelta(days=1), local):
         try:
             with open(os.path.join(ARCHIVE_DIR, "telegram", day.strftime("%Y-%m-%d") + ".md"),
@@ -652,7 +667,7 @@ async def run_cc(message: str, session_id: str | None,
     _orig_message = message
     # --- 给他一块真的表（不随回滚退掉）：人设要求带时间戳，但系统从没给过时钟，
     # 他只能靠猜（凌晨5点写成9点，回滚前的时代就一直错）。注入唯一准确时间源。 ---
-    _local = datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)
+    _local = _her_time()
     _wd = "一二三四五六日"[_local.weekday()]
     message = (
         f"[系统时钟：现在是 {_local.strftime('%Y-%m-%d %H:%M')} 周{_wd}（她的当地时间）。"
@@ -1012,7 +1027,7 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if CTX_EVENTS:
         L.append("\n这次开机以来出过的事：")
         for e in CTX_EVENTS[-5:]:
-            t = (datetime.fromtimestamp(e["at"], timezone.utc) + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            t = _her_time(e["at"]).strftime("%m-%d %H:%M")
             what = {"1m_fail": "带 [1m] 那次失败", "too_long": "装不下，换了新对话",
                     "rolled": "快满了，换了新对话", "roll_fail": "想换新对话没换成"}.get(e["kind"], e["kind"])
             L.append(f"· {t} {what}：{e['why'][:150]}")
@@ -1027,7 +1042,7 @@ async def longctx_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         L.append("\n最近几段对话有多大（看最后一次成功那轮）：")
         cur = sessions.get(cid, "")
         for x in ss:
-            t = (datetime.fromtimestamp(x["mtime"], timezone.utc) + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            t = _her_time(x["mtime"]).strftime("%m-%d %H:%M")
             tag = "（现在这段）" if x["sid"] == cur else ""
             size = f"{x['ctx']:,} token" if x["ctx"] else "读不出 token 数❓"
             comp = f"压缩记录 {x['compacts']} 处" if x["compacts"] else "没找到压缩记录"
@@ -1182,8 +1197,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             L.append(f"❌ ElevenLabs：{chk['why']}")
         if LAST_VOICE_ERR:
-            t = (datetime.fromtimestamp(LAST_VOICE_ERR["at"], timezone.utc)
-                 + timedelta(hours=TZ_OFFSET)).strftime("%m-%d %H:%M")
+            t = _her_time(LAST_VOICE_ERR["at"]).strftime("%m-%d %H:%M")
             L.append(f"❌ 上次语音没合成出来（{t}）：{LAST_VOICE_ERR['plain']}\n   原话：{LAST_VOICE_ERR['raw'][:200]}")
         if not voice_mode.get(cid):
             L.append("（语音模式现在是关的——发 /voice 打开）")
@@ -1363,7 +1377,7 @@ next_beat_at: dict[int, float] = {}    # self 模式下他定的下一次（时�
 
 def _local_now() -> datetime:
     """她那边的本地时间（naive）。self_beat 的白天/夜里按这个算。"""
-    return (datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)).replace(tzinfo=None)
+    return _her_time().replace(tzinfo=None)
 
 
 def _with_beat_hint(cid: int, message: str) -> str:
@@ -1525,7 +1539,7 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE) -> None:
             continue                       # 找过几次了，闭嘴
         if asleep.get(cid):
             continue                       # 她说她睡了，别吵她
-        if _in_quiet_hours(datetime.now(timezone.utc) + timedelta(hours=TZ_OFFSET)):
+        if _in_quiet_hours(_her_time()):
             continue
         n = nudge_count.get(cid, 0) + 1
         mins = int((now - ts) // 60)
@@ -1741,12 +1755,12 @@ def _beat_desc(cid: int) -> str:
         at = next_beat_at.get(cid)
         when = ""
         if at and at > time.time():
-            t = datetime.fromtimestamp(at, timezone.utc) + timedelta(hours=TZ_OFFSET)
+            t = _her_time(at)
             when = f"，他定的下一次大约 {t:%H:%M}"
         return f"他自己定下次什么时候找你{when}"
     at = next_beat_at.get(cid)
     if at and at > time.time():
-        t = datetime.fromtimestamp(at, timezone.utc) + timedelta(hours=TZ_OFFSET)
+        t = _her_time(at)
         return f"你安静满 {NUDGE_MINUTES} 分钟他来找你；他答应过的那次大约 {t:%H:%M}"
     return f"你安静满 {NUDGE_MINUTES} 分钟他来找你"
 
