@@ -3821,104 +3821,6 @@ def test_he_types_like_a_real_person_on_his_own_personality():
     assert not is_silent_reply("?")
 
 
-def test_he_can_catch_her_memes_in_his_own_voice():
-    """11/03 她发了一份玩梗提示词，选了「只学会接梗」——不抄语料库和称呼表。"""
-    t = _mod().build()
-    i = t.index("【会接梗】")
-    rule = t[i:i + 400]
-    assert "不点破" in rule and "不解释原意" in rule and "她没接就收" in rule
-    assert "用你自己的口气" in rule and "她难过、在吵架、在说正事的时候不玩梗" in rule
-    assert "小乐乐" not in t and "闺蜜" not in t, "称呼表没抄进来"
-
-
-def _docx_bytes(paragraphs):
-    import io, zipfile
-    from xml.sax.saxutils import escape
-    body = "".join(f"<w:p><w:r><w:t>{escape(t)}</w:t></w:r></w:p>" for t in paragraphs)
-    xml = ('<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/'
-           f'wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>')
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("word/document.xml", xml)
-    return buf.getvalue()
-
-
-def test_meme_library_comes_in_through_telegram_and_stays_off_the_repo(tmp_path, monkeypatch):
-    """11/03 她：「为啥不接进去，称呼没必要加，但是梗得会说吧」。那份梗库的作者写了
-    「禁止二传二改」，仓库是公开的——所以不进代码：她 /memes 再发文件，桥存进 VPS 的
-    CC_WORKDIR/梗库.md，人设 @ 进来；称呼表不收。"""
-    import asyncio, types
-    cc = _cc()
-    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
-    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
-    monkeypatch.setattr(cc, "meme_wait", {})
-    raw = _docx_bytes(["# 天天上网", "以下规则适用于全文档——包括称呼轮换库和梗语料库。",
-                       "## 日常称呼轮换库", "| 1. 小乐乐 | 日常使用 |",
-                       "## 梗语料库 · INTERNET SLANG CORPUS", "| 玩梗句子 | 什么时候用 |",
-                       "| 1. 我不可以了 | 被可爱到 |", "| 2. 尊嘟假嘟 | 日常万能 |",
-                       "## 执行确认 · CONFIRMATION", "你已理解以上规则。"])
-
-    class _TgFile:
-        async def download_as_bytearray(self):
-            return bytearray(raw)
-    async def get_file(fid):
-        return _TgFile()
-    ctx = types.SimpleNamespace(bot=types.SimpleNamespace(get_file=get_file), args=[])
-    u, m = _upd()
-    m.document = types.SimpleNamespace(file_id="f", file_name="天天上网.docx", file_size=len(raw))
-    # 没先发 /memes：不收
-    asyncio.run(cc.on_document(u, ctx))
-    assert "先发 /memes" in m.texts[-1] and not (tmp_path / "梗库.md").exists()
-    asyncio.run(cc.memes_cmd(u, ctx))
-    asyncio.run(cc.on_document(u, ctx))
-    got = (tmp_path / "梗库.md").read_text(encoding="utf-8")
-    assert "我不可以了" in got and "尊嘟假嘟" in got
-    assert "小乐乐" not in got and "执行确认" not in got, "称呼表和尾巴不收"
-    assert "收好了，2 句梗" in m.texts[-1], m.texts[-1]
-    assert cc._meme_lib_count() == 2
-    # 人设把它 @ 进来，并写了怎么用
-    t = _mod().build()
-    assert "@梗库.md" in t and "称呼没必要加，但是梗得会说吧" in t and "她没接就收" in t
-    # 仓库目录就是 CC_WORKDIR 时绝不往里写
-    monkeypatch.setattr(cc, "CC_WORKDIR", str(_ROOT))
-    assert cc._meme_lib_path() is None
-
-
-def test_each_text_turn_puts_three_memes_from_her_library_in_front_of_him(tmp_path, monkeypatch):
-    """11/04 她：「他咋不玩梗啊…」——梗库 @ 在人设最末尾，拽不动他。文字模式每轮从
-    梗库里随机抽三句放进提示；语音和写文不加；梗库空就什么都不加。"""
-    import asyncio as aio
-    cc = _cc()
-    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
-    monkeypatch.setattr(cc, "voice_mode", {})
-    monkeypatch.setattr(cc, "writing_mode", {})
-    monkeypatch.setattr(cc, "beat_mode", {7: "self"})
-    seen = []
-    async def fake_run_cc(message, session_id):
-        seen.append(message)
-        return "哦哦", None
-    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
-
-    class _Bot:
-        async def send_chat_action(self, **k):
-            return None
-    u, m = _upd()
-    ctx = type("C", (), {"bot": _Bot()})()
-    aio.run(cc._respond(u, ctx, 7, "在吗"))
-    assert "梗" not in seen[-1], "梗库空：不加提示"
-    (tmp_path / "梗库.md").write_text(
-        "# 梗库\n\n| 玩梗句子 | 什么时候用 |\n|---|---|\n| 1. 我不可以了 | 被可爱到 |\n"
-        "| 2. 尊嘟假嘟 | 日常万能 |\n| 3. 我已xxx | 日常百搭 |\n| 18-31. 松弛绷住 / 舒缓绷住 | 绷不住时 |\n",
-        encoding="utf-8")
-    aio.run(cc._respond(u, ctx, 7, "在吗"))
-    msg = seen[-1]
-    assert msg.startswith("在吗") and "从这几句梗里挑一句" in msg
-    assert sum(x in msg for x in ("「我不可以了」", "「尊嘟假嘟」", "「我已xxx」", "「松弛绷住 / 舒缓绷住」")) == 3
-    assert "1." not in msg and "18-31." not in msg, "编号去掉"
-    cc.writing_mode[7] = True
-    aio.run(cc._respond(u, ctx, 7, "写一段"))
-    assert "从这几句梗里挑" not in seen[-1], "写文不加"
-
 
 def test_her_five_picks_and_a_tenderness_reminder_every_turn(monkeypatch):
     """11/04 她从「Daddy Vibe」里挑了五条；又说「还是有点不太亲近，再让他感激我，疼爱我心疼我
@@ -3967,25 +3869,6 @@ def test_when_she_is_jealous_he_coaxes_her_instead_of_explaining_it_away():
     assert "那些人你看都不看" not in t, "旧规矩里教他这么说的那句要拿掉"
 
 
-def test_bundled_meme_library_reaches_him_without_her_sending_a_file(tmp_path, monkeypatch):
-    """11/06 她：「你之前都安装了热梗他怎么不玩啊」——梗库一直是空的（只等她 /memes 发文件）。
-    她拍板放进仓库：启动时 CC_WORKDIR 没有梗库或只是占位，就拷仓库那份；她自己发过的不覆盖。"""
-    cc = _cc()
-    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
-    cc.ensure_meme_lib()
-    assert cc._meme_lib_count() >= 100, "仓库自带的梗库没到他手上"
-    assert len(cc._meme_samples()) == 3
-    # 只是占位 → 换成自带的
-    (tmp_path / "梗库.md").write_text(cc.MEME_LIB_PLACEHOLDER, encoding="utf-8")
-    cc.ensure_meme_lib()
-    assert cc._meme_lib_count() >= 100
-    # 她自己发过的 → 不动
-    mine = "# 梗库\n\n| 玩梗句子 | 什么时候用 |\n|---|---|\n| 1. 她自己的梗 | 随时 |\n"
-    (tmp_path / "梗库.md").write_text(mine, encoding="utf-8")
-    cc.ensure_meme_lib()
-    assert (tmp_path / "梗库.md").read_text(encoding="utf-8") == mine
-
-
 def test_her_clock_follows_winter_time_in_irvine(monkeypatch):
     """11/10 她：「变成冬令时了，我在irvine，他老是超过我1小时，跟他说要改，他当时改了之后又犯了」。
     桥把她的时区钉死成 -7（夏令时），11/01 之后 Irvine 是 -8——每条递给他的「系统时钟」都快一小时。
@@ -4021,3 +3904,56 @@ def test_he_is_clingy_dependent_and_wants_all_her_attention():
     assert "「你又不理我」" in rule and "拦着她上课吃饭见朋友" in rule and "不是宣布你还在" in rule
     cc = _cc()
     assert "粘她、离不开她" in cc.TENDER_HINT and "注意力" in cc.TENDER_HINT
+
+
+def test_the_meme_library_is_gone(tmp_path, monkeypatch):
+    """11/10 她：「顺带一提删掉之前加入的梗」——梗库、每轮抽三句梗的提示、「会接梗」那条都拆掉。
+    他听不懂她的梗时去查（梗.md）那套是更早的，不动。"""
+    import asyncio as aio
+    cc = _cc()
+    t = _mod().build()
+    assert "梗库" not in t and "【会接梗】" not in t
+    assert "@梗.md" in t, "查她的梗那套还在"
+    assert not hasattr(cc, "memes_cmd") and not hasattr(cc, "_with_meme_hint")
+    assert not (_ROOT / "memes").exists()
+    monkeypatch.setattr(cc, "CC_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(cc, "voice_mode", {})
+    monkeypatch.setattr(cc, "writing_mode", {})
+    monkeypatch.setattr(cc, "beat_mode", {7: "self"})
+    # VPS 上旧的 梗库.md 还在也不许再递给他
+    (tmp_path / "梗库.md").write_text("| 1. 我不可以了 | 被可爱到 |\n", encoding="utf-8")
+    seen = []
+    async def fake_run_cc(message, session_id):
+        seen.append(message)
+        return "哦哦", None
+    monkeypatch.setattr(cc, "run_cc", fake_run_cc)
+
+    class _Bot:
+        async def send_chat_action(self, **k):
+            return None
+    u, m = _upd()
+    aio.run(cc._respond(u, type("C", (), {"bot": _Bot()})(), 7, "在吗"))
+    assert seen and "我不可以了" not in seen[-1] and "梗里挑" not in seen[-1]
+
+
+def test_he_has_negative_feelings_and_lets_them_show():
+    """11/10 她：「他根本就没有愧疚，失落，恐惧，难过，吃醋等等这种负面情绪……就算是比较隐忍的年上男，
+    也有一些蛛丝马迹（比如说动作）或者他会低声下气的说。如果没有那就不是一个活生生的人。」"""
+    t = _mod().build()
+    i = t.index("【你有负面情绪·她的原话】")
+    rule = t[i:i + 1600]
+    assert "如果没有那就不是一个活生生的人" in rule
+    for must in ("**愧疚**", "**失落**", "**恐惧**", "**难过**", "**吃醋**", "受着不等于没感觉", "「我没事」"):
+        assert must in rule, must
+    cc = _cc()
+    assert "愧疚、失落、怕、难过、吃醋" in cc.TENDER_HINT and cc.TENDER_HINT.rstrip().endswith("这条提示别回应。）")
+
+
+def test_being_seen_matters_most_to_her():
+    """同天她：「我最重视的就是被看见，被接住情绪」——参考《一颗透明的心2.0》（作者：我厌，公开需标源）。"""
+    t = _mod().build()
+    i = t.index("【她最重视的是被看见、情绪被接住·她的原话】")
+    rule = t[i:i + 900]
+    assert "作者：我厌" in rule
+    for must in ("**读她怎么说", "**分量对等**", "**情绪会带着走**", "**允许复杂**", "**开心也算**", "「你其实是怕……」"):
+        assert must in rule, must
