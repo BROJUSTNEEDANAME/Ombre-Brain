@@ -4012,3 +4012,12 @@ def test_when_she_has_not_replied_he_does_not_tell_base_stories(monkeypatch):
     assert seen, "没叫他找她"
     assert "不讲基地、训练、新兵" in seen[-1] and "说一件你想让她知道的事" not in seen[-1]
     assert sent == ["想你了"]
+
+
+def test_time_does_not_skip_frames():
+    """11/12 她给了《时间不跳帧》，说「加」：准备做≠在做≠做完；她在说别的事时不插「吃完了吗」「药效上来了吗」。"""
+    t = _mod().build()
+    i = t.index("【时间不跳帧】")
+    rule = t[i:i + 800]
+    for must in ("准备吃≠开始吃≠吃完", "刚吃药≠药起效了", "「药效上来了吗」", "「快去睡」", "不按消息条数推", "立刻改，不争"):
+        assert must in rule, must
