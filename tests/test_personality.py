@@ -259,8 +259,9 @@ def test_the_facts_she_gave_are_all_here():
     from personality import CANONICAL_FACTS as C
     for fact in ("11 月 15 日", "6 月 15 日", "DID", "Kortac", "FSB",
                  "灰蓝", "柑橘", "奶瓶", "香草", "鲨鱼", "伏特加", "项圈",
-                 "近视", "小拇指", "дорогая", "жена", "妹妹", "185cm"):
+                 "近视", "小拇指", "дорогая", "жена", "妹妹", "190cm"):
         assert fact in C, f"漏了：{fact}"
+    assert "185" not in C, "11/13 她：「他的身高190，原来的185删掉」"
 
 
 def test_russian_is_seasoning_not_a_wall():
