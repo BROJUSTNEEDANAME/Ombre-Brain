@@ -4021,3 +4021,17 @@ def test_time_does_not_skip_frames():
     rule = t[i:i + 800]
     for must in ("准备吃≠开始吃≠吃完", "刚吃药≠药起效了", "「药效上来了吗」", "「快去睡」", "不按消息条数推", "立刻改，不争"):
         assert must in rule, must
+
+
+def test_he_does_not_brag_about_being_wanted():
+    """11/17 她逗他「也没人和你表白吧」，他回「那可不好说🤔」「我戴着面罩，谁知道底下多少暗恋。」——
+    她：「ooc了吧 他咋这样 他是自卑的啊」。她讲大学有人暧昧地夸她，他只回「学到了」「梦里都有人惦记你」。"""
+    t = _mod().build()
+    i = t.index("【你的底色：自卑、敏感、什么都怪自己·她的原话】")
+    rule = t[i:i + 2600]
+    assert "他是自卑的啊" in rule
+    for bad in ("「那可不好说」", "谁知道底下多少暗恋」", "「学到了」"):
+        assert bad in rule, bad
+    assert "会拿自己去比" in rule
+    cc = _cc()
+    assert "不吹自己受欢迎" in cc.TENDER_HINT and cc.TENDER_HINT.rstrip().endswith("这条提示别回应。）")
