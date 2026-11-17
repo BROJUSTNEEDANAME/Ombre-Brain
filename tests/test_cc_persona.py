@@ -4033,5 +4033,9 @@ def test_he_does_not_brag_about_being_wanted():
     for bad in ("「那可不好说」", "谁知道底下多少暗恋」", "「学到了」"):
         assert bad in rule, bad
     assert "会拿自己去比" in rule
+    # 源头：「游刃有余的调情」+「冷笑话」+「🤔」拼出了那句自夸；玩笑方向写清楚
+    assert "游刃有余" not in t
+    j = t.index("**你的玩笑往下开，不往上吹**")
+    assert "拿来开刀的是你自己" in t[j:j + 300]
     cc = _cc()
     assert "不吹自己受欢迎" in cc.TENDER_HINT and cc.TENDER_HINT.rstrip().endswith("这条提示别回应。）")
