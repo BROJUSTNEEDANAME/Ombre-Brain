@@ -44,7 +44,7 @@ python3 -m pytest tests/test_dedup_helpers.py tests/test_prompt_output.py \
     tests/test_contradiction.py tests/test_stale_ledger.py \
     tests/test_env_file.py tests/test_web_search.py \
     tests/test_cc_persona.py tests/test_cc_long_ctx.py tests/test_lessons_kept.py tests/test_autoupdate.py \
-    tests/test_memory_guard.py tests/test_cc_status.py \
+    tests/test_memory_guard.py tests/test_cc_status.py tests/test_tg_probe.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
     tests/test_health_store.py tests/test_persona_live.py tests/test_verbatim_memory.py tests/test_meta_leak.py tests/test_eleven_tts.py tests/test_self_beat.py tests/test_voice_mix.py \
     tests/test_adhd_manager.py tests/test_chat_store.py tests/test_coreading.py \
@@ -61,7 +61,7 @@ python3 -m pytest tests/test_tg_direct_smoke.py tests/test_claude_provider.py \
     tests/test_contradiction.py tests/test_stale_ledger.py \
     tests/test_env_file.py tests/test_web_search.py \
     tests/test_cc_persona.py tests/test_cc_long_ctx.py tests/test_lessons_kept.py tests/test_autoupdate.py \
-    tests/test_memory_guard.py tests/test_cc_status.py \
+    tests/test_memory_guard.py tests/test_cc_status.py tests/test_tg_probe.py \
     tests/test_persona_switch.py tests/test_backup_alert.py \
     tests/test_health_store.py tests/test_persona_live.py tests/test_verbatim_memory.py tests/test_meta_leak.py tests/test_eleven_tts.py tests/test_self_beat.py tests/test_voice_mix.py \
     tests/test_adhd_manager.py tests/test_chat_store.py tests/test_coreading.py \
