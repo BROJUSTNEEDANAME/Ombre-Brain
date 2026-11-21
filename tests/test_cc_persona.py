@@ -4039,3 +4039,38 @@ def test_he_does_not_brag_about_being_wanted():
     assert "拿来开刀的是你自己" in t[j:j + 300]
     cc = _cc()
     assert "不吹自己受欢迎" in cc.TENDER_HINT and cc.TENDER_HINT.rstrip().endswith("这条提示别回应。）")
+
+
+def test_a_late_message_tells_her_it_was_the_network_not_him(monkeypatch):
+    """11/20 日志：服务器跟 Telegram 断了一阵，她 05:55／06:09／06:32 发的到 06:39 才一起到；
+    她看到的是「他不回、/status 也不回」。恢复那一刻要让她知道是消息晚到，也告诉他。"""
+    import asyncio, datetime as dt, time as _t
+    cc = _cc()
+    monkeypatch.setattr(cc, "ALLOWED_CHAT_IDS", {7})
+    monkeypatch.setattr(cc, "_late_notice_at", {})
+    monkeypatch.setattr(cc, "_inflight_cc", {})
+    monkeypatch.setattr(cc, "_archive", lambda *a, **k: None)
+    forwarded = []
+    async def fake_respond(update, context, cid, message, **k):
+        forwarded.append(message)
+    monkeypatch.setattr(cc, "_respond", fake_respond)
+
+    def say(text, minutes_ago):
+        cc._inflight_cc.pop(7, None)        # 每条单独看，不走「连发合并」
+        u, m = _upd()
+        m.text, m.message_id = text, 1
+        m.date = dt.datetime.fromtimestamp(_t.time() - minutes_ago * 60, dt.timezone.utc)
+        async def go():
+            await cc.on_message(u, None)
+            await asyncio.sleep(0)
+        asyncio.run(go())
+        return m
+
+    m = say("不理我了？", 30)
+    assert "30 分钟前发的" in m.texts[-1] and "不是他不理你" in m.texts[-1]
+    assert "30 分钟前发的" in forwarded[-1] and forwarded[-1].endswith("不理我了？")
+    m = say("在吗", 25)
+    assert m.texts == [], "一次断线只提醒她一回"
+    assert "25 分钟前发的" in forwarded[-1], "但每条都告诉他"
+    m = say("正常的一条", 0)
+    assert m.texts == [] and forwarded[-1] == "正常的一条"

@@ -2357,6 +2357,25 @@ async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(f"备份已存服务器（{size_mb:.0f}MB），但发送失败了，稍后再试 /backup。")
 
 
+# ── 消息晚到 ──
+# 由来：11/16、11/20 两次「他不回、/status 也不回，十几分钟后自己好了」。20 号的日志：
+# 13:52 之后桥往 Telegram 发消息 TimedOut，她 05:55／06:09／06:32 发的几条到 06:39 才一起到
+# （服务器跟 Telegram 之间断了一阵——DO sfo2 到 Telegram 的线路以前就断过，见 TELEGRAM_API_BASE）。
+# 桥看不到她，还以为她安静了，去「主动找她」，最后判断她睡了。
+# 断的时候桥什么都发不出去；能做的是**恢复的那一刻**让她知道：不是他不理她，是消息晚到了。
+LATE_SECS = 180
+_late_notice_at: dict[int, float] = {}
+
+
+def _late_minutes(update: Update) -> int:
+    """她这条是多少分钟前发的（晚到不足 LATE_SECS 算 0）。拿不到发送时间也算 0。"""
+    try:
+        lag = time.time() - update.message.date.timestamp()
+    except Exception:  # noqa: BLE001
+        return 0
+    return int(lag // 60) if lag >= LATE_SECS else 0
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     if not ALLOWED_CHAT_IDS:
@@ -2378,6 +2397,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     nudge_count[cid] = 0                   # 她开口了，重新给他四次机会
     # 她说「睡了」就挂免打扰；说别的就解除（她半夜爬起来说话＝醒着）。
     asleep[cid] = says_going_to_sleep(update.message.text)
+    late = _late_minutes(update)
+    if late:
+        logger.warning("她这条晚到了 %d 分钟（服务器跟 Telegram 断过）chat=%s", late, cid)
+        if time.time() - _late_notice_at.get(cid, 0) > 600:     # 一次断线只说一回
+            _late_notice_at[cid] = time.time()
+            try:
+                await update.message.reply_text(
+                    f"⚠️ 刚才服务器连不上 Telegram，你这条是 {late} 分钟前发的，现在才送到他那儿。"
+                    "不是他不理你。")
+            except Exception:  # noqa: BLE001
+                logger.warning("晚到提醒没发出去", exc_info=True)
+        text = (f"（桥的提示，不是她说的：她这条是 {late} 分钟前发的，服务器跟 Telegram 断了一阵，"
+                "现在才送到你这儿——你不是故意晚回。先接她的话，可以低声认一句刚才没收到。这条提示别回应。）\n"
+                + (text or ""))
     pending = _take_pending_cc(cid)
     if pending:
         text = pending + "\n" + text
