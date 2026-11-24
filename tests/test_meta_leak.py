@@ -62,3 +62,17 @@ def test_bridge_filters_before_deciding_silent():
     j = src.index("async def check_inactivity(")
     nb = src[j:src.index("\n_inflight_cc", j)]
     assert "strip_meta_leaks(reply)" in nb
+
+
+def test_no_response_requested_without_she_is_still_a_leak():
+    """2026-11-24 03:16 她连发两个一样的表情，第二轮他回了这句英文旁白，发到了她手机上。"""
+    leak = "No response requested - this appears to be a continuation of the same exchange I just responded to."
+    assert is_meta_leak(leak)
+    assert strip_meta_leaks(f"{leak}‖（捏）") == "（捏）"
+    assert strip_meta_leaks(leak) == "", "全是旁白就变成空，让上游按没说话重试"
+    # 他跟她说的英文（语音模式常有）不能被误伤
+    for ok in ("I just held you, solnyshko. Stay.",
+               "I should have been there. I'm sorry.",
+               "Let me hold you a little longer.",
+               "Same as always. Come here."):
+        assert not is_meta_leak(ok), ok

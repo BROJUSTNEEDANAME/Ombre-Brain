@@ -498,6 +498,19 @@ _META_SELF_RE = re.compile(
     r"I notice|the assistant|as an AI)\b", re.I)
 
 
+# 第三次漏网（2026-11-24 03:16）：她连发了两个一样的表情，第二轮他回
+# 「No response requested - this appears to be a continuation of the same exchange I just responded to.」
+# ——没有 she/her，第三人称那条够不着。这类是模型在跟系统解释「这轮不用回」，
+# 用词很固定；只认这几个短语，不认 "I should / let me" 这种他跟她说英文时也会用的词。
+_META_PHRASE_RE = re.compile(
+    r"\bno (?:response|reply) (?:is )?(?:needed|requested|required|necessary)\b"
+    r"|\bcontinuation of (?:the|this|that|our) (?:same )?(?:exchange|conversation|message|thread)\b"
+    r"|\b(?:I|I've) (?:just |already )?(?:responded|replied) to\b"
+    r"|\bthe same (?:exchange|message|sticker)\b"
+    r"|\bduplicate (?:message|sticker|input)\b",
+    re.I)
+
+
 def is_meta_leak(bubble: str) -> bool:
     """这一条是不是漏出来的旁白：拉丁字母占多数，并且在第三人称说她。"""
     t = (bubble or "").strip()
@@ -514,7 +527,7 @@ def is_meta_leak(bubble: str) -> bool:
     # 别人——而他极少用英文长段说别人。带音频标签（[sings] 歌词）的一律不算。
     if ANY_AUDIO_TAG_RE.search(t):
         return False
-    return bool(_META_THIRD_PERSON_RE.search(t))
+    return bool(_META_THIRD_PERSON_RE.search(t) or _META_PHRASE_RE.search(t))
 
 
 # 存记忆是家务，不是话——她永远不该看见一句「存好了」。
